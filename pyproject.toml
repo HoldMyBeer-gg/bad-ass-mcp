@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bad-ass-mcp"
+version = "0.1.0"
+description = "Cross-platform desktop GUI automation MCP — accessibility tree first, vision as last resort"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.0.0",
+]
+
+[project.optional-dependencies]
+linux = ["pyatspi>=2.46"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+bad-ass-mcp = "bad_ass_mcp.server:main"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

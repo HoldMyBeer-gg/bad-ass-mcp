@@ -1,0 +1,245 @@
+from __future__ import annotations
+import time
+import uuid
+import subprocess
+from typing import Any
+
+import gi
+gi.require_version('Atspi', '2.0')
+from gi.repository import Atspi
+
+from .base import DesktopBackend
+from ..types import WindowInfo, ElementHandle, ActionResult, StaleHandleError
+
+
+class LinuxBackend(DesktopBackend):
+
+    def __init__(self):
+        self._handles: dict[str, Any] = {}  # handle_id → live Atspi.Accessible
+
+    # ── Internal helpers ──────────────────────────────────────────────
+
+    def _register(self, node: Any) -> str:
+        """Assign a stable handle ID to a live AT-SPI node."""
+        h = str(uuid.uuid4())
+        self._handles[h] = node
+        return h
+
+    def _resolve(self, handle_id: str) -> Any:
+        node = self._handles.get(handle_id)
+        if node is None:
+            raise StaleHandleError(f"Unknown handle: {handle_id!r}")
+        try:
+            # Accessing the role will throw if the underlying object is gone
+            node.get_role()
+        except Exception:
+            del self._handles[handle_id]
+            raise StaleHandleError(f"Handle {handle_id!r} is stale (widget gone)")
+        return node
+
+    def _to_handle(self, node: Any) -> ElementHandle:
+        handle_id = self._register(node)
+        role = node.get_role_name() or "unknown"
+        name = node.get_name() or ""
+        value = None
+        try:
+            text = node.query_text()
+            value = text.get_text(0, -1)
+        except Exception:
+            pass
+        states = set()
+        try:
+            ss = node.get_state_set()
+            for state_name in ("enabled", "focused", "visible", "checked",
+                               "editable", "selected", "expanded", "active"):
+                attr = getattr(Atspi.StateType, state_name.upper(), None)
+                if attr is not None and ss.contains(attr):
+                    states.add(state_name)
+        except Exception:
+            pass
+        return ElementHandle(id=handle_id, role=role, name=name, value=value, states=states)
+
+    def _walk(self, node: Any, depth: int = 0, max_depth: int = 12) -> ElementHandle:
+        handle = self._to_handle(node)
+        if depth < max_depth:
+            try:
+                for i in range(node.get_child_count()):
+                    child = node.get_child_at_index(i)
+                    handle.children.append(self._walk(child, depth + 1, max_depth))
+            except Exception:
+                pass
+        return handle
+
+    def _find_app(self, window_id: str) -> Any | None:
+        """window_id is either a PID str or an app name."""
+        desktop = Atspi.get_desktop(0)
+        for i in range(desktop.get_child_count()):
+            app = desktop.get_child_at_index(i)
+            try:
+                if str(app.get_process_id()) == window_id:
+                    return app
+                if app.get_name() == window_id:
+                    return app
+            except Exception:
+                continue
+        return None
+
+    def _search(self, node: Any, role: str | None, name: str | None) -> list[Any]:
+        results = []
+        try:
+            node_role = node.get_role_name()
+            node_name = node.get_name() or ""
+            if (role is None or node_role == role) and (name is None or node_name == name):
+                results.append(node)
+            for i in range(node.get_child_count()):
+                results.extend(self._search(node.get_child_at_index(i), role, name))
+        except Exception:
+            pass
+        return results
+
+    # ── DesktopBackend impl ───────────────────────────────────────────
+
+    def list_windows(self) -> list[WindowInfo]:
+        desktop = Atspi.get_desktop(0)
+        windows = []
+        for i in range(desktop.get_child_count()):
+            app = desktop.get_child_at_index(i)
+            try:
+                name = app.get_name() or ""
+                pid = app.get_process_id()
+                # Check if any child frame has focus
+                focused = False
+                for j in range(app.get_child_count()):
+                    frame = app.get_child_at_index(j)
+                    ss = frame.get_state_set()
+                    if ss.contains(Atspi.StateType.ACTIVE):
+                        focused = True
+                        break
+                windows.append(WindowInfo(id=str(pid), name=name, pid=pid, focused=focused))
+            except Exception:
+                continue
+        return windows
+
+    def get_tree(self, window_id: str) -> ElementHandle:
+        app = self._find_app(window_id)
+        if app is None:
+            raise ValueError(f"No window found for id {window_id!r}")
+        return self._walk(app)
+
+    def find_elements(self, window_id: str, *, role=None, name=None, index=0) -> list[ElementHandle]:
+        app = self._find_app(window_id)
+        if app is None:
+            return []
+        nodes = self._search(app, role, name)
+        return [self._to_handle(n) for n in nodes]
+
+    def click(self, handle_id: str) -> ActionResult:
+        node = self._resolve(handle_id)
+        try:
+            n = node.get_n_actions()
+            # Prefer "click" > "press" > action[0]
+            names = [node.get_action_name(i) for i in range(n)]
+            idx = next((i for i, a in enumerate(names) if a in ("click", "press")), 0)
+            node.do_action(idx)
+            return ActionResult(ok=True)
+        except Exception as e:
+            return ActionResult(ok=False, error=str(e))
+
+    def type_text(self, handle_id: str, text: str) -> ActionResult:
+        node = self._resolve(handle_id)
+        try:
+            # Try SetValue first (foreground-independent)
+            val_iface = node.query_value()
+            val_iface.set_current_value(float(text))
+            return ActionResult(ok=True)
+        except Exception:
+            pass
+        try:
+            # EditableText interface (foreground-independent)
+            et = node.query_editable_text()
+            et.set_text_contents(text)
+            return ActionResult(ok=True)
+        except Exception:
+            pass
+        try:
+            # Last resort: focus + AT-SPI keyboard event injection.
+            # Requires focus steal — works for WebKit/canvas editors that
+            # don't expose EditableText.
+            node.grab_focus()
+            time.sleep(0.05)
+            Atspi.generate_keyboard_event(0, text, Atspi.KeySynthType.STRING)
+            return ActionResult(ok=True)
+        except Exception as e:
+            return ActionResult(ok=False, error=f"Cannot set text: {e}")
+
+    def select_option(self, handle_id: str, value: str) -> ActionResult:
+        node = self._resolve(handle_id)
+        # Walk children looking for a matching option and select it
+        nodes = self._search(node, role="menu item", name=value)
+        if not nodes:
+            nodes = self._search(node, role="option", name=value)
+        if not nodes:
+            return ActionResult(ok=False, error=f"Option {value!r} not found")
+        try:
+            nodes[0].do_action(0)
+            return ActionResult(ok=True)
+        except Exception as e:
+            return ActionResult(ok=False, error=str(e))
+
+    def get_value(self, handle_id: str) -> str | None:
+        node = self._resolve(handle_id)
+        try:
+            return node.query_text().get_text(0, -1)
+        except Exception:
+            pass
+        try:
+            return str(node.query_value().get_current_value())
+        except Exception:
+            pass
+        return node.get_name() or None
+
+    def wait_for_window(self, title_pattern: str, timeout: float = 5.0) -> WindowInfo | None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            for w in self.list_windows():
+                if title_pattern.lower() in w.name.lower():
+                    return w
+            time.sleep(0.1)
+        return None
+
+    def wait_for_element(self, window_id, *, role=None, name=None, state=None, timeout=5.0) -> ElementHandle | None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            results = self.find_elements(window_id, role=role, name=name)
+            for el in results:
+                if state is None or state in el.states:
+                    return el
+            time.sleep(0.1)
+        return None
+
+    def screenshot(self, window_id: str | None = None) -> bytes:
+        import tempfile, os
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            path = f.name
+        try:
+            if window_id:
+                app = self._find_app(window_id)
+                if app:
+                    try:
+                        for i in range(app.get_child_count()):
+                            frame = app.get_child_at_index(i)
+                            img = frame.get_image_description()
+                            # Try xwd/import focused on the window
+                            break
+                    except Exception:
+                        pass
+            subprocess.run(["scrot", path], check=True, capture_output=True)
+            with open(path, "rb") as f:
+                return f.read()
+        except Exception:
+            return b""
+        finally:
+            try:
+                os.unlink(path)
+            except Exception:
+                pass
