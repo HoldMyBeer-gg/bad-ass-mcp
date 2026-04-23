@@ -1,19 +1,20 @@
 from __future__ import annotations
+
+import subprocess
 import time
 import uuid
-import subprocess
 from typing import Any
 
 import gi
-gi.require_version('Atspi', '2.0')
-from gi.repository import Atspi
 
-from .base import DesktopBackend
-from ..types import WindowInfo, ElementHandle, ActionResult, StaleHandleError
+gi.require_version("Atspi", "2.0")
+from gi.repository import Atspi  # noqa: E402
+
+from ..types import ActionResult, ElementHandle, StaleHandleError, WindowInfo  # noqa: E402
+from .base import DesktopBackend  # noqa: E402
 
 
 class LinuxBackend(DesktopBackend):
-
     def __init__(self):
         self._handles: dict[str, Any] = {}  # handle_id → live Atspi.Accessible
 
@@ -50,8 +51,16 @@ class LinuxBackend(DesktopBackend):
         states = set()
         try:
             ss = node.get_state_set()
-            for state_name in ("enabled", "focused", "visible", "checked",
-                               "editable", "selected", "expanded", "active"):
+            for state_name in (
+                "enabled",
+                "focused",
+                "visible",
+                "checked",
+                "editable",
+                "selected",
+                "expanded",
+                "active",
+            ):
                 attr = getattr(Atspi.StateType, state_name.upper(), None)
                 if attr is not None and ss.contains(attr):
                     states.add(state_name)
@@ -126,7 +135,9 @@ class LinuxBackend(DesktopBackend):
             raise ValueError(f"No window found for id {window_id!r}")
         return self._walk(app)
 
-    def find_elements(self, window_id: str, *, role=None, name=None, index=0) -> list[ElementHandle]:
+    def find_elements(
+        self, window_id: str, *, role=None, name=None, index=0
+    ) -> list[ElementHandle]:
         app = self._find_app(window_id)
         if app is None:
             return []
@@ -207,7 +218,9 @@ class LinuxBackend(DesktopBackend):
             time.sleep(0.1)
         return None
 
-    def wait_for_element(self, window_id, *, role=None, name=None, state=None, timeout=5.0) -> ElementHandle | None:
+    def wait_for_element(
+        self, window_id, *, role=None, name=None, state=None, timeout=5.0
+    ) -> ElementHandle | None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             results = self.find_elements(window_id, role=role, name=name)
@@ -218,7 +231,9 @@ class LinuxBackend(DesktopBackend):
         return None
 
     def screenshot(self, window_id: str | None = None) -> bytes:
-        import tempfile, os
+        import os
+        import tempfile
+
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
             path = f.name
         try:
@@ -226,10 +241,7 @@ class LinuxBackend(DesktopBackend):
                 app = self._find_app(window_id)
                 if app:
                     try:
-                        for i in range(app.get_child_count()):
-                            frame = app.get_child_at_index(i)
-                            img = frame.get_image_description()
-                            # Try xwd/import focused on the window
+                        for _i in range(app.get_child_count()):
                             break
                     except Exception:
                         pass

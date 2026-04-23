@@ -2,11 +2,13 @@
 In-memory fake backend for contract tests.
 Simulates a desktop with one window containing a small widget tree.
 """
-from __future__ import annotations
-import time
-from bad_ass_mcp.backend.base import DesktopBackend
-from bad_ass_mcp.types import WindowInfo, ElementHandle, ActionResult, StaleHandleError
 
+from __future__ import annotations
+
+import time
+
+from bad_ass_mcp.backend.base import DesktopBackend
+from bad_ass_mcp.types import ActionResult, ElementHandle, StaleHandleError, WindowInfo
 
 FAKE_WINDOW_ID = "fake-window-1"
 
@@ -15,16 +17,23 @@ _TREE = ElementHandle(
     role="window",
     name="Fake App",
     children=[
-        ElementHandle(id="btn-ok",     role="button",   name="OK",     states={"enabled"}),
-        ElementHandle(id="btn-cancel", role="button",   name="Cancel", states={"enabled"}),
-        ElementHandle(id="txt-name",   role="text",     name="Name",   value="", states={"enabled", "editable"}),
-        ElementHandle(id="combo-size", role="combobox", name="Size",   value="Medium",
-                      states={"enabled"},
-                      children=[
-                          ElementHandle(id="opt-small",  role="option", name="Small"),
-                          ElementHandle(id="opt-medium", role="option", name="Medium"),
-                          ElementHandle(id="opt-large",  role="option", name="Large"),
-                      ]),
+        ElementHandle(id="btn-ok", role="button", name="OK", states={"enabled"}),
+        ElementHandle(id="btn-cancel", role="button", name="Cancel", states={"enabled"}),
+        ElementHandle(
+            id="txt-name", role="text", name="Name", value="", states={"enabled", "editable"}
+        ),
+        ElementHandle(
+            id="combo-size",
+            role="combobox",
+            name="Size",
+            value="Medium",
+            states={"enabled"},
+            children=[
+                ElementHandle(id="opt-small", role="option", name="Small"),
+                ElementHandle(id="opt-medium", role="option", name="Medium"),
+                ElementHandle(id="opt-large", role="option", name="Large"),
+            ],
+        ),
     ],
 )
 
@@ -66,9 +75,9 @@ class FakeBackend(DesktopBackend):
 
     def find_elements(self, window_id, *, role=None, name=None, index=0) -> list[ElementHandle]:
         results = [
-            el for el in _all_elements(_TREE)
-            if (role is None or el.role == role)
-            and (name is None or el.name == name)
+            el
+            for el in _all_elements(_TREE)
+            if (role is None or el.role == role) and (name is None or el.name == name)
         ]
         return results
 
@@ -103,7 +112,9 @@ class FakeBackend(DesktopBackend):
             time.sleep(0.01)
         return None
 
-    def wait_for_element(self, window_id, *, role=None, name=None, state=None, timeout=5.0) -> ElementHandle | None:
+    def wait_for_element(
+        self, window_id, *, role=None, name=None, state=None, timeout=5.0
+    ) -> ElementHandle | None:
         results = self.find_elements(window_id, role=role, name=name)
         if not results:
             return None

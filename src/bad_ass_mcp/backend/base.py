@@ -1,10 +1,11 @@
 from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from ..types import WindowInfo, ElementHandle, ActionResult
+
+from ..types import ActionResult, ElementHandle, WindowInfo
 
 
 class DesktopBackend(ABC):
-
     @abstractmethod
     def list_windows(self) -> list[WindowInfo]:
         """Return all visible application windows."""
