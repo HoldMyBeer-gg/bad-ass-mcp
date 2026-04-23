@@ -60,3 +60,11 @@ class DesktopBackend(ABC):
     @abstractmethod
     def screenshot(self, window_id: str | None = None) -> bytes:
         """Capture PNG bytes of a window, or the full screen if window_id is None."""
+
+    @abstractmethod
+    def start_recording(self, window_id: str | None = None, fps: int = 15) -> str:
+        """Start screen recording. Returns a recording handle."""
+
+    @abstractmethod
+    def stop_recording(self, handle: str, output_path: str) -> str:
+        """Stop recording and export as GIF. Returns the output path."""

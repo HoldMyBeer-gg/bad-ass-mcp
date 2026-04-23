@@ -255,3 +255,109 @@ class LinuxBackend(DesktopBackend):
                 os.unlink(path)
             except Exception:
                 pass
+
+    def _window_geometry(self, window_id: str) -> tuple[int, int, int, int] | None:
+        """Return (x, y, width, height) of a window via AT-SPI component interface."""
+        app = self._find_app(window_id)
+        if app is None:
+            return None
+        try:
+            for i in range(app.get_child_count()):
+                frame = app.get_child_at_index(i)
+                comp = frame.query_component()
+                ext = comp.get_extents(Atspi.CoordType.SCREEN)
+                if ext.width > 0 and ext.height > 0:
+                    return (ext.x, ext.y, ext.width, ext.height)
+        except Exception:
+            pass
+        return None
+
+    def start_recording(self, window_id: str | None = None, fps: int = 15) -> str:
+        import os
+        import tempfile
+
+        handle = str(uuid.uuid4())
+        video_path = os.path.join(tempfile.gettempdir(), f"bam-rec-{handle}.mp4")
+
+        display = os.environ.get("DISPLAY", ":0")
+        if window_id:
+            geom = self._window_geometry(window_id)
+        else:
+            geom = None
+
+        if geom:
+            x, y, w, h = geom
+            # ffmpeg requires even dimensions
+            w += w % 2
+            h += h % 2
+            grab = f"{w}x{h}"
+            offset = f"{display}+{x},{y}"
+        else:
+            grab = "1920x1080"
+            offset = f"{display}+0,0"
+
+        proc = subprocess.Popen(
+            [
+                "ffmpeg",
+                "-y",
+                "-video_size",
+                grab,
+                "-framerate",
+                str(fps),
+                "-f",
+                "x11grab",
+                "-i",
+                offset,
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-crf",
+                "23",
+                video_path,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        self._recordings: dict  # ensure attr exists
+        if not hasattr(self, "_recordings"):
+            self._recordings = {}
+        self._recordings[handle] = (proc, video_path)
+        return handle
+
+    def stop_recording(self, handle: str, output_path: str) -> str:
+        if not hasattr(self, "_recordings") or handle not in self._recordings:
+            raise ValueError(f"No active recording with handle {handle!r}")
+
+        proc, video_path = self._recordings.pop(handle)
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+        # Convert to GIF using ffmpeg palette trick for quality
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                video_path,
+                "-vf",
+                "fps=12,scale=900:-1:flags=lanczos,split[s0][s1];"
+                "[s0]palettegen=max_colors=128[p];[s1][p]paletteuse=dither=bayer",
+                output_path,
+            ],
+            check=True,
+            capture_output=True,
+        )
+
+        import os
+
+        try:
+            os.unlink(video_path)
+        except Exception:
+            pass
+
+        return output_path

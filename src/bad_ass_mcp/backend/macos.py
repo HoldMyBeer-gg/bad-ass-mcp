@@ -39,3 +39,9 @@ class MacOSBackend(DesktopBackend):
 
     def screenshot(self, window_id=None):
         self._nyi()
+
+    def start_recording(self, window_id=None, fps=15):
+        self._nyi()
+
+    def stop_recording(self, handle, output_path):
+        self._nyi()

@@ -153,6 +153,30 @@ def screenshot(window_id: str | None = None) -> dict:
     return {"ok": True, "data": base64.b64encode(data).decode()}
 
 
+@mcp.tool()
+def start_recording(window_id: str | None = None, fps: int = 15) -> dict:
+    """Start recording the screen (or a specific window) as video.
+    Returns a handle to pass to stop_recording.
+    Crops to the window if window_id is provided."""
+    try:
+        handle = _backend().start_recording(window_id, fps)
+        return {"ok": True, "handle": handle}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@mcp.tool()
+def stop_recording(handle: str, output_path: str) -> dict:
+    """Stop recording and export as a GIF.
+    output_path must end in .gif — e.g. '/tmp/demo.gif'.
+    Returns the path to the finished GIF."""
+    try:
+        path = _backend().stop_recording(handle, output_path)
+        return {"ok": True, "path": path}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def main():
     mcp.run()
 
