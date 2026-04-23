@@ -5,7 +5,7 @@ A cross-platform MCP server for desktop GUI automation — driven by accessibili
 Works with Claude, Codex, Gemini, Ollama, or any OpenAI-compatible client that supports MCP.
 
 ![bad-ass-mcp recording itself interacting with MarkTheCrab](docs/demo.gif)
-*bad-ass-mcp recording itself interacting with MarkTheCrab*
+*bad-ass-mcp recording itself interacting with [MarkTheCrab](https://github.com/HoldMyBeer-gg/MarkTheCrab)*
 
 ## Why
 
