@@ -152,6 +152,7 @@ class LinuxBackend(DesktopBackend):
             names = [node.get_action_name(i) for i in range(n)]
             idx = next((i for i, a in enumerate(names) if a in ("click", "press")), 0)
             node.do_action(idx)
+            time.sleep(0.15)  # let async UI insertions settle before next tool call
             return ActionResult(ok=True)
         except Exception as e:
             return ActionResult(ok=False, error=str(e))
