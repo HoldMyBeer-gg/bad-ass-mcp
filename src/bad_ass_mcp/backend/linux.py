@@ -176,9 +176,16 @@ class LinuxBackend(DesktopBackend):
             # Last resort: focus + AT-SPI keyboard event injection.
             # Requires focus steal — works for WebKit/canvas editors that
             # don't expose EditableText.
+            # Split on \n and inject Return keysym between chunks so editors
+            # that intercept Enter (CodeMirror, etc.) get real newlines.
             node.grab_focus()
             time.sleep(0.05)
-            Atspi.generate_keyboard_event(0, text, Atspi.KeySynthType.STRING)
+            for i, chunk in enumerate(text.split("\n")):
+                if i > 0:
+                    Atspi.generate_keyboard_event(0xFF0D, None, Atspi.KeySynthType.SYM)
+                    time.sleep(0.02)
+                if chunk:
+                    Atspi.generate_keyboard_event(0, chunk, Atspi.KeySynthType.STRING)
             return ActionResult(ok=True)
         except Exception as e:
             return ActionResult(ok=False, error=f"Cannot set text: {e}")
@@ -257,19 +264,54 @@ class LinuxBackend(DesktopBackend):
                 pass
 
     def _window_geometry(self, window_id: str) -> tuple[int, int, int, int] | None:
-        """Return (x, y, width, height) of a window via AT-SPI component interface."""
+        """Return (x, y, width, height) using xdotool, falling back to AT-SPI."""
+        # Try xdotool first — reliable across toolkits and HiDPI setups
         app = self._find_app(window_id)
-        if app is None:
-            return None
-        try:
-            for i in range(app.get_child_count()):
-                frame = app.get_child_at_index(i)
-                comp = frame.query_component()
-                ext = comp.get_extents(Atspi.CoordType.SCREEN)
-                if ext.width > 0 and ext.height > 0:
-                    return (ext.x, ext.y, ext.width, ext.height)
-        except Exception:
-            pass
+        pid = app.get_process_id() if app else None
+        if pid:
+            try:
+                wids = (
+                    subprocess.check_output(
+                        ["xdotool", "search", "--pid", str(pid)],
+                        stderr=subprocess.DEVNULL,
+                    )
+                    .decode()
+                    .split()
+                )
+                best = None
+                for wid in wids:
+                    out = subprocess.check_output(
+                        ["xdotool", "getwindowgeometry", wid],
+                        stderr=subprocess.DEVNULL,
+                    ).decode()
+                    pos, size = None, None
+                    for line in out.splitlines():
+                        if "Position:" in line:
+                            coords = line.split(":")[1].strip().split()[0]
+                            x, y = map(int, coords.split(","))
+                            pos = (x, y)
+                        if "Geometry:" in line:
+                            dims = line.split(":")[1].strip()
+                            w, h = map(int, dims.split("x"))
+                            size = (w, h)
+                    if pos and size and size[0] > 100 and size[1] > 100:
+                        if best is None or size[0] * size[1] > best[2] * best[3]:
+                            best = (pos[0], pos[1], size[0], size[1])
+                if best:
+                    return best
+            except Exception:
+                pass
+        # Fall back to AT-SPI component interface
+        if app:
+            try:
+                for i in range(app.get_child_count()):
+                    frame = app.get_child_at_index(i)
+                    comp = frame.query_component()
+                    ext = comp.get_extents(Atspi.CoordType.SCREEN)
+                    if ext.width > 0 and ext.height > 0:
+                        return (ext.x, ext.y, ext.width, ext.height)
+            except Exception:
+                pass
         return None
 
     def start_recording(self, window_id: str | None = None, fps: int = 15) -> str:
