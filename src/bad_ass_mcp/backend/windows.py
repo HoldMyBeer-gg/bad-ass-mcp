@@ -43,3 +43,6 @@ class WindowsBackend(DesktopBackend):
 
     def stop_recording(self, handle, output_path):
         self._nyi()
+
+    def press_key(self, key, window_id=None):
+        self._nyi()

@@ -131,3 +131,6 @@ class FakeBackend(DesktopBackend):
 
     def stop_recording(self, handle: str, output_path: str) -> str:
         return output_path
+
+    def press_key(self, key: str, window_id: str | None = None) -> ActionResult:
+        return ActionResult(ok=True)

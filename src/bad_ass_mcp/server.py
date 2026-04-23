@@ -177,6 +177,19 @@ def stop_recording(handle: str, output_path: str) -> dict:
         return {"ok": False, "error": str(e)}
 
 
+@mcp.tool()
+def press_key(key: str, window_id: str | None = None) -> dict:
+    """Inject a key press into the focused element or a specific window.
+    key: 'Down', 'Up', 'Left', 'Right', 'Return', 'Escape', 'Tab',
+         'Home', 'End', 'PageUp', 'PageDown', 'BackSpace', or any single character.
+    Useful for navigating combo box dropdowns, dismissing dialogs, etc."""
+    try:
+        result = _backend().press_key(key, window_id)
+        return {"ok": result.ok, "error": result.error}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def main():
     mcp.run()
 

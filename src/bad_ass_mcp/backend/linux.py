@@ -419,3 +419,43 @@ class LinuxBackend(DesktopBackend):
             pass
 
         return output_path
+
+    _KEY_SYMS = {
+        "Return": 0xFF0D,
+        "Enter": 0xFF0D,
+        "Escape": 0xFF1B,
+        "Tab": 0xFF09,
+        "Up": 0xFF52,
+        "Down": 0xFF54,
+        "Left": 0xFF51,
+        "Right": 0xFF53,
+        "Home": 0xFF50,
+        "End": 0xFF57,
+        "PageUp": 0xFF55,
+        "PageDown": 0xFF56,
+        "Space": 0x0020,
+        "BackSpace": 0xFF08,
+        "Delete": 0xFFFF,
+    }
+
+    def press_key(self, key: str, window_id: str | None = None) -> ActionResult:
+        if window_id:
+            app = self._find_app(window_id)
+            if app:
+                try:
+                    for i in range(app.get_child_count()):
+                        app.get_child_at_index(i).grab_focus()
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.05)
+        try:
+            sym = self._KEY_SYMS.get(key)
+            if sym:
+                Atspi.generate_keyboard_event(sym, None, Atspi.KeySynthType.SYM)
+            else:
+                Atspi.generate_keyboard_event(0, key[:1], Atspi.KeySynthType.STRING)
+            time.sleep(0.05)
+            return ActionResult(ok=True)
+        except Exception as e:
+            return ActionResult(ok=False, error=str(e))

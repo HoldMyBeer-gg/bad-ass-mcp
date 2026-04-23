@@ -68,3 +68,8 @@ class DesktopBackend(ABC):
     @abstractmethod
     def stop_recording(self, handle: str, output_path: str) -> str:
         """Stop recording and export as GIF. Returns the output path."""
+
+    @abstractmethod
+    def press_key(self, key: str, window_id: str | None = None) -> ActionResult:
+        """Inject a key press. key is a name like 'Down', 'Up', 'Return', 'Escape',
+        'Tab', 'Left', 'Right', or a single character. Grabs focus if window_id given."""
