@@ -4,6 +4,8 @@ A cross-platform MCP server for desktop GUI automation — driven by accessibili
 
 Works with Claude, Codex, Gemini, Ollama, or any OpenAI-compatible client that supports MCP.
 
+![bad-ass-mcp driving MarkTheCrab](docs/demo.gif)
+
 ## Why
 
 Most AI desktop automation tools work by taking screenshots and asking a vision model "what do you see?" That's slow, expensive, and fragile.

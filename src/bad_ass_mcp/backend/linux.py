@@ -297,9 +297,24 @@ class LinuxBackend(DesktopBackend):
                             size = (w, h)
                     if pos and size and size[0] > 100 and size[1] > 100:
                         if best is None or size[0] * size[1] > best[2] * best[3]:
-                            best = (pos[0], pos[1], size[0], size[1])
+                            best = (wid, pos[0], pos[1], size[0], size[1])
                 if best:
-                    return best
+                    wid, x, y, w, h = best
+                    # Expand by window decoration extents (_NET_FRAME_EXTENTS: l,r,t,b)
+                    try:
+                        raw = subprocess.check_output(
+                            ["xprop", "-id", wid, "_NET_FRAME_EXTENTS"],
+                            stderr=subprocess.DEVNULL,
+                        ).decode()
+                        nums = [int(n) for n in raw.split("=")[1].split(",")]
+                        fl, fr, ft, fb = nums
+                        x -= fl
+                        y -= ft
+                        w += fl + fr
+                        h += ft + fb
+                    except Exception:
+                        pass
+                    return (x, y, w, h)
             except Exception:
                 pass
         # Fall back to AT-SPI component interface
