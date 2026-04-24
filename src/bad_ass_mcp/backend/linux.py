@@ -174,19 +174,28 @@ class LinuxBackend(DesktopBackend):
         except Exception:
             pass
         try:
-            # Last resort: focus + AT-SPI keyboard event injection.
-            # Requires focus steal — works for WebKit/canvas editors that
-            # don't expose EditableText.
-            # Split on \n and inject Return keysym between chunks so editors
-            # that intercept Enter (CodeMirror, etc.) get real newlines.
-            node.grab_focus()
-            time.sleep(0.05)
+            # AT-SPI keyboard injection. generate_keyboard_event uses XTest under
+            # the hood so it goes to the X11-focused window. We activate the target
+            # window with xdotool (focus management only, not typing) so injection
+            # lands in the right place. After each chunk, drain the GLib queue to
+            # prevent AT-SPI D-Bus backpressure from CodeMirror DOM mutations.
+            from gi.repository import GLib  # noqa: PLC0415
+            ctx = GLib.main_context_default()
+
+            if getattr(self, "_focused_handle", None) != handle_id:
+                node.grab_focus()
+                time.sleep(0.05)
+                self._focused_handle = handle_id
+
             for i, chunk in enumerate(text.split("\n")):
                 if i > 0:
                     Atspi.generate_keyboard_event(0xFF0D, None, Atspi.KeySynthType.SYM)
-                    time.sleep(0.02)
+                    while ctx.iteration(may_block=False):
+                        pass
                 if chunk:
                     Atspi.generate_keyboard_event(0, chunk, Atspi.KeySynthType.STRING)
+                    while ctx.iteration(may_block=False):
+                        pass
             return ActionResult(ok=True)
         except Exception as e:
             return ActionResult(ok=False, error=f"Cannot set text: {e}")
@@ -264,6 +273,33 @@ class LinuxBackend(DesktopBackend):
             except Exception:
                 pass
 
+    def _find_xwid(self, pid: int) -> str | None:
+        """Return the X11 window ID of the largest visible window for a PID."""
+        try:
+            xwids = (
+                subprocess.check_output(
+                    ["xdotool", "search", "--pid", str(pid)],
+                    stderr=subprocess.DEVNULL,
+                )
+                .decode()
+                .split()
+            )
+            best: tuple[str, int] | None = None
+            for wid in xwids:
+                out = subprocess.check_output(
+                    ["xdotool", "getwindowgeometry", wid],
+                    stderr=subprocess.DEVNULL,
+                ).decode()
+                for line in out.splitlines():
+                    if "Geometry:" in line:
+                        dims = line.split(":")[1].strip()
+                        w, h = map(int, dims.split("x"))
+                        if w > 100 and h > 100 and (best is None or w * h > best[1]):
+                            best = (wid, w * h)
+            return best[0] if best else None
+        except Exception:
+            return None
+
     def _window_geometry(self, window_id: str) -> tuple[int, int, int, int] | None:
         """Return (x, y, width, height) using xdotool, falling back to AT-SPI."""
         # Try xdotool first — reliable across toolkits and HiDPI setups
@@ -322,7 +358,7 @@ class LinuxBackend(DesktopBackend):
             try:
                 for i in range(app.get_child_count()):
                     frame = app.get_child_at_index(i)
-                    comp = frame.query_component()
+                    comp = frame.get_component()
                     ext = comp.get_extents(Atspi.CoordType.SCREEN)
                     if ext.width > 0 and ext.height > 0:
                         return (ext.x, ext.y, ext.width, ext.height)
@@ -345,9 +381,26 @@ class LinuxBackend(DesktopBackend):
 
         if geom:
             x, y, w, h = geom
+            # Clamp to screen bounds so ffmpeg doesn't reject out-of-screen areas
+            try:
+                raw = subprocess.check_output(
+                    ["xdpyinfo", "-display", display],
+                    stderr=subprocess.DEVNULL,
+                ).decode()
+                for line in raw.splitlines():
+                    if "dimensions:" in line:
+                        dims = line.split(":")[1].strip().split()[0]
+                        sw, sh = map(int, dims.split("x"))
+                        x = max(0, min(x, sw - 1))
+                        y = max(0, min(y, sh - 1))
+                        w = min(w, sw - x)
+                        h = min(h, sh - y)
+                        break
+            except Exception:
+                pass
             # ffmpeg requires even dimensions
-            w += w % 2
-            h += h % 2
+            w -= w % 2
+            h -= h % 2
             grab = f"{w}x{h}"
             offset = f"{display}+{x},{y}"
         else:
@@ -374,6 +427,7 @@ class LinuxBackend(DesktopBackend):
                 "23",
                 video_path,
             ],
+            stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -388,15 +442,20 @@ class LinuxBackend(DesktopBackend):
             raise ValueError(f"No active recording with handle {handle!r}")
 
         proc, video_path = self._recordings.pop(handle)
-        proc.terminate()
+        # Send 'q' to ffmpeg's stdin — graceful quit writes the moov atom.
         try:
-            proc.wait(timeout=5)
+            proc.stdin.write(b"q")
+            proc.stdin.flush()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
 
         # Convert to GIF using ffmpeg palette trick for quality
-        subprocess.run(
+        result = subprocess.run(
             [
                 "ffmpeg",
                 "-y",
@@ -407,9 +466,10 @@ class LinuxBackend(DesktopBackend):
                 "[s0]palettegen=max_colors=128[p];[s1][p]paletteuse=dither=bayer",
                 output_path,
             ],
-            check=True,
             capture_output=True,
         )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.decode(errors="replace"))
 
         import os
 
@@ -443,19 +503,25 @@ class LinuxBackend(DesktopBackend):
             app = self._find_app(window_id)
             if app:
                 try:
-                    for i in range(app.get_child_count()):
-                        app.get_child_at_index(i).grab_focus()
-                        break
+                    xwid = self._find_xwid(app.get_process_id())
+                    if xwid:
+                        subprocess.run(
+                            ["xdotool", "windowactivate", "--sync", xwid],
+                            capture_output=True,
+                        )
+                        time.sleep(0.1)
                 except Exception:
                     pass
-                time.sleep(0.05)
         try:
+            from gi.repository import GLib  # noqa: PLC0415
             sym = self._KEY_SYMS.get(key)
             if sym:
                 Atspi.generate_keyboard_event(sym, None, Atspi.KeySynthType.SYM)
             else:
                 Atspi.generate_keyboard_event(0, key[:1], Atspi.KeySynthType.STRING)
-            time.sleep(0.05)
+            ctx = GLib.main_context_default()
+            while ctx.iteration(may_block=False):
+                pass
             return ActionResult(ok=True)
         except Exception as e:
             return ActionResult(ok=False, error=str(e))
