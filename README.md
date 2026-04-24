@@ -35,6 +35,8 @@ Actions fire on control objects directly, so the target window doesn't need focu
 | `screenshot` | Capture a PNG as base64 (last resort — prefer the tree) |
 | `start_recording` | Start recording the screen (or a specific window) |
 | `stop_recording` | Stop recording and export as a GIF |
+| `learn_layout` | Resolve semantic names → live handle IDs (one call per session) |
+| `run_sequence` | Execute a list of actions server-side — no per-action round-trips |
 
 ## Installation
 

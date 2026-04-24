@@ -185,3 +185,106 @@ def test_screenshot_returns_bytes(backend):
     data = backend.screenshot()
     assert isinstance(data, bytes)
     assert len(data) > 0
+
+
+# ── learn_layout ──────────────────────────────────────────────────────
+
+
+def test_learn_layout_resolves_known_elements(backend):
+    layout = backend.learn_layout(
+        FAKE_WINDOW_ID,
+        {
+            "ok": {"role": "button", "name": "OK"},
+            "name_field": {"role": "text", "name": "Name"},
+        },
+    )
+    assert layout["ok"] is not None
+    assert layout["name_field"] is not None
+
+
+def test_learn_layout_unknown_element_is_none(backend):
+    layout = backend.learn_layout(
+        FAKE_WINDOW_ID,
+        {"ghost": {"role": "button", "name": "Does Not Exist"}},
+    )
+    assert layout["ghost"] is None
+
+
+def test_learn_layout_handle_is_usable(backend):
+    layout = backend.learn_layout(FAKE_WINDOW_ID, {"ok": {"role": "button", "name": "OK"}})
+    result = backend.click(layout["ok"])
+    assert result.ok is True
+
+
+# ── run_sequence ──────────────────────────────────────────────────────
+
+
+def test_run_sequence_type_and_get_value(backend):
+    results = backend.run_sequence([
+        {"action": "type", "handle": "txt-name", "text": "hello"},
+        {"action": "get_value", "handle": "txt-name"},
+    ])
+    assert len(results) == 2
+    assert all(r["ok"] for r in results)
+    assert results[1]["value"] == "hello"
+
+
+def test_run_sequence_click(backend):
+    results = backend.run_sequence([{"action": "click", "handle": "btn-ok"}])
+    assert results[0]["ok"] is True
+
+
+def test_run_sequence_key(backend):
+    results = backend.run_sequence([{"action": "key", "key": "Return"}])
+    assert results[0]["ok"] is True
+
+
+def test_run_sequence_select(backend):
+    results = backend.run_sequence([
+        {"action": "select", "handle": "combo-size", "value": "Large"},
+        {"action": "get_value", "handle": "combo-size"},
+    ])
+    assert results[0]["ok"] is True
+    assert results[1]["value"] == "Large"
+
+
+def test_run_sequence_sleep(backend):
+    results = backend.run_sequence([{"action": "sleep", "seconds": 0.01}])
+    assert results[0]["ok"] is True
+
+
+def test_run_sequence_stops_on_error_by_default(backend):
+    results = backend.run_sequence([
+        {"action": "click", "handle": "NO_SUCH_HANDLE"},
+        {"action": "click", "handle": "btn-ok"},
+    ])
+    assert len(results) == 1
+    assert results[0]["ok"] is False
+
+
+def test_run_sequence_continues_when_stop_on_error_false(backend):
+    results = backend.run_sequence(
+        [
+            {"action": "click", "handle": "NO_SUCH_HANDLE"},
+            {"action": "click", "handle": "btn-ok"},
+        ],
+        stop_on_error=False,
+    )
+    assert len(results) == 2
+    assert results[0]["ok"] is False
+    assert results[1]["ok"] is True
+
+
+def test_run_sequence_unknown_action(backend):
+    results = backend.run_sequence([{"action": "teleport"}])
+    assert results[0]["ok"] is False
+    assert "Unknown action" in results[0]["error"]
+
+
+def test_run_sequence_wait_for_element(backend):
+    results = backend.run_sequence([
+        {"action": "wait_for_element", "window_id": FAKE_WINDOW_ID,
+         "role": "button", "name": "OK", "timeout": 1.0},
+    ])
+    assert results[0]["ok"] is True
+    assert results[0]["handle"] is not None

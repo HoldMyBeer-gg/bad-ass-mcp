@@ -178,6 +178,43 @@ def stop_recording(handle: str, output_path: str) -> dict:
 
 
 @mcp.tool()
+def learn_layout(window_id: str, descriptors: dict) -> dict:
+    """Resolve semantic names to live element handle IDs for the current session.
+
+    Pass a map of {label: {role, name}} and get back {label: handle_id}.
+    Store the result and use the handle IDs in run_sequence to skip repeated
+    find_elements calls. Re-call after app restarts or window recreation.
+
+    Example:
+      learn_layout("1234", {
+        "bold_button": {"role": "push button", "name": "Bold"},
+        "editor":      {"role": "document",    "name": ""},
+      })
+    """
+    return _backend().learn_layout(window_id, descriptors)
+
+
+@mcp.tool()
+def run_sequence(steps: list, stop_on_error: bool = True) -> list:
+    """Execute a list of actions server-side in a single call — no round-trips.
+
+    Each step is a dict with an "action" key plus action-specific fields:
+      {"action": "click",            "handle": "..."}
+      {"action": "type",             "handle": "...", "text": "..."}
+      {"action": "key",              "key": "Return"}
+      {"action": "select",           "handle": "...", "value": "..."}
+      {"action": "get_value",        "handle": "..."}
+      {"action": "sleep",            "seconds": 0.15}
+      {"action": "wait_for_element", "window_id": "...", "role": "...",
+                                     "name": "...", "state": "...", "timeout": 5.0}
+      {"action": "wait_for_window",  "pattern": "...", "timeout": 5.0}
+
+    Returns a list of per-step results. Stops at first failure unless
+    stop_on_error is False."""
+    return _backend().run_sequence(steps, stop_on_error)
+
+
+@mcp.tool()
 def press_key(key: str, window_id: str | None = None) -> dict:
     """Inject a key press into the focused element or a specific window.
     key: 'Down', 'Up', 'Left', 'Right', 'Return', 'Escape', 'Tab',
