@@ -64,7 +64,14 @@ except (ImportError, AttributeError, OSError):
 _WM_KEYDOWN = 0x0100
 _WM_KEYUP = 0x0101
 _WM_CHAR = 0x0102
+_WM_PASTE = 0x0302
 _CF_UNICODETEXT = 13
+
+# Window style flags for list_windows filtering
+_WS_CAPTION = 0x00C00000
+_WS_EX_TOOLWINDOW = 0x00000080
+_GWL_STYLE = -16
+_GWL_EXSTYLE = -20
 
 # UIA pattern IDs
 _UIA_InvokePatternId = 10000
@@ -196,13 +203,12 @@ def _bgra_to_png(width: int, height: int, bgra: bytes) -> bytes:
     for y in range(height):
         raw[dst] = 0  # PNG row filter: None
         dst += 1
-        src = y * stride
-        for x in range(width):
-            off = src + x * 4
-            raw[dst] = bgra[off + 2]  # R
-            raw[dst + 1] = bgra[off + 1]  # G
-            raw[dst + 2] = bgra[off]  # B
-            dst += 3
+        row = bgra[y * stride : y * stride + stride]
+        # Reorder BGRA → RGB by slicing channel offsets across the whole row at once
+        raw[dst : dst + width * 3 : 3] = row[2::4]  # R
+        raw[dst + 1 : dst + width * 3 : 3] = row[1::4]  # G
+        raw[dst + 2 : dst + width * 3 : 3] = row[0::4]  # B
+        dst += width * 3
 
     ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
     return (
@@ -430,6 +436,14 @@ class WindowsBackend(DesktopBackend):
         def _enum_cb(hwnd, _lparam):
             if not _user32.IsWindowVisible(hwnd):
                 return True
+            # Skip tool windows (system tray, floating toolbars, etc.)
+            exstyle = _user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            if exstyle & _WS_EX_TOOLWINDOW:
+                return True
+            # Skip windows without a title bar (overlays, splash screens, etc.)
+            style = _user32.GetWindowLongW(hwnd, _GWL_STYLE)
+            if not (style & _WS_CAPTION):
+                return True
             length = _user32.GetWindowTextLengthW(hwnd)
             if length == 0:
                 return True
@@ -530,17 +544,15 @@ class WindowsBackend(DesktopBackend):
                 return ActionResult(ok=True)
             except Exception:
                 pass
-        # Final fallback: clipboard + Ctrl+V via PostMessage
+        # Final fallback: clipboard + WM_PASTE — works for all standard Win32 edit
+        # controls without needing to simulate modifier keys via PostMessage (which
+        # doesn't update GetKeyState and would deliver a bare 'V' instead of Ctrl+V).
         try:
             element.SetFocus()
             time.sleep(0.05)
             self._clipboard_set(text)
-            vk_ctrl, vk_v = 0x11, 0x56
             target = hwnd or _user32.GetForegroundWindow()
-            _user32.PostMessageW(target, _WM_KEYDOWN, vk_ctrl, _make_lparam(vk_ctrl))
-            _user32.PostMessageW(target, _WM_KEYDOWN, vk_v, _make_lparam(vk_v))
-            _user32.PostMessageW(target, _WM_KEYUP, vk_v, _make_lparam(vk_v, True))
-            _user32.PostMessageW(target, _WM_KEYUP, vk_ctrl, _make_lparam(vk_ctrl, True))
+            _user32.PostMessageW(target, _WM_PASTE, 0, 0)
             return ActionResult(ok=True)
         except Exception as e:
             return ActionResult(ok=False, error=f"Cannot set text: {e}")
