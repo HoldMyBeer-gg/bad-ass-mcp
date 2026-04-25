@@ -40,7 +40,6 @@ jobs:
           pyinstaller \
             --onedir \
             --name bad-ass-mcp \
-            --collect-all mcp \
             --collect-all anyio \
             --hidden-import ${{ matrix.hidden }} \
             src/bad_ass_mcp/server.py
