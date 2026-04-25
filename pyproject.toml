@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "bad-ass-mcp"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Cross-platform desktop GUI automation MCP — accessibility tree first, vision as last resort"
 requires-python = ">=3.11"
 dependencies = [
@@ -23,6 +23,9 @@ bad-ass-mcp = "bad_ass_mcp.server:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.hatch.version]
+source = "vcs"
 
 [tool.ruff]
 line-length = 100

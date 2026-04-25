@@ -6,15 +6,89 @@ on:
       - "v*"
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  # ── Per-platform PyInstaller bundles ─────────────────────────────────
+  bundle:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            extra: macos
+            name: macos
+            hidden: bad_ass_mcp.backend.macos
+          - os: ubuntu-latest
+            extra: linux
+            name: linux
+            hidden: bad_ass_mcp.backend.linux
+          - os: windows-latest
+            extra: windows
+            name: windows
+            hidden: bad_ass_mcp.backend.windows
+
+    runs-on: ${{ matrix.os }}
+
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # needed for hatch-vcs tag resolution
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install hatch
-      - run: hatch build
+
+      - name: Install
+        run: pip install pyinstaller ".[{{ matrix.extra }}]"
+
+      - name: Build standalone
+        shell: bash
+        run: |
+          pyinstaller \
+            --onedir \
+            --name bad-ass-mcp \
+            --collect-all mcp \
+            --collect-all anyio \
+            --hidden-import ${{ matrix.hidden }} \
+            src/bad_ass_mcp/server.py
+
+      - name: Zip (Unix)
+        if: runner.os != 'Windows'
+        run: cd dist && zip -r ../bad-ass-mcp-${{ matrix.name }}.zip bad-ass-mcp/
+
+      - name: Zip (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/bad-ass-mcp -DestinationPath bad-ass-mcp-${{ matrix.name }}.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.name }}
+          path: bad-ass-mcp-${{ matrix.name }}.zip
+
+  # ── Publish sdist + wheel + bundles to GitHub Release ────────────────
+  release:
+    needs: bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build sdist + wheel
+        run: pip install hatch hatch-vcs && hatch build
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: bundles
+          merge-multiple: true
+
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          files: |
+            dist/*
+            bundles/*.zip
