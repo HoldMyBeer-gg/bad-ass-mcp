@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Record the Maxwell's Equations demo GIF for bad-ass-mcp."""
-import os
+
 import sys
 import time
 
@@ -56,7 +56,8 @@ preamble = (
     "\\nabla \\cdot \\mathbf{E} &= \\frac{\\rho}{\\varepsilon_0} \\\\\n"
     "\\nabla \\cdot \\mathbf{B} &= 0 \\\\\n"
     "\\nabla \\times \\mathbf{E} &= -\\frac{\\partial \\mathbf{B}}{\\partial t} \\\\\n"
-    "\\nabla \\times \\mathbf{B} &= \\mu_0\\mathbf{J} + \\mu_0\\varepsilon_0\\frac{\\partial \\mathbf{E}}{\\partial t}\n"
+    "\\nabla \\times \\mathbf{B} &= \\mu_0\\mathbf{J} +"
+    " \\mu_0\\varepsilon_0\\frac{\\partial \\mathbf{E}}{\\partial t}\n"
     "\\end{aligned}$$\n"
     "\n"
     "The speed of light emerges directly: $c = \\dfrac{1}{\\sqrt{\\mu_0\\varepsilon_0}}$\n"
@@ -79,13 +80,13 @@ diagram = (
 )
 
 steps = [
-    {"action": "type",  "handle": entry_id, "text": preamble},
+    {"action": "type", "handle": entry_id, "text": preamble},
     {"action": "sleep", "seconds": 0.5},
     # Mermaid fence — triggers CodeMirror code-block DOM mutations (D-Bus flood).
     # The 3.5s sleep lets the AT-SPI event queue drain before the next injection.
-    {"action": "type",  "handle": entry_id, "text": "```mermaid"},
+    {"action": "type", "handle": entry_id, "text": "```mermaid"},
     {"action": "sleep", "seconds": 3.5},
-    {"action": "type",  "handle": entry_id, "text": diagram},
+    {"action": "type", "handle": entry_id, "text": diagram},
     {"action": "sleep", "seconds": 4.0},
 ]
 

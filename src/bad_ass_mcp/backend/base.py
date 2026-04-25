@@ -154,9 +154,7 @@ class DesktopBackend(ABC):
                     )
                     entry.update(ok=el is not None, handle=el.id if el else None)
                 elif action == "wait_for_window":
-                    w = self.wait_for_window(
-                        step["pattern"], float(step.get("timeout", 5.0))
-                    )
+                    w = self.wait_for_window(step["pattern"], float(step.get("timeout", 5.0)))
                     entry.update(ok=w is not None, window_id=w.id if w else None)
                 else:
                     entry.update(ok=False, error=f"Unknown action: {action!r}")

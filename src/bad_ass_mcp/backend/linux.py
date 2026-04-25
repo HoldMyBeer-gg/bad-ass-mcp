@@ -180,6 +180,7 @@ class LinuxBackend(DesktopBackend):
             # lands in the right place. After each chunk, drain the GLib queue to
             # prevent AT-SPI D-Bus backpressure from CodeMirror DOM mutations.
             from gi.repository import GLib  # noqa: PLC0415
+
             ctx = GLib.main_context_default()
 
             if getattr(self, "_focused_handle", None) != handle_id:
@@ -514,6 +515,7 @@ class LinuxBackend(DesktopBackend):
                     pass
         try:
             from gi.repository import GLib  # noqa: PLC0415
+
             sym = self._KEY_SYMS.get(key)
             if sym:
                 Atspi.generate_keyboard_event(sym, None, Atspi.KeySynthType.SYM)
