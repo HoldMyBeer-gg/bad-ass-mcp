@@ -17,6 +17,14 @@ try:
         AXUIElementPerformAction,
         AXUIElementSetAttributeValue,
     )
+    from Quartz import (
+        CGEventCreateKeyboardEvent,
+        CGEventKeyboardSetUnicodeString,
+        CGEventPost,
+        CGEventSetFlags,
+        kCGEventFlagMaskCommand,
+        kCGSessionEventTap,
+    )
 
     _HAS_PYOBJC = True
 except ImportError:
@@ -56,6 +64,30 @@ def _ax_set(element: Any, attr: str, value: Any) -> bool:
 
 def _ax_do(element: Any, action: str) -> bool:
     return AXUIElementPerformAction(element, action) == _kAXErrorSuccess
+
+
+def _quartz_key_press(keycode: int, flags: int = 0) -> None:
+    """Inject a key press/release pair via CoreGraphics (no shell, no injection surface)."""
+    down = CGEventCreateKeyboardEvent(None, keycode, True)
+    up = CGEventCreateKeyboardEvent(None, keycode, False)
+    if flags:
+        CGEventSetFlags(down, flags)
+        CGEventSetFlags(up, flags)
+    CGEventPost(kCGSessionEventTap, down)
+    CGEventPost(kCGSessionEventTap, up)
+
+
+def _quartz_type_char(char: str) -> None:
+    """Inject a single Unicode character via CoreGraphics keyboard event."""
+    c = char[:1]
+    if not c:
+        return
+    down = CGEventCreateKeyboardEvent(None, 0, True)
+    up = CGEventCreateKeyboardEvent(None, 0, False)
+    CGEventKeyboardSetUnicodeString(down, 1, c)
+    CGEventKeyboardSetUnicodeString(up, 1, c)
+    CGEventPost(kCGSessionEventTap, down)
+    CGEventPost(kCGSessionEventTap, up)
 
 
 def _role_name(element: Any) -> str:
@@ -243,20 +275,20 @@ class MacOSBackend(DesktopBackend):
 
     def type_text(self, handle_id: str, text: str) -> ActionResult:
         element = self._resolve(handle_id)
-        # Direct AXValue set — foreground-independent, handles all Unicode
+        # Primary: direct AXValue set — foreground-independent, handles all Unicode
         if _ax_set(element, "AXValue", text):
             return ActionResult(ok=True)
-        # Fall back to osascript keystroke (focus must already be on target)
+        # Fallback: write to clipboard then Cmd+V — no AppleScript injection surface
         try:
             _ax_set(element, "AXFocused", True)
             time.sleep(0.05)
-            # Escape double-quotes and backslashes for the AppleScript string literal
-            safe = text.replace("\\", "\\\\").replace('"', '\\"')
-            script = f'tell application "System Events" to keystroke "{safe}"'
-            result = subprocess.run(["osascript", "-e", script], capture_output=True, timeout=30)
+            result = subprocess.run(
+                ["pbcopy"], input=text.encode("utf-8"), capture_output=True, timeout=5
+            )
             if result.returncode == 0:
+                _quartz_key_press(0x09, kCGEventFlagMaskCommand)  # Cmd+V  (0x09 = v)
                 return ActionResult(ok=True)
-            return ActionResult(ok=False, error=result.stderr.decode(errors="replace").strip())
+            return ActionResult(ok=False, error="pbcopy failed")
         except Exception as e:
             return ActionResult(ok=False, error=f"Cannot set text: {e}")
 
@@ -355,7 +387,7 @@ class MacOSBackend(DesktopBackend):
                 h -= h % 2
                 cmd += ["-vf", f"crop={w}:{h}:{x}:{y}"]
 
-        cmd += ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", video_path]
+        cmd += ["-t", "1800", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", video_path]
 
         proc = subprocess.Popen(
             cmd,
@@ -367,6 +399,12 @@ class MacOSBackend(DesktopBackend):
         return handle
 
     def stop_recording(self, handle: str, output_path: str) -> str:
+        import os
+
+        canonical = os.path.realpath(os.path.expanduser(output_path))
+        if not canonical.lower().endswith(".gif"):
+            raise ValueError(f"output_path must end with .gif (got {output_path!r})")
+
         if handle not in self._recordings:
             raise ValueError(f"No active recording with handle {handle!r}")
         proc, video_path = self._recordings.pop(handle)
@@ -390,7 +428,7 @@ class MacOSBackend(DesktopBackend):
                 "-vf",
                 "fps=12,scale=900:-1:flags=lanczos,split[s0][s1];"
                 "[s0]palettegen=max_colors=128[p];[s1][p]paletteuse=dither=bayer",
-                output_path,
+                canonical,
             ],
             capture_output=True,
         )
@@ -403,7 +441,7 @@ class MacOSBackend(DesktopBackend):
             os.unlink(video_path)
         except Exception:
             pass
-        return output_path
+        return canonical
 
     def press_key(self, key: str, window_id: str | None = None) -> ActionResult:
         if window_id:
@@ -411,20 +449,15 @@ class MacOSBackend(DesktopBackend):
                 pid = app.processIdentifier()
                 name = app.localizedName() or ""
                 if str(pid) == window_id or name == window_id:
-                    # Activate without raising all windows
                     app.activateWithOptions_(2)  # NSApplicationActivateIgnoringOtherApps
                     time.sleep(0.1)
                     break
         try:
             keycode = _KEY_CODES.get(key)
             if keycode is not None:
-                script = f'tell application "System Events" to key code {keycode}'
+                _quartz_key_press(keycode)
             else:
-                safe = key[:1].replace("\\", "\\\\").replace('"', '\\"')
-                script = f'tell application "System Events" to keystroke "{safe}"'
-            result = subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10)
-            if result.returncode == 0:
-                return ActionResult(ok=True)
-            return ActionResult(ok=False, error=result.stderr.decode(errors="replace").strip())
+                _quartz_type_char(key[:1])
+            return ActionResult(ok=True)
         except Exception as e:
             return ActionResult(ok=False, error=str(e))

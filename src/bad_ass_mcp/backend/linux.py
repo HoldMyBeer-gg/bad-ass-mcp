@@ -420,6 +420,8 @@ class LinuxBackend(DesktopBackend):
                 "x11grab",
                 "-i",
                 offset,
+                "-t",
+                "1800",
                 "-c:v",
                 "libx264",
                 "-preset",
@@ -439,6 +441,12 @@ class LinuxBackend(DesktopBackend):
         return handle
 
     def stop_recording(self, handle: str, output_path: str) -> str:
+        import os
+
+        canonical = os.path.realpath(os.path.expanduser(output_path))
+        if not canonical.lower().endswith(".gif"):
+            raise ValueError(f"output_path must end with .gif (got {output_path!r})")
+
         if not hasattr(self, "_recordings") or handle not in self._recordings:
             raise ValueError(f"No active recording with handle {handle!r}")
 
@@ -465,7 +473,7 @@ class LinuxBackend(DesktopBackend):
                 "-vf",
                 "fps=12,scale=900:-1:flags=lanczos,split[s0][s1];"
                 "[s0]palettegen=max_colors=128[p];[s1][p]paletteuse=dither=bayer",
-                output_path,
+                canonical,
             ],
             capture_output=True,
         )
@@ -479,7 +487,7 @@ class LinuxBackend(DesktopBackend):
         except Exception:
             pass
 
-        return output_path
+        return canonical
 
     _KEY_SYMS = {
         "Return": 0xFF0D,

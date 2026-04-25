@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import sys
 import time
 from abc import ABC, abstractmethod
 
 from ..types import ActionResult, ElementHandle, StaleHandleError, WindowInfo
+
+_MAX_SEQUENCE_STEPS = 500
+_MAX_SEQUENCE_RUNTIME = 300.0  # seconds
 
 
 class DesktopBackend(ABC):
@@ -121,10 +125,30 @@ class DesktopBackend(ABC):
         Returns a list of per-step result dicts with at least {step, action, ok}.
         Aborts on the first failure when stop_on_error is True.
         """
+        if len(steps) > _MAX_SEQUENCE_STEPS:
+            print(
+                f"[bad-ass-mcp] run_sequence: received {len(steps)} steps; "
+                f"truncating to {_MAX_SEQUENCE_STEPS}",
+                file=sys.stderr,
+            )
+            steps = steps[:_MAX_SEQUENCE_STEPS]
+
+        deadline = time.monotonic() + _MAX_SEQUENCE_RUNTIME
         results: list[dict] = []
         for i, step in enumerate(steps):
             action = step.get("action", "")
             entry: dict = {"step": i, "action": action, "ok": False}
+
+            if time.monotonic() > deadline:
+                print(
+                    f"[bad-ass-mcp] run_sequence: wall-clock limit ({_MAX_SEQUENCE_RUNTIME}s) "
+                    f"hit at step {i}; aborting",
+                    file=sys.stderr,
+                )
+                entry["error"] = "sequence runtime limit exceeded"
+                results.append(entry)
+                break
+
             try:
                 if action == "click":
                     r = self.click(step["handle"])

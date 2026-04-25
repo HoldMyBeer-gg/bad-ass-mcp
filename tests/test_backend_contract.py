@@ -301,3 +301,29 @@ def test_run_sequence_wait_for_element(backend):
     )
     assert results[0]["ok"] is True
     assert results[0]["handle"] is not None
+
+
+# ── run_sequence safety limits ────────────────────────────────────────
+
+
+def test_run_sequence_truncates_oversized_batch(backend, capsys):
+    from bad_ass_mcp.backend.base import _MAX_SEQUENCE_STEPS
+
+    steps = [{"action": "click", "handle": "btn-ok"}] * (_MAX_SEQUENCE_STEPS + 50)
+    results = backend.run_sequence(steps)
+    assert len(results) == _MAX_SEQUENCE_STEPS
+    assert "truncating" in capsys.readouterr().err
+
+
+def test_run_sequence_aborts_at_runtime_limit(backend, capsys):
+    from unittest.mock import patch
+
+    from bad_ass_mcp.backend.base import _MAX_SEQUENCE_RUNTIME
+
+    # Force the deadline to expire before the first step
+    with patch("bad_ass_mcp.backend.base._MAX_SEQUENCE_RUNTIME", 0.0):
+        results = backend.run_sequence([{"action": "click", "handle": "btn-ok"}] * 5)
+
+    assert any(r.get("error") == "sequence runtime limit exceeded" for r in results)
+    assert "wall-clock limit" in capsys.readouterr().err
+    _ = _MAX_SEQUENCE_RUNTIME  # keep import used

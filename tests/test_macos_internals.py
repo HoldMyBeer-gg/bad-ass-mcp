@@ -206,3 +206,74 @@ def test_window_geometry_returns_none_when_no_windows():
     with patch.object(backend, "_find_app_element", return_value=MagicMock()):
         with patch("bad_ass_mcp.backend.macos._ax_get", return_value=None):
             assert backend._window_geometry("999") is None
+
+
+# ── stop_recording path validation ────────────────────────────────────
+
+
+@_darwin
+def test_stop_recording_rejects_non_gif_extension():
+    from bad_ass_mcp.backend.macos import MacOSBackend
+
+    backend = MacOSBackend()
+    backend._recordings["h"] = (MagicMock(), "/tmp/bam-rec-h.mp4")
+    with pytest.raises(ValueError, match=r"\.gif"):
+        backend.stop_recording("h", "/tmp/output.mp4")
+
+
+@_darwin
+def test_stop_recording_rejects_symlink_resolving_to_non_gif():
+    import os
+    import tempfile
+
+    from bad_ass_mcp.backend.macos import MacOSBackend
+
+    backend = MacOSBackend()
+    backend._recordings["h"] = (MagicMock(), "/tmp/bam-rec-h.mp4")
+
+    # Create a .gif symlink pointing at a .txt file (simulates path-traversal via symlink)
+    with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+        real_path = f.name
+    link_path = real_path[:-4] + ".gif"
+    try:
+        os.symlink(real_path, link_path)
+        with pytest.raises(ValueError, match=r"\.gif"):
+            backend.stop_recording("h", link_path)
+    finally:
+        try:
+            os.unlink(link_path)
+        except FileNotFoundError:
+            pass
+        os.unlink(real_path)
+
+
+@_darwin
+def test_stop_recording_accepts_valid_gif_path():
+    import os
+    import tempfile
+
+    from bad_ass_mcp.backend.macos import MacOSBackend
+
+    backend = MacOSBackend()
+    # Provide a real (empty) mp4 source so ffmpeg fails fast but validation passes
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as src:
+        src_path = src.name
+    with tempfile.NamedTemporaryFile(suffix=".gif", delete=False) as dst:
+        dst_path = dst.name
+
+    proc_mock = MagicMock()
+    proc_mock.stdin = MagicMock()
+    proc_mock.wait = MagicMock(return_value=0)
+    backend._recordings["h"] = (proc_mock, src_path)
+
+    # ffmpeg will fail on an empty mp4, but we just want validation to pass
+    try:
+        backend.stop_recording("h", dst_path)
+    except RuntimeError:
+        pass  # expected — ffmpeg rejects empty file
+    finally:
+        for p in (src_path, dst_path):
+            try:
+                os.unlink(p)
+            except FileNotFoundError:
+                pass

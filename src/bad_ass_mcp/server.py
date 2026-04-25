@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+# Trust model: this server runs over stdio and assumes the MCP client (e.g. Claude)
+# is fully trusted. There is no authentication. Do not expose this server over a
+# network socket or to untrusted processes — the AX/AT-SPI permissions it holds
+# grant control over every application on the desktop.
 import platform
 
 from mcp.server.fastmcp import FastMCP
