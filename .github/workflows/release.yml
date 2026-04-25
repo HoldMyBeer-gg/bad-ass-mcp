@@ -36,7 +36,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install
-        run: pip install pyinstaller ".[{{ matrix.extra }}]"
+        run: pip install pyinstaller ".[${{ matrix.extra }}]"
 
       - name: Build standalone
         shell: bash
