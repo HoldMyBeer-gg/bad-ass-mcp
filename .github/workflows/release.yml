@@ -15,10 +15,6 @@ jobs:
             extra: macos
             name: macos
             hidden: bad_ass_mcp.backend.macos
-          - os: ubuntu-latest
-            extra: linux
-            name: linux
-            hidden: bad_ass_mcp.backend.linux
           - os: windows-latest
             extra: windows
             name: windows
