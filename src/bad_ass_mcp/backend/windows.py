@@ -7,6 +7,7 @@ key injection, and GDI-based screenshots.
 Window IDs are HWNDs (window handles), not PIDs — more precise on Windows
 where a single process may own multiple windows.
 """
+
 from __future__ import annotations
 
 import os
@@ -186,9 +187,7 @@ def _bgra_to_png(width: int, height: int, bgra: bytes) -> bytes:
     def _chunk(tag: bytes, data: bytes) -> bytes:
         body = tag + data
         return (
-            struct.pack(">I", len(data))
-            + body
-            + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+            struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
         )
 
     stride = width * 4
@@ -358,9 +357,7 @@ class WindowsBackend(DesktopBackend):
                     for i in range(children.Length):
                         try:
                             child = children.GetElement(i)
-                            handle.children.append(
-                                self._walk(child, depth + 1, max_depth, hwnd)
-                            )
+                            handle.children.append(self._walk(child, depth + 1, max_depth, hwnd))
                         except Exception:
                             pass
             except Exception:
@@ -429,9 +426,7 @@ class WindowsBackend(DesktopBackend):
         windows: list[WindowInfo] = []
         foreground = _user32.GetForegroundWindow()
 
-        @ctypes.WINFUNCTYPE(
-            ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM
-        )
+        @ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
         def _enum_cb(hwnd, _lparam):
             if not _user32.IsWindowVisible(hwnd):
                 return True

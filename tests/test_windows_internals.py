@@ -5,6 +5,7 @@ _bgra_to_png, VK code mapping, and control-type roles run on all
 platforms (no Windows APIs required).  _resolve and stop_recording
 tests are marked win32-only and use unittest.mock.
 """
+
 from __future__ import annotations
 
 import struct
