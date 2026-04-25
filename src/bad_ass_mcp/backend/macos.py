@@ -21,6 +21,7 @@ try:
         CGEventCreateKeyboardEvent,
         CGEventKeyboardSetUnicodeString,
         CGEventPost,
+        CGEventPostToPid,
         CGEventSetFlags,
         kCGEventFlagMaskCommand,
         kCGSessionEventTap,
@@ -66,18 +67,26 @@ def _ax_do(element: Any, action: str) -> bool:
     return AXUIElementPerformAction(element, action) == _kAXErrorSuccess
 
 
-def _quartz_key_press(keycode: int, flags: int = 0) -> None:
-    """Inject a key press/release pair via CoreGraphics (no shell, no injection surface)."""
+def _quartz_key_press(keycode: int, flags: int = 0, pid: int | None = None) -> None:
+    """Inject a key press/release pair via CoreGraphics.
+
+    If pid is given, events are delivered directly to that process without
+    stealing focus from the user's current window.
+    """
     down = CGEventCreateKeyboardEvent(None, keycode, True)
     up = CGEventCreateKeyboardEvent(None, keycode, False)
     if flags:
         CGEventSetFlags(down, flags)
         CGEventSetFlags(up, flags)
-    CGEventPost(kCGSessionEventTap, down)
-    CGEventPost(kCGSessionEventTap, up)
+    if pid:
+        CGEventPostToPid(pid, down)
+        CGEventPostToPid(pid, up)
+    else:
+        CGEventPost(kCGSessionEventTap, down)
+        CGEventPost(kCGSessionEventTap, up)
 
 
-def _quartz_type_char(char: str) -> None:
+def _quartz_type_char(char: str, pid: int | None = None) -> None:
     """Inject a single Unicode character via CoreGraphics keyboard event."""
     c = char[:1]
     if not c:
@@ -86,8 +95,12 @@ def _quartz_type_char(char: str) -> None:
     up = CGEventCreateKeyboardEvent(None, 0, False)
     CGEventKeyboardSetUnicodeString(down, 1, c)
     CGEventKeyboardSetUnicodeString(up, 1, c)
-    CGEventPost(kCGSessionEventTap, down)
-    CGEventPost(kCGSessionEventTap, up)
+    if pid:
+        CGEventPostToPid(pid, down)
+        CGEventPostToPid(pid, up)
+    else:
+        CGEventPost(kCGSessionEventTap, down)
+        CGEventPost(kCGSessionEventTap, up)
 
 
 def _role_name(element: Any) -> str:
@@ -133,13 +146,16 @@ class MacOSBackend(DesktopBackend):
         if not _HAS_PYOBJC:
             raise RuntimeError("macOS backend requires PyObjC: pip install 'bad-ass-mcp[macos]'")
         self._handles: dict[str, Any] = {}
+        self._handle_pids: dict[str, int] = {}  # handle_id → owning process PID
         self._recordings: dict[str, tuple[Any, str]] = {}
 
     # ── Internal helpers ──────────────────────────────────────────────
 
-    def _register(self, element: Any) -> str:
+    def _register(self, element: Any, pid: int | None = None) -> str:
         h = str(uuid.uuid4())
         self._handles[h] = element
+        if pid is not None:
+            self._handle_pids[h] = pid
         return h
 
     def _resolve(self, handle_id: str) -> Any:
@@ -155,8 +171,8 @@ class MacOSBackend(DesktopBackend):
             raise StaleHandleError(f"Handle {handle_id!r} is stale (widget gone)")
         return element
 
-    def _to_handle(self, element: Any) -> ElementHandle:
-        handle_id = self._register(element)
+    def _to_handle(self, element: Any, pid: int | None = None) -> ElementHandle:
+        handle_id = self._register(element, pid)
         role = _role_name(element)
 
         name = _ax_get(element, "AXTitle") or _ax_get(element, "AXDescription") or ""
@@ -184,12 +200,14 @@ class MacOSBackend(DesktopBackend):
 
         return ElementHandle(id=handle_id, role=role, name=name, value=value, states=states)
 
-    def _walk(self, element: Any, depth: int = 0, max_depth: int = 12) -> ElementHandle:
-        handle = self._to_handle(element)
+    def _walk(
+        self, element: Any, depth: int = 0, max_depth: int = 12, pid: int | None = None
+    ) -> ElementHandle:
+        handle = self._to_handle(element, pid)
         if depth < max_depth:
             for child in _ax_get(element, "AXChildren") or []:
                 try:
-                    handle.children.append(self._walk(child, depth + 1, max_depth))
+                    handle.children.append(self._walk(child, depth + 1, max_depth, pid))
                 except Exception:
                     pass
         return handle
@@ -200,6 +218,14 @@ class MacOSBackend(DesktopBackend):
             name = app.localizedName() or ""
             if str(pid) == window_id or name == window_id:
                 return AXUIElementCreateApplication(pid)
+        return None
+
+    def _pid_for_window(self, window_id: str) -> int | None:
+        for app in NSWorkspace.sharedWorkspace().runningApplications():
+            pid = app.processIdentifier()
+            name = app.localizedName() or ""
+            if str(pid) == window_id or name == window_id:
+                return pid
         return None
 
     def _search(self, element: Any, role: str | None, name: str | None) -> list[Any]:
@@ -252,7 +278,7 @@ class MacOSBackend(DesktopBackend):
         app = self._find_app_element(window_id)
         if app is None:
             raise ValueError(f"No window found for id {window_id!r}")
-        return self._walk(app)
+        return self._walk(app, pid=self._pid_for_window(window_id))
 
     def find_elements(
         self, window_id: str, *, role=None, name=None, index=0
@@ -260,7 +286,8 @@ class MacOSBackend(DesktopBackend):
         app = self._find_app_element(window_id)
         if app is None:
             return []
-        return [self._to_handle(n) for n in self._search(app, role, name)]
+        pid = self._pid_for_window(window_id)
+        return [self._to_handle(n, pid) for n in self._search(app, role, name)]
 
     def click(self, handle_id: str) -> ActionResult:
         element = self._resolve(handle_id)
@@ -278,7 +305,8 @@ class MacOSBackend(DesktopBackend):
         # Primary: direct AXValue set — foreground-independent, handles all Unicode
         if _ax_set(element, "AXValue", text):
             return ActionResult(ok=True)
-        # Fallback: write to clipboard then Cmd+V — no AppleScript injection surface
+        # Fallback: write to clipboard then Cmd+V — no AppleScript injection surface.
+        # Use the stored PID so Cmd+V lands in the right process without stealing focus.
         try:
             _ax_set(element, "AXFocused", True)
             time.sleep(0.05)
@@ -286,7 +314,8 @@ class MacOSBackend(DesktopBackend):
                 ["pbcopy"], input=text.encode("utf-8"), capture_output=True, timeout=5
             )
             if result.returncode == 0:
-                _quartz_key_press(0x09, kCGEventFlagMaskCommand)  # Cmd+V  (0x09 = v)
+                pid = self._handle_pids.get(handle_id)
+                _quartz_key_press(0x09, kCGEventFlagMaskCommand, pid=pid)  # Cmd+V
                 return ActionResult(ok=True)
             return ActionResult(ok=False, error="pbcopy failed")
         except Exception as e:
@@ -444,20 +473,13 @@ class MacOSBackend(DesktopBackend):
         return canonical
 
     def press_key(self, key: str, window_id: str | None = None) -> ActionResult:
-        if window_id:
-            for app in NSWorkspace.sharedWorkspace().runningApplications():
-                pid = app.processIdentifier()
-                name = app.localizedName() or ""
-                if str(pid) == window_id or name == window_id:
-                    app.activateWithOptions_(2)  # NSApplicationActivateIgnoringOtherApps
-                    time.sleep(0.1)
-                    break
+        pid = self._pid_for_window(window_id) if window_id else None
         try:
             keycode = _KEY_CODES.get(key)
             if keycode is not None:
-                _quartz_key_press(keycode)
+                _quartz_key_press(keycode, pid=pid)
             else:
-                _quartz_type_char(key[:1])
+                _quartz_type_char(key[:1], pid=pid)
             return ActionResult(ok=True)
         except Exception as e:
             return ActionResult(ok=False, error=str(e))
