@@ -1,5 +1,7 @@
 # bad-ass-mcp
 
+*Every other tool needs a browser or a vision model. This one reads what the OS already knows.*
+
 A cross-platform MCP server for desktop GUI automation — driven by accessibility APIs, not screenshots.
 
 Works with Claude, Codex, Gemini, Ollama, or any OpenAI-compatible client that supports MCP.
@@ -13,9 +15,9 @@ Most AI desktop automation tools work by taking screenshots and asking a vision 
 
 Every major OS exposes a structured accessibility tree — the same one used by screen readers — that describes every button, text field, combo box, and menu in every running application. **bad-ass-mcp** speaks that language directly.
 
+- **macOS**: AXUIElement via PyObjC
 - **Linux**: AT-SPI2 via `gi.repository.Atspi`
 - **Windows**: UI Automation *(coming soon)*
-- **macOS**: AXUIElement *(coming soon)*
 
 Actions fire on control objects directly, so the target window doesn't need focus. The user can keep working while automation runs in the background.
 
