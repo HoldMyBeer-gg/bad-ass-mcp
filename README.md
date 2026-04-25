@@ -48,14 +48,27 @@ Actions fire on control objects directly, so the target window doesn't need focu
 # macOS
 pip install 'bad-ass-mcp[macos]'
 
-# Linux
-pip install 'bad-ass-mcp[linux]'
+# Linux — install system PyGObject + AT-SPI bindings first, then:
+pip install bad-ass-mcp
 
 # Windows
 pip install 'bad-ass-mcp[windows]'
 ```
 
-**Linux**: AT-SPI must be enabled. Most desktop environments (GNOME, KDE, XFCE) have it on by default. If not:
+**Linux**: PyGObject and AT-SPI are not on PyPI — install them from your distro:
+
+```bash
+# Debian/Ubuntu
+sudo apt install python3-gi gir1.2-atspi-2.0 at-spi2-core
+
+# Arch
+sudo pacman -S python-gobject at-spi2-core
+
+# Fedora
+sudo dnf install python3-gobject at-spi2-core
+```
+
+Then make sure AT-SPI is enabled (most desktop environments — GNOME, KDE, XFCE — have it on by default):
 
 ```bash
 # Check
@@ -63,6 +76,12 @@ gsettings get org.gnome.desktop.interface toolkit-accessibility
 
 # Enable
 gsettings set org.gnome.desktop.interface toolkit-accessibility true
+```
+
+If you're using a venv, create it with `--system-site-packages` so it can see the distro-installed `gi`:
+
+```bash
+python -m venv --system-site-packages venv
 ```
 
 **Windows**: Elevated (admin) applications can only be automated from an elevated Python process. No special permissions are needed for normal apps.
