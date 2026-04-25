@@ -17,7 +17,7 @@ Every major OS exposes a structured accessibility tree — the same one used by 
 
 - **macOS**: AXUIElement via PyObjC
 - **Linux**: AT-SPI2 via `gi.repository.Atspi`
-- **Windows**: UI Automation *(coming soon)*
+- **Windows**: UI Automation via `comtypes`
 
 Actions fire on control objects directly, so the target window doesn't need focus. The user can keep working while automation runs in the background.
 
@@ -45,10 +45,17 @@ Actions fire on control objects directly, so the target window doesn't need focu
 **Requirements**: Python 3.11+, `ffmpeg` + `gifsicle` for recording (optional)
 
 ```bash
-pip install bad-ass-mcp
+# macOS
+pip install 'bad-ass-mcp[macos]'
+
+# Linux
+pip install 'bad-ass-mcp[linux]'
+
+# Windows
+pip install 'bad-ass-mcp[windows]'
 ```
 
-On Linux, AT-SPI must be enabled. Most desktop environments (GNOME, KDE, XFCE) have it on by default. If not:
+**Linux**: AT-SPI must be enabled. Most desktop environments (GNOME, KDE, XFCE) have it on by default. If not:
 
 ```bash
 # Check
@@ -57,6 +64,8 @@ gsettings get org.gnome.desktop.interface toolkit-accessibility
 # Enable
 gsettings set org.gnome.desktop.interface toolkit-accessibility true
 ```
+
+**Windows**: Elevated (admin) applications can only be automated from an elevated Python process. No special permissions are needed for normal apps.
 
 ### Register with Claude Code
 
@@ -88,7 +97,7 @@ find the search box in window 12345 and type "hello"
 → type_text(handle_id="...", text="hello")
 ```
 
-For apps that don't expose a clean accessibility tree (WebKit-based editors, Electron apps), `type_text` falls back to AT-SPI keyboard injection automatically.
+For apps that don't expose a clean accessibility tree (WebKit-based editors, Electron apps), `type_text` falls back to platform-native key injection automatically (AT-SPI on Linux, Quartz events on macOS, `PostMessage` on Windows).
 
 ## Architecture
 
@@ -98,9 +107,9 @@ bad_ass_mcp/
 ├── types.py           # WindowInfo, ElementHandle, ActionResult, StaleHandleError
 └── backend/
     ├── base.py        # Abstract DesktopBackend interface
-    ├── linux.py       # AT-SPI implementation (complete)
-    ├── windows.py     # UIA stub (coming soon)
-    └── macos.py       # AXUIElement stub (coming soon)
+    ├── linux.py       # AT-SPI2 + xdotool
+    ├── macos.py       # AXUIElement + Quartz
+    └── windows.py     # UI Automation + ctypes Win32
 ```
 
 The abstract backend interface means adding a new platform is just implementing one class. The same 24 contract tests run against every backend via `FakeBackend`.
