@@ -539,8 +539,9 @@ class LinuxBackend(DesktopBackend):
                 try:
                     xwid = self._find_xwid(app.get_process_id())
                     if xwid:
-                        # Use --window to deliver the key directly without stealing focus
-                        keysym = key if key in self._KEY_SYMS else key[:1]
+                        # Pass the key name directly — xdotool speaks X11 keysym names
+                        # natively (Return, F1, ctrl+a, etc.). The _KEY_SYMS filter is
+                        # only for the AT-SPI fallback path below.
                         try:
                             subprocess.run(
                                 [
@@ -549,7 +550,7 @@ class LinuxBackend(DesktopBackend):
                                     "--window",
                                     xwid,
                                     "--clearmodifiers",
-                                    keysym,
+                                    key,
                                 ],
                                 capture_output=True,
                                 check=True,
