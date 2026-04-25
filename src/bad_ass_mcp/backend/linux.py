@@ -174,11 +174,36 @@ class LinuxBackend(DesktopBackend):
         except Exception:
             pass
         try:
-            # AT-SPI keyboard injection. generate_keyboard_event uses XTest under
-            # the hood so it goes to the X11-focused window. We activate the target
-            # window with xdotool (focus management only, not typing) so injection
-            # lands in the right place. After each chunk, drain the GLib queue to
-            # prevent AT-SPI D-Bus backpressure from CodeMirror DOM mutations.
+            # Try xdotool type --window first: delivers text directly to the target
+            # window without stealing focus (background-safe).
+            pid = node.get_process_id()
+            xwid = self._find_xwid(pid) if pid else None
+            if xwid:
+                subprocess.run(
+                    [
+                        "xdotool",
+                        "type",
+                        "--window",
+                        xwid,
+                        "--clearmodifiers",
+                        "--delay",
+                        "10",
+                        text,
+                    ],
+                    capture_output=True,
+                    check=True,
+                )
+                return ActionResult(ok=True)
+        except FileNotFoundError:
+            pass  # xdotool not available — fall through to AT-SPI
+        except Exception:
+            pass  # xwid lookup failed or xdotool error — fall through
+        try:
+            # AT-SPI keyboard injection as last resort. generate_keyboard_event
+            # uses XTest under the hood so it goes to the X11-focused window.
+            # Grab focus on the node so injection lands in the right place. After
+            # each chunk drain the GLib queue to prevent D-Bus backpressure from
+            # CodeMirror DOM mutations.
             from gi.repository import GLib  # noqa: PLC0415
 
             ctx = GLib.main_context_default()
@@ -514,11 +539,24 @@ class LinuxBackend(DesktopBackend):
                 try:
                     xwid = self._find_xwid(app.get_process_id())
                     if xwid:
-                        subprocess.run(
-                            ["xdotool", "windowactivate", "--sync", xwid],
-                            capture_output=True,
-                        )
-                        time.sleep(0.1)
+                        # Use --window to deliver the key directly without stealing focus
+                        keysym = key if key in self._KEY_SYMS else key[:1]
+                        try:
+                            subprocess.run(
+                                [
+                                    "xdotool",
+                                    "key",
+                                    "--window",
+                                    xwid,
+                                    "--clearmodifiers",
+                                    keysym,
+                                ],
+                                capture_output=True,
+                                check=True,
+                            )
+                            return ActionResult(ok=True)
+                        except FileNotFoundError:
+                            pass  # xdotool not available — fall through to AT-SPI
                 except Exception:
                     pass
         try:
