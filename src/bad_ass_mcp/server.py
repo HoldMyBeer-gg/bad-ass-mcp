@@ -145,15 +145,34 @@ def wait_for_element(
     }
 
 
+def _png_dimensions(data: bytes) -> tuple[int, int] | None:
+    """Read width/height from a PNG IHDR chunk without decoding the image.
+
+    PNG layout: 8-byte signature, then IHDR chunk (length=13, type='IHDR',
+    width u32 BE at offset 16, height u32 BE at offset 20). 24 bytes is
+    enough to answer the question — cheaper than spawning sips.
+    """
+    if len(data) < 24 or data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
+        return None
+    width = int.from_bytes(data[16:20], "big")
+    height = int.from_bytes(data[20:24], "big")
+    return width, height
+
+
 @mcp.tool()
 def screenshot(window_id: str | None = None, output_path: str | None = None) -> dict:
     """Capture a screenshot as PNG. Last resort — prefer accessibility tools.
 
     Pass window_id to crop to a specific window, or omit for full screen.
     Pass output_path (e.g. '/tmp/shot.png') to write the PNG to disk and get
-    back {ok, path} — strongly preferred for any real-window capture, since
-    base64-inline screenshots routinely overflow the response token budget.
-    Without output_path, returns {ok, data} with base64-encoded PNG bytes.
+    back {ok, path, width, height} — strongly preferred for any real-window
+    capture, since base64-inline screenshots routinely overflow the response
+    token budget. Without output_path, returns {ok, data, width, height}
+    with base64-encoded PNG bytes.
+
+    width/height are pixel dimensions; on retina displays a window with
+    720×450 logical points captures at 1440×900 px. Divide by the window's
+    point size to recover the scale factor for coordinate math.
 
     Errors with {ok: False, error: ...} if window_id is given but the window
     cannot be located — does NOT silently fall back to a full-desktop capture.
@@ -170,10 +189,20 @@ def screenshot(window_id: str | None = None, output_path: str | None = None) -> 
         target = os.path.realpath(os.path.expanduser(output_path))
         if not os.path.exists(target):
             return {"ok": False, "error": "Screenshot failed"}
-        return {"ok": True, "path": target}
+        result: dict = {"ok": True, "path": target}
+        with open(target, "rb") as f:
+            head = f.read(24)
+        dims = _png_dimensions(head)
+        if dims:
+            result["width"], result["height"] = dims
+        return result
     if not data:
         return {"ok": False, "error": "Screenshot failed"}
-    return {"ok": True, "data": base64.b64encode(data).decode()}
+    result = {"ok": True, "data": base64.b64encode(data).decode()}
+    dims = _png_dimensions(data)
+    if dims:
+        result["width"], result["height"] = dims
+    return result
 
 
 @mcp.tool()
