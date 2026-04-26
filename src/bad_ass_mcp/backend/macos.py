@@ -443,6 +443,25 @@ class MacOSBackend(DesktopBackend):
             time.sleep(0.1)
         return None
 
+    def _cg_window_bounds(self, win_num: int) -> tuple[int, int] | None:
+        """Return (width, height) in points for an on-screen CGWindow number.
+
+        Used as a sanity check before handing the number to screencapture: a
+        zero-area window produces an empty PNG that's harder to debug than
+        a clean error up front.
+        """
+        for win in _cg_onscreen_windows():
+            try:
+                if int(win.get("kCGWindowNumber", 0)) != win_num:
+                    continue
+                bounds = win.get("kCGWindowBounds") or {}
+                w = int(bounds.get("Width", 0))
+                h = int(bounds.get("Height", 0))
+                return (w, h)
+            except (TypeError, ValueError):
+                continue
+        return None
+
     def _cg_window_number_for_pid(self, pid: int) -> int | None:
         """Find a CGWindow number for the given PID via the WindowServer.
 
@@ -512,6 +531,14 @@ class MacOSBackend(DesktopBackend):
                             "restore it before capturing"
                         )
                 raise ValueError(f"No on-screen window found for window_id {window_id!r}")
+
+            dims = self._cg_window_bounds(win_num)
+            if dims is not None:
+                w, h = dims
+                if w <= 0 or h <= 0:
+                    raise ValueError(
+                        f"Window {window_id!r} has zero area ({w}x{h}) — nothing to capture"
+                    )
 
         if output_path:
             target = os.path.realpath(os.path.expanduser(output_path))
