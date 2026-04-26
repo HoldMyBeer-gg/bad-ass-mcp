@@ -28,6 +28,7 @@ try:
         kCGEventFlagMaskCommand,
         kCGEventLeftMouseDown,
         kCGEventLeftMouseUp,
+        kCGHIDEventTap,
         kCGMouseButtonLeft,
         kCGNullWindowID,
         kCGSessionEventTap,
@@ -94,22 +95,25 @@ def _quartz_key_press(keycode: int, flags: int = 0, pid: int | None = None) -> N
         CGEventPost(kCGSessionEventTap, up)
 
 
-def _quartz_mouse_click(x: float, y: float, pid: int | None = None) -> None:
-    """Inject a left mouse click at the given screen coordinates.
+def _quartz_mouse_click(x: float, y: float) -> None:
+    """Inject a left mouse click at the given screen coordinates via the HID
+    event tap.
 
-    If pid is given, events are delivered directly to that process without
-    stealing focus from the user's active window. Coordinates are in the
+    Delivery via kCGHIDEventTap is the lowest-level path — the WindowServer
+    performs hit-testing as it would for a real click, which is what makes
+    this reach Tauri/Electron/CEF webview content. Higher-level paths
+    (CGEventPostToPid, kCGSessionEventTap) bypass the hit-test pipeline and
+    silently no-op for webviews while still returning success.
+
+    Tradeoff: HID delivery is system-global, so this DOES affect the focused
+    window — whatever is at (x, y) gets the click. Coordinates are in the
     global display space (top-left origin), same as AXFrame.
     """
     point = (float(x), float(y))
     down = CGEventCreateMouseEvent(None, kCGEventLeftMouseDown, point, kCGMouseButtonLeft)
     up = CGEventCreateMouseEvent(None, kCGEventLeftMouseUp, point, kCGMouseButtonLeft)
-    if pid:
-        CGEventPostToPid(pid, down)
-        CGEventPostToPid(pid, up)
-    else:
-        CGEventPost(kCGSessionEventTap, down)
-        CGEventPost(kCGSessionEventTap, up)
+    CGEventPost(kCGHIDEventTap, down)
+    CGEventPost(kCGHIDEventTap, up)
 
 
 def _cg_onscreen_windows() -> list[dict]:
@@ -581,9 +585,13 @@ class MacOSBackend(DesktopBackend):
         return canonical
 
     def click_at(self, x: float, y: float, window_id: str | None = None) -> ActionResult:
-        pid = self._pid_for_window(window_id) if window_id else None
+        # window_id is accepted for API parity but ignored on macOS: HID-tap
+        # delivery is global, and PID-targeted delivery (CGEventPostToPid)
+        # was tried first but silently no-ops on webview content because it
+        # bypasses WindowServer hit-testing. Caller is responsible for
+        # ensuring (x, y) lands on the intended window.
         try:
-            _quartz_mouse_click(x, y, pid=pid)
+            _quartz_mouse_click(x, y)
             return ActionResult(ok=True)
         except Exception as e:
             return ActionResult(ok=False, error=str(e))
