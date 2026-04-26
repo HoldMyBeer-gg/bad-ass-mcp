@@ -281,8 +281,9 @@ def test_pid_for_window_falls_back_to_cg_when_nsworkspace_misses():
     empty_ws.sharedWorkspace.return_value.runningApplications.return_value = []
     cg_windows = [{"kCGWindowOwnerPID": 27886, "kCGWindowNumber": 11600}]
 
-    with patch("bad_ass_mcp.backend.macos.NSWorkspace", empty_ws), patch(
-        "bad_ass_mcp.backend.macos._cg_onscreen_windows", return_value=cg_windows
+    with (
+        patch("bad_ass_mcp.backend.macos.NSWorkspace", empty_ws),
+        patch("bad_ass_mcp.backend.macos._cg_onscreen_windows", return_value=cg_windows),
     ):
         assert backend._pid_for_window("27886") == 27886
 
@@ -296,8 +297,9 @@ def test_pid_for_window_returns_none_for_non_numeric_unknown_name():
     empty_ws = MagicMock()
     empty_ws.sharedWorkspace.return_value.runningApplications.return_value = []
 
-    with patch("bad_ass_mcp.backend.macos.NSWorkspace", empty_ws), patch(
-        "bad_ass_mcp.backend.macos._cg_onscreen_windows", return_value=[]
+    with (
+        patch("bad_ass_mcp.backend.macos.NSWorkspace", empty_ws),
+        patch("bad_ass_mcp.backend.macos._cg_onscreen_windows", return_value=[]),
     ):
         assert backend._pid_for_window("not-a-pid") is None
 
@@ -313,8 +315,9 @@ def test_pid_for_window_returns_none_for_numeric_with_no_window():
     empty_ws = MagicMock()
     empty_ws.sharedWorkspace.return_value.runningApplications.return_value = []
 
-    with patch("bad_ass_mcp.backend.macos.NSWorkspace", empty_ws), patch(
-        "bad_ass_mcp.backend.macos._cg_onscreen_windows", return_value=[]
+    with (
+        patch("bad_ass_mcp.backend.macos.NSWorkspace", empty_ws),
+        patch("bad_ass_mcp.backend.macos._cg_onscreen_windows", return_value=[]),
     ):
         assert backend._pid_for_window("999999") is None
 
