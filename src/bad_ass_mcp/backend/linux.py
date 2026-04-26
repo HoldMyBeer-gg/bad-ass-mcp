@@ -186,11 +186,15 @@ class LinuxBackend(DesktopBackend):
                         w, h = map(int, dims.split("x"))
                 if w < 50 or h < 50:
                     continue
-                name = subprocess.check_output(
-                    ["xdotool", "getwindowname", wid],
-                    stderr=subprocess.DEVNULL,
-                    timeout=1,
-                ).decode().strip()
+                name = (
+                    subprocess.check_output(
+                        ["xdotool", "getwindowname", wid],
+                        stderr=subprocess.DEVNULL,
+                        timeout=1,
+                    )
+                    .decode()
+                    .strip()
+                )
                 if not name:
                     continue
                 seen_pids.add(pid)
@@ -409,8 +413,7 @@ class LinuxBackend(DesktopBackend):
                 geom = self._window_geometry(window_id)
                 if geom is None:
                     raise ValueError(
-                        f"Window {window_id!r} not found — "
-                        "pass None for a full-desktop capture"
+                        f"Window {window_id!r} not found — pass None for a full-desktop capture"
                     )
             if geom:
                 # Capture the specific window by its X11 window ID — cleaner
@@ -435,8 +438,15 @@ class LinuxBackend(DesktopBackend):
                     # Fallback: crop from root using geometry
                     x, y, w, h = geom
                     subprocess.run(
-                        ["import", "-window", "root",
-                         "-crop", f"{w}x{h}+{x}+{y}", "+repage", target],
+                        [
+                            "import",
+                            "-window",
+                            "root",
+                            "-crop",
+                            f"{w}x{h}+{x}+{y}",
+                            "+repage",
+                            target,
+                        ],
                         check=True,
                         capture_output=True,
                     )
