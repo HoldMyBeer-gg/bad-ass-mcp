@@ -273,12 +273,17 @@ class LinuxBackend(DesktopBackend):
             time.sleep(0.1)
         return None
 
-    def screenshot(self, window_id: str | None = None) -> bytes:
+    def screenshot(self, window_id: str | None = None, output_path: str | None = None) -> bytes:
         import os
         import tempfile
 
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-            path = f.name
+        if output_path:
+            target = os.path.realpath(os.path.expanduser(output_path))
+            cleanup = False
+        else:
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+                target = f.name
+            cleanup = True
         try:
             if window_id:
                 app = self._find_app(window_id)
@@ -288,16 +293,19 @@ class LinuxBackend(DesktopBackend):
                             break
                     except Exception:
                         pass
-            subprocess.run(["scrot", path], check=True, capture_output=True)
-            with open(path, "rb") as f:
+            subprocess.run(["scrot", target], check=True, capture_output=True)
+            if output_path:
+                return b""
+            with open(target, "rb") as f:
                 return f.read()
         except Exception:
             return b""
         finally:
-            try:
-                os.unlink(path)
-            except Exception:
-                pass
+            if cleanup:
+                try:
+                    os.unlink(target)
+                except Exception:
+                    pass
 
     def _find_xwid(self, pid: int) -> str | None:
         """Return the X11 window ID of the largest visible window for a PID."""

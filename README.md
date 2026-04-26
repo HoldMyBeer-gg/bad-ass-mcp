@@ -29,12 +29,13 @@ Actions fire on control objects directly, so the target window doesn't need focu
 | `get_tree` | Full accessibility tree for a window as nested JSON |
 | `find_elements` | Find elements by role and/or name |
 | `click` | Click / invoke an element (foreground-independent) |
+| `click_at` | Click at absolute screen coordinates — fallback for webview/canvas UI |
 | `type_text` | Type text into a field (SetValue → EditableText → key injection) |
 | `select_option` | Select an option in a combo box or list |
 | `get_value` | Get the current value or text of an element |
 | `wait_for_window` | Wait until a window matching a pattern appears |
 | `wait_for_element` | Wait until an element exists and optionally has a given state |
-| `screenshot` | Capture a PNG as base64 (last resort — prefer the tree) |
+| `screenshot` | Capture a PNG (write to `output_path` or return base64) |
 | `start_recording` | Start recording the screen (or a specific window) |
 | `stop_recording` | Stop recording and export as a GIF |
 | `learn_layout` | Resolve semantic names → live handle IDs (one call per session) |

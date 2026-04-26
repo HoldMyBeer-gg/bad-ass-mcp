@@ -19,12 +19,20 @@ try:
     )
     from Quartz import (
         CGEventCreateKeyboardEvent,
+        CGEventCreateMouseEvent,
         CGEventKeyboardSetUnicodeString,
         CGEventPost,
         CGEventPostToPid,
         CGEventSetFlags,
+        CGWindowListCopyWindowInfo,
         kCGEventFlagMaskCommand,
+        kCGEventLeftMouseDown,
+        kCGEventLeftMouseUp,
+        kCGMouseButtonLeft,
+        kCGNullWindowID,
         kCGSessionEventTap,
+        kCGWindowListExcludeDesktopElements,
+        kCGWindowListOptionOnScreenOnly,
     )
 
     _HAS_PYOBJC = True
@@ -84,6 +92,36 @@ def _quartz_key_press(keycode: int, flags: int = 0, pid: int | None = None) -> N
     else:
         CGEventPost(kCGSessionEventTap, down)
         CGEventPost(kCGSessionEventTap, up)
+
+
+def _quartz_mouse_click(x: float, y: float, pid: int | None = None) -> None:
+    """Inject a left mouse click at the given screen coordinates.
+
+    If pid is given, events are delivered directly to that process without
+    stealing focus from the user's active window. Coordinates are in the
+    global display space (top-left origin), same as AXFrame.
+    """
+    point = (float(x), float(y))
+    down = CGEventCreateMouseEvent(None, kCGEventLeftMouseDown, point, kCGMouseButtonLeft)
+    up = CGEventCreateMouseEvent(None, kCGEventLeftMouseUp, point, kCGMouseButtonLeft)
+    if pid:
+        CGEventPostToPid(pid, down)
+        CGEventPostToPid(pid, up)
+    else:
+        CGEventPost(kCGSessionEventTap, down)
+        CGEventPost(kCGSessionEventTap, up)
+
+
+def _cg_onscreen_windows() -> list[dict]:
+    """Return on-screen window dicts from the WindowServer.
+
+    Catches windows the AX API doesn't surface — Tauri/Electron/CEF apps
+    often don't expose AXWindows until they get focus, but they're already
+    drawing pixels so the WindowServer knows about them.
+    """
+    options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements
+    raw = CGWindowListCopyWindowInfo(options, kCGNullWindowID) or []
+    return [dict(w) for w in raw]
 
 
 def _quartz_type_char(char: str, pid: int | None = None) -> None:
@@ -263,6 +301,7 @@ class MacOSBackend(DesktopBackend):
         active = ws.frontmostApplication()
         active_pid = active.processIdentifier() if active else -1
         windows: list[WindowInfo] = []
+        seen_pids: set[int] = set()
         for app in ws.runningApplications():
             pid = app.processIdentifier()
             name = app.localizedName() or ""
@@ -272,6 +311,33 @@ class MacOSBackend(DesktopBackend):
             if not _ax_get(ax_app, "AXWindows"):
                 continue
             windows.append(WindowInfo(id=str(pid), name=name, pid=pid, focused=(pid == active_pid)))
+            seen_pids.add(pid)
+
+        # Augment with WindowServer-visible apps that haven't exposed AXWindows.
+        # This catches Tauri/Electron/CEF apps before they've finished their
+        # AX handshake. We pick the first normal-layer window per PID and use
+        # the app's localized name (or the window owner name) for display.
+        running_by_pid = {
+            int(app.processIdentifier()): app
+            for app in ws.runningApplications()
+            if int(app.processIdentifier()) > 0
+        }
+        for win in _cg_onscreen_windows():
+            try:
+                pid = int(win.get("kCGWindowOwnerPID", 0))
+                layer = int(win.get("kCGWindowLayer", 0))
+            except (TypeError, ValueError):
+                continue
+            if pid <= 0 or pid in seen_pids or layer != 0:
+                continue
+            app = running_by_pid.get(pid)
+            owner = (app.localizedName() if app else None) or win.get("kCGWindowOwnerName") or ""
+            if not owner:
+                continue
+            windows.append(
+                WindowInfo(id=str(pid), name=owner, pid=pid, focused=(pid == active_pid))
+            )
+            seen_pids.add(pid)
         return windows
 
     def get_tree(self, window_id: str) -> ElementHandle:
@@ -360,33 +426,75 @@ class MacOSBackend(DesktopBackend):
             time.sleep(0.1)
         return None
 
-    def screenshot(self, window_id: str | None = None) -> bytes:
+    def _cg_window_number_for_pid(self, pid: int) -> int | None:
+        """Find a CGWindow number for the given PID via the WindowServer.
+
+        Used as a fallback when AX doesn't expose AXWindows (Tauri/Electron).
+        Picks the first normal-layer on-screen window owned by the PID.
+        """
+        for win in _cg_onscreen_windows():
+            try:
+                owner_pid = int(win.get("kCGWindowOwnerPID", 0))
+                layer = int(win.get("kCGWindowLayer", 0))
+            except (TypeError, ValueError):
+                continue
+            if owner_pid == pid and layer == 0:
+                num = win.get("kCGWindowNumber")
+                if num is not None:
+                    return int(num)
+        return None
+
+    def screenshot(self, window_id: str | None = None, output_path: str | None = None) -> bytes:
         import os
         import tempfile
 
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-            path = f.name
+        win_num: int | None = None
+        if window_id:
+            app = self._find_app_element(window_id)
+            if app:
+                wins = _ax_get(app, "AXWindows")
+                if wins:
+                    raw = _ax_get(wins[0], "AXWindowID")
+                    if raw is not None:
+                        win_num = int(raw)
+            if win_num is None:
+                pid = self._pid_for_window(window_id)
+                if pid is not None:
+                    win_num = self._cg_window_number_for_pid(pid)
+            if win_num is None:
+                # Don't silently fall back to a full-desktop capture — that produced
+                # huge useless screenshots when the window couldn't be located.
+                raise ValueError(f"No on-screen window found for window_id {window_id!r}")
+
+        if output_path:
+            target = os.path.realpath(os.path.expanduser(output_path))
+            cleanup = False
+        else:
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+                target = f.name
+            cleanup = True
+
         try:
             cmd = ["screencapture", "-x", "-t", "png"]
-            if window_id:
-                app = self._find_app_element(window_id)
-                if app:
-                    wins = _ax_get(app, "AXWindows")
-                    if wins:
-                        win_num = _ax_get(wins[0], "AXWindowID")
-                        if win_num is not None:
-                            cmd += ["-l", str(int(win_num))]
-            cmd.append(path)
+            if win_num is not None:
+                cmd += ["-l", str(win_num)]
+            cmd.append(target)
             subprocess.run(cmd, check=True, capture_output=True)
-            with open(path, "rb") as f:
+            if output_path:
+                # Caller asked for a path — don't read the bytes back. The MCP
+                # tool layer returns just the path so we don't blow the token
+                # budget on multi-megabyte base64.
+                return b""
+            with open(target, "rb") as f:
                 return f.read()
         except Exception:
             return b""
         finally:
-            try:
-                os.unlink(path)
-            except Exception:
-                pass
+            if cleanup:
+                try:
+                    os.unlink(target)
+                except Exception:
+                    pass
 
     def start_recording(self, window_id: str | None = None, fps: int = 15) -> str:
         import os
@@ -471,6 +579,16 @@ class MacOSBackend(DesktopBackend):
         except Exception:
             pass
         return canonical
+
+    def click_at(
+        self, x: float, y: float, window_id: str | None = None
+    ) -> ActionResult:
+        pid = self._pid_for_window(window_id) if window_id else None
+        try:
+            _quartz_mouse_click(x, y, pid=pid)
+            return ActionResult(ok=True)
+        except Exception as e:
+            return ActionResult(ok=False, error=str(e))
 
     def press_key(self, key: str, window_id: str | None = None) -> ActionResult:
         pid = self._pid_for_window(window_id) if window_id else None

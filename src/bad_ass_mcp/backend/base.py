@@ -63,8 +63,24 @@ class DesktopBackend(ABC):
         """Poll until a matching element exists and optionally has the given state."""
 
     @abstractmethod
-    def screenshot(self, window_id: str | None = None) -> bytes:
-        """Capture PNG bytes of a window, or the full screen if window_id is None."""
+    def screenshot(self, window_id: str | None = None, output_path: str | None = None) -> bytes:
+        """Capture PNG bytes of a window, or the full screen if window_id is None.
+
+        If output_path is given, the PNG is written to disk and the returned
+        bytes may be empty — the server layer returns the path instead.
+        Implementations should raise ValueError if window_id is given but the
+        target window cannot be located (rather than falling back to a full
+        desktop capture)."""
+
+    def click_at(
+        self, x: float, y: float, window_id: str | None = None
+    ) -> ActionResult:
+        """Click at absolute screen coordinates.
+
+        Foreground-independent fallback for when accessibility-based clicking
+        isn't available — webview content, custom-drawn UI, etc. Backends that
+        can scope events to a specific process should use window_id to do so."""
+        raise NotImplementedError("click_at is not implemented for this platform yet")
 
     @abstractmethod
     def start_recording(self, window_id: str | None = None, fps: int = 15) -> str:
@@ -113,6 +129,7 @@ class DesktopBackend(ABC):
 
         Supported actions:
           {"action": "click",            "handle": "..."}
+          {"action": "click_at",         "x": 100.0, "y": 200.0, "window_id": null}
           {"action": "type",             "handle": "...", "text": "..."}
           {"action": "key",              "key": "Return", "window_id": null}
           {"action": "select",           "handle": "...", "value": "..."}
@@ -152,6 +169,11 @@ class DesktopBackend(ABC):
             try:
                 if action == "click":
                     r = self.click(step["handle"])
+                    entry.update(ok=r.ok, error=r.error)
+                elif action == "click_at":
+                    r = self.click_at(
+                        float(step["x"]), float(step["y"]), step.get("window_id")
+                    )
                     entry.update(ok=r.ok, error=r.error)
                 elif action == "type":
                     r = self.type_text(step["handle"], step["text"])
