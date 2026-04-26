@@ -447,7 +447,7 @@ class LinuxBackend(DesktopBackend):
             with open(target, "rb") as f:
                 return f.read()
         except ValueError:
-            raise  # propagate to server layer for proper {ok: False, error: ...} response
+            raise
         except Exception:
             return b""
         finally:
