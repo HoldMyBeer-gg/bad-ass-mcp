@@ -433,19 +433,35 @@ class MacOSBackend(DesktopBackend):
     def _cg_window_number_for_pid(self, pid: int) -> int | None:
         """Find a CGWindow number for the given PID via the WindowServer.
 
-        Used as a fallback when AX doesn't expose AXWindows (Tauri/Electron).
-        Picks the first normal-layer on-screen window owned by the PID.
+        Returns the largest window owned by the PID, preferring normal-layer
+        (layer == 0) but falling back to any layer if the app's only on-screen
+        windows are sheets / floating panels / settings dialogs (Tauri likes
+        to do this). Zero-area / off-screen entries are skipped.
         """
+        primary: tuple[int, int] | None = None  # (area, window_number)  layer 0
+        secondary: tuple[int, int] | None = None  # any other layer
         for win in _cg_onscreen_windows():
             try:
-                owner_pid = int(win.get("kCGWindowOwnerPID", 0))
+                if int(win.get("kCGWindowOwnerPID", 0)) != pid:
+                    continue
                 layer = int(win.get("kCGWindowLayer", 0))
+                num = int(win.get("kCGWindowNumber", 0))
+                bounds = win.get("kCGWindowBounds") or {}
+                area = int(bounds.get("Width", 0)) * int(bounds.get("Height", 0))
             except (TypeError, ValueError):
                 continue
-            if owner_pid == pid and layer == 0:
-                num = win.get("kCGWindowNumber")
-                if num is not None:
-                    return int(num)
+            if num <= 0 or area <= 0:
+                continue
+            if layer == 0:
+                if primary is None or area > primary[0]:
+                    primary = (area, num)
+            else:
+                if secondary is None or area > secondary[0]:
+                    secondary = (area, num)
+        if primary is not None:
+            return primary[1]
+        if secondary is not None:
+            return secondary[1]
         return None
 
     def screenshot(self, window_id: str | None = None, output_path: str | None = None) -> bytes:
@@ -456,11 +472,14 @@ class MacOSBackend(DesktopBackend):
         if window_id:
             app = self._find_app_element(window_id)
             if app:
-                wins = _ax_get(app, "AXWindows")
-                if wins:
-                    raw = _ax_get(wins[0], "AXWindowID")
+                # Iterate every AXWindow — the first one isn't always the
+                # visible/foreground one. Hidden/minimized windows may
+                # not expose AXWindowID, so skip them and keep looking.
+                for w in _ax_get(app, "AXWindows") or []:
+                    raw = _ax_get(w, "AXWindowID")
                     if raw is not None:
                         win_num = int(raw)
+                        break
             if win_num is None:
                 pid = self._pid_for_window(window_id)
                 if pid is not None:
