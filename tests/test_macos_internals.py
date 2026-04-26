@@ -247,6 +247,78 @@ def test_stop_recording_rejects_symlink_resolving_to_non_gif():
         os.unlink(real_path)
 
 
+# ── _pid_for_window CGWindowList fallback ─────────────────────────────
+
+
+@_darwin
+def test_pid_for_window_uses_nsworkspace_when_present():
+    # Sanity: existing happy path still works when NSWorkspace knows the app.
+    from bad_ass_mcp.backend.macos import MacOSBackend
+
+    backend = MacOSBackend()
+
+    fake_app = MagicMock()
+    fake_app.processIdentifier.return_value = 1234
+    fake_app.localizedName.return_value = "Foo"
+    fake_ws = MagicMock()
+    fake_ws.sharedWorkspace.return_value.runningApplications.return_value = [fake_app]
+
+    with patch("bad_ass_mcp.backend.macos.NSWorkspace", fake_ws):
+        assert backend._pid_for_window("1234") == 1234
+
+
+@_darwin
+def test_pid_for_window_falls_back_to_cg_when_nsworkspace_misses():
+    # The bug this guards against: in a long-running daemon, NSWorkspace's
+    # runningApplications() snapshot can lag for apps that started after server
+    # init (Tauri/Electron especially). _pid_for_window must still resolve the
+    # PID via CGWindowList — same backfill list_windows() already trusts.
+    from bad_ass_mcp.backend.macos import MacOSBackend
+
+    backend = MacOSBackend()
+
+    empty_ws = MagicMock()
+    empty_ws.sharedWorkspace.return_value.runningApplications.return_value = []
+    cg_windows = [{"kCGWindowOwnerPID": 27886, "kCGWindowNumber": 11600}]
+
+    with patch("bad_ass_mcp.backend.macos.NSWorkspace", empty_ws), patch(
+        "bad_ass_mcp.backend.macos._cg_onscreen_windows", return_value=cg_windows
+    ):
+        assert backend._pid_for_window("27886") == 27886
+
+
+@_darwin
+def test_pid_for_window_returns_none_for_non_numeric_unknown_name():
+    from bad_ass_mcp.backend.macos import MacOSBackend
+
+    backend = MacOSBackend()
+
+    empty_ws = MagicMock()
+    empty_ws.sharedWorkspace.return_value.runningApplications.return_value = []
+
+    with patch("bad_ass_mcp.backend.macos.NSWorkspace", empty_ws), patch(
+        "bad_ass_mcp.backend.macos._cg_onscreen_windows", return_value=[]
+    ):
+        assert backend._pid_for_window("not-a-pid") is None
+
+
+@_darwin
+def test_pid_for_window_returns_none_for_numeric_with_no_window():
+    # Numeric window_id but no CG window owned by it → still None, not silently
+    # accepting a bogus PID.
+    from bad_ass_mcp.backend.macos import MacOSBackend
+
+    backend = MacOSBackend()
+
+    empty_ws = MagicMock()
+    empty_ws.sharedWorkspace.return_value.runningApplications.return_value = []
+
+    with patch("bad_ass_mcp.backend.macos.NSWorkspace", empty_ws), patch(
+        "bad_ass_mcp.backend.macos._cg_onscreen_windows", return_value=[]
+    ):
+        assert backend._pid_for_window("999999") is None
+
+
 @_darwin
 def test_stop_recording_accepts_valid_gif_path():
     import os

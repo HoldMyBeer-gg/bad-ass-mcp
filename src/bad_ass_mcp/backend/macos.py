@@ -268,6 +268,20 @@ class MacOSBackend(DesktopBackend):
             name = app.localizedName() or ""
             if str(pid) == window_id or name == window_id:
                 return pid
+        # NSWorkspace.runningApplications() can lag in a long-running daemon —
+        # apps that started after server init may be missing for a while.
+        # CGWindowList sees them via the WindowServer regardless, which is
+        # the same backfill list_windows() already does for Tauri/Electron/CEF.
+        try:
+            pid_int = int(window_id)
+        except (TypeError, ValueError):
+            return None
+        for win in _cg_onscreen_windows():
+            try:
+                if int(win.get("kCGWindowOwnerPID", 0)) == pid_int:
+                    return pid_int
+            except (TypeError, ValueError):
+                continue
         return None
 
     def _search(self, element: Any, role: str | None, name: str | None) -> list[Any]:
