@@ -580,9 +580,7 @@ class MacOSBackend(DesktopBackend):
             pass
         return canonical
 
-    def click_at(
-        self, x: float, y: float, window_id: str | None = None
-    ) -> ActionResult:
+    def click_at(self, x: float, y: float, window_id: str | None = None) -> ActionResult:
         pid = self._pid_for_window(window_id) if window_id else None
         try:
             _quartz_mouse_click(x, y, pid=pid)

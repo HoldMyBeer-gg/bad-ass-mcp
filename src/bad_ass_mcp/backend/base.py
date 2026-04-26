@@ -72,9 +72,7 @@ class DesktopBackend(ABC):
         target window cannot be located (rather than falling back to a full
         desktop capture)."""
 
-    def click_at(
-        self, x: float, y: float, window_id: str | None = None
-    ) -> ActionResult:
+    def click_at(self, x: float, y: float, window_id: str | None = None) -> ActionResult:
         """Click at absolute screen coordinates.
 
         Foreground-independent fallback for when accessibility-based clicking
@@ -171,9 +169,7 @@ class DesktopBackend(ABC):
                     r = self.click(step["handle"])
                     entry.update(ok=r.ok, error=r.error)
                 elif action == "click_at":
-                    r = self.click_at(
-                        float(step["x"]), float(step["y"]), step.get("window_id")
-                    )
+                    r = self.click_at(float(step["x"]), float(step["y"]), step.get("window_id"))
                     entry.update(ok=r.ok, error=r.error)
                 elif action == "type":
                     r = self.type_text(step["handle"], step["text"])
