@@ -312,9 +312,22 @@ class MacOSBackend(DesktopBackend):
             if not name or pid <= 0:
                 continue
             ax_app = AXUIElementCreateApplication(pid)
-            if not _ax_get(ax_app, "AXWindows"):
+            ax_wins = _ax_get(ax_app, "AXWindows") or []
+            if not ax_wins:
                 continue
-            windows.append(WindowInfo(id=str(pid), name=name, pid=pid, focused=(pid == active_pid)))
+            # All AX windows minimized → app is docked; capture/click won't work
+            # until something is restored. Surfacing this lets callers either
+            # un-minimize first or skip the entry instead of guessing.
+            minimized = all(bool(_ax_get(w, "AXMinimized")) for w in ax_wins)
+            windows.append(
+                WindowInfo(
+                    id=str(pid),
+                    name=name,
+                    pid=pid,
+                    focused=(pid == active_pid),
+                    minimized=minimized,
+                )
+            )
             seen_pids.add(pid)
 
         # Augment with WindowServer-visible apps that haven't exposed AXWindows.
@@ -487,6 +500,17 @@ class MacOSBackend(DesktopBackend):
             if win_num is None:
                 # Don't silently fall back to a full-desktop capture — that produced
                 # huge useless screenshots when the window couldn't be located.
+                # Common cause: app is minimized to the dock, so its windows are
+                # off-screen and CGWindowListOptionOnScreenOnly skips them.
+                pid = self._pid_for_window(window_id)
+                if pid is not None:
+                    ax_app = AXUIElementCreateApplication(pid)
+                    wins = _ax_get(ax_app, "AXWindows") or []
+                    if wins and all(bool(_ax_get(w, "AXMinimized")) for w in wins):
+                        raise ValueError(
+                            f"Window for {window_id!r} is minimized to the dock — "
+                            "restore it before capturing"
+                        )
                 raise ValueError(f"No on-screen window found for window_id {window_id!r}")
 
         if output_path:

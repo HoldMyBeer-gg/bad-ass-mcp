@@ -9,6 +9,7 @@ class WindowInfo:
     name: str
     pid: int
     focused: bool
+    minimized: bool = False
 
 
 @dataclass
