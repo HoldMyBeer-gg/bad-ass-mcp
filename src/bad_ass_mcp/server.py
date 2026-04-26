@@ -182,8 +182,15 @@ def click_at(x: float, y: float, window_id: str | None = None) -> dict:
 
     Fallback for when accessibility-based clicking can't reach a target —
     webview content (Tauri/Electron/CEF), custom-drawn UI, OpenGL/canvas, etc.
-    Pass window_id to deliver the click to that process without stealing focus
-    from the user's foreground window."""
+
+    Delivery is system-global (kCGHIDEventTap on macOS) so the click actually
+    reaches webviews — this was a regression in the first version, which used
+    PID-targeted delivery that silently no-op'd on webview content while
+    still returning ok. The cost is that the click affects whatever window
+    is at (x, y), so make sure the target window is on top first.
+
+    window_id is advisory only — the call cannot verify delivery, just that
+    the events were posted."""
     try:
         result = _backend().click_at(x, y, window_id)
         return {"ok": result.ok, "error": result.error}
