@@ -614,7 +614,7 @@ class WindowsBackend(DesktopBackend):
             time.sleep(0.1)
         return None
 
-    def screenshot(self, window_id: str | None = None) -> bytes:
+    def screenshot(self, window_id: str | None = None, output_path: str | None = None) -> bytes:
         if window_id:
             hwnd = int(window_id)
         else:
@@ -651,9 +651,16 @@ class WindowsBackend(DesktopBackend):
         _user32.ReleaseDC(hwnd, hwnd_dc)
 
         try:
-            return _bgra_to_png(width, height, buf.raw)
+            png = _bgra_to_png(width, height, buf.raw)
         except Exception:
             return b""
+
+        if output_path:
+            target = os.path.realpath(os.path.expanduser(output_path))
+            with open(target, "wb") as f:
+                f.write(png)
+            return b""
+        return png
 
     def start_recording(self, window_id: str | None = None, fps: int = 15) -> str:
         import tempfile

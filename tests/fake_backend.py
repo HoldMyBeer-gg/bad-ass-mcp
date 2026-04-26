@@ -123,8 +123,16 @@ class FakeBackend(DesktopBackend):
             return el
         return None
 
-    def screenshot(self, window_id=None) -> bytes:
-        return b"\x89PNG\r\n\x1a\n"  # minimal PNG header stub
+    def screenshot(self, window_id=None, output_path=None) -> bytes:
+        png = b"\x89PNG\r\n\x1a\n"  # minimal PNG header stub
+        if output_path:
+            with open(output_path, "wb") as f:
+                f.write(png)
+            return b""
+        return png
+
+    def click_at(self, x, y, window_id=None) -> ActionResult:
+        return ActionResult(ok=True)
 
     def start_recording(self, window_id=None, fps=15) -> str:
         return "fake-recording-handle"

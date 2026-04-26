@@ -146,15 +146,51 @@ def wait_for_element(
 
 
 @mcp.tool()
-def screenshot(window_id: str | None = None) -> dict:
-    """Capture a screenshot as base64 PNG. Last resort — prefer accessibility tools.
-    Pass window_id to crop to a specific window, or omit for full screen."""
+def screenshot(window_id: str | None = None, output_path: str | None = None) -> dict:
+    """Capture a screenshot as PNG. Last resort — prefer accessibility tools.
+
+    Pass window_id to crop to a specific window, or omit for full screen.
+    Pass output_path (e.g. '/tmp/shot.png') to write the PNG to disk and get
+    back {ok, path} — strongly preferred for any real-window capture, since
+    base64-inline screenshots routinely overflow the response token budget.
+    Without output_path, returns {ok, data} with base64-encoded PNG bytes.
+
+    Errors with {ok: False, error: ...} if window_id is given but the window
+    cannot be located — does NOT silently fall back to a full-desktop capture.
+    """
     import base64
 
-    data = _backend().screenshot(window_id)
+    try:
+        data = _backend().screenshot(window_id, output_path)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    if output_path:
+        import os
+
+        target = os.path.realpath(os.path.expanduser(output_path))
+        if not os.path.exists(target):
+            return {"ok": False, "error": "Screenshot failed"}
+        return {"ok": True, "path": target}
     if not data:
         return {"ok": False, "error": "Screenshot failed"}
     return {"ok": True, "data": base64.b64encode(data).decode()}
+
+
+@mcp.tool()
+def click_at(x: float, y: float, window_id: str | None = None) -> dict:
+    """Click at absolute screen coordinates (top-left origin, in points).
+
+    Fallback for when accessibility-based clicking can't reach a target —
+    webview content (Tauri/Electron/CEF), custom-drawn UI, OpenGL/canvas, etc.
+    Pass window_id to deliver the click to that process without stealing focus
+    from the user's foreground window."""
+    try:
+        result = _backend().click_at(x, y, window_id)
+        return {"ok": result.ok, "error": result.error}
+    except NotImplementedError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 @mcp.tool()
@@ -204,6 +240,7 @@ def run_sequence(steps: list, stop_on_error: bool = True) -> list:
 
     Each step is a dict with an "action" key plus action-specific fields:
       {"action": "click",            "handle": "..."}
+      {"action": "click_at",         "x": 100.0, "y": 200.0, "window_id": null}
       {"action": "type",             "handle": "...", "text": "..."}
       {"action": "key",              "key": "Return"}
       {"action": "select",           "handle": "...", "value": "..."}
