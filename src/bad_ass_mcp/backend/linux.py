@@ -409,14 +409,39 @@ class LinuxBackend(DesktopBackend):
                         "pass None for a full-desktop capture"
                     )
             if geom:
-                x, y, w, h = geom
+                # Capture the specific window by its X11 window ID — cleaner
+                # than a cropped root grab and handles window decorations.
+                xwid = None
+                app = self._find_app(window_id) if window_id else None
+                pid = app.get_process_id() if app else None
+                if pid is None and window_id:
+                    try:
+                        pid = int(window_id)
+                    except ValueError:
+                        pass
+                if pid:
+                    xwid = self._find_xwid(pid)
+                if xwid:
+                    subprocess.run(
+                        ["import", "-window", xwid, target],
+                        check=True,
+                        capture_output=True,
+                    )
+                else:
+                    # Fallback: crop from root using geometry
+                    x, y, w, h = geom
+                    subprocess.run(
+                        ["import", "-window", "root",
+                         "-crop", f"{w}x{h}+{x}+{y}", "+repage", target],
+                        check=True,
+                        capture_output=True,
+                    )
+            else:
                 subprocess.run(
-                    ["scrot", "-a", f"{x},{y},{w},{h}", target],
+                    ["import", "-window", "root", target],
                     check=True,
                     capture_output=True,
                 )
-            else:
-                subprocess.run(["scrot", target], check=True, capture_output=True)
             if output_path:
                 return b""
             with open(target, "rb") as f:
