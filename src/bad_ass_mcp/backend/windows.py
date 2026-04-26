@@ -70,8 +70,12 @@ _CF_UNICODETEXT = 13
 # Window style flags for list_windows filtering
 _WS_CAPTION = 0x00C00000
 _WS_EX_TOOLWINDOW = 0x00000080
+_WS_EX_NOACTIVATE = 0x08000000
 _GWL_STYLE = -16
 _GWL_EXSTYLE = -20
+
+# DWM cloaked attribute — filters Store apps, virtual-desktop hidden windows
+_DWMWA_CLOAKED = 14
 
 # UIA pattern IDs
 _UIA_InvokePatternId = 10000
@@ -436,14 +440,32 @@ class WindowsBackend(DesktopBackend):
         def _enum_cb(hwnd, _lparam):
             if not _user32.IsWindowVisible(hwnd):
                 return True
-            # Skip tool windows (system tray, floating toolbars, etc.)
             exstyle = _user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            # Skip tool windows (system tray, floating toolbars, etc.)
             if exstyle & _WS_EX_TOOLWINDOW:
                 return True
-            # Skip windows without a title bar (overlays, splash screens, etc.)
             style = _user32.GetWindowLongW(hwnd, _GWL_STYLE)
-            if not (style & _WS_CAPTION):
-                return True
+            has_caption = bool(style & _WS_CAPTION)
+            if not has_caption:
+                # Frameless windows (Tauri, Electron, CEF) lack WS_CAPTION.
+                # Accept them if they have a title + nonzero area + aren't
+                # cloaked (virtual-desktop hidden) or non-activatable overlays.
+                if exstyle & _WS_EX_NOACTIVATE:
+                    return True
+                rect = ctypes.wintypes.RECT()
+                _user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                if (rect.right - rect.left) < 50 or (rect.bottom - rect.top) < 50:
+                    return True
+                # DWM cloaked check — filters Store app ghosts & virtual-desktop windows
+                try:
+                    cloaked = ctypes.c_int(0)
+                    ctypes.windll.dwmapi.DwmGetWindowAttribute(
+                        hwnd, _DWMWA_CLOAKED, ctypes.byref(cloaked), ctypes.sizeof(cloaked)
+                    )
+                    if cloaked.value:
+                        return True
+                except Exception:
+                    pass
             length = _user32.GetWindowTextLengthW(hwnd)
             if length == 0:
                 return True
@@ -455,7 +477,13 @@ class WindowsBackend(DesktopBackend):
             pid = ctypes.wintypes.DWORD()
             _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
             windows.append(
-                WindowInfo(id=str(hwnd), name=name, pid=pid.value, focused=(hwnd == foreground))
+                WindowInfo(
+                    id=str(hwnd),
+                    name=name,
+                    pid=pid.value,
+                    focused=(hwnd == foreground),
+                    minimized=bool(_user32.IsIconic(hwnd)),
+                )
             )
             return True
 
@@ -617,6 +645,10 @@ class WindowsBackend(DesktopBackend):
     def screenshot(self, window_id: str | None = None, output_path: str | None = None) -> bytes:
         if window_id:
             hwnd = int(window_id)
+            if not _user32.IsWindow(hwnd):
+                raise ValueError(f"No on-screen window found for window_id {window_id!r}")
+            if _user32.IsIconic(hwnd):
+                raise ValueError(f"Window {window_id!r} is minimized — restore it before capturing")
         else:
             hwnd = _user32.GetDesktopWindow()
 
@@ -625,7 +657,7 @@ class WindowsBackend(DesktopBackend):
         width = rect.right - rect.left
         height = rect.bottom - rect.top
         if width <= 0 or height <= 0:
-            return b""
+            raise ValueError(f"Window {window_id!r} has zero area ({width}x{height})")
 
         hwnd_dc = _user32.GetWindowDC(hwnd)
         mem_dc = _gdi32.CreateCompatibleDC(hwnd_dc)
@@ -741,6 +773,39 @@ class WindowsBackend(DesktopBackend):
         except Exception:
             pass
         return canonical
+
+    def click_at(self, x: float, y: float, window_id: str | None = None) -> ActionResult:
+        # Map pixel coordinates to SendInput's 0–65535 absolute range.
+        # window_id accepted for API parity but ignored — SendInput is global,
+        # same as Quartz CGEvent on macOS and xdotool on Linux.
+        try:
+            sx = _user32.GetSystemMetrics(0)  # SM_CXSCREEN
+            sy = _user32.GetSystemMetrics(1)  # SM_CYSCREEN
+            if sx <= 0 or sy <= 0:
+                return ActionResult(ok=False, error="Could not determine screen size")
+            abs_x = int(round(x) * 65536 / sx)
+            abs_y = int(round(y) * 65536 / sy)
+
+            # MOUSEINPUT struct (dx, dy, mouseData, dwFlags, time, dwExtraInfo)
+            #   dwFlags: MOVE|ABSOLUTE = 0x8001, LEFTDOWN = 0x0002, LEFTUP = 0x0004
+            inputs = (ctypes.c_ubyte * (2 * 40))()  # 2 × INPUT (each 40 bytes on x64)
+            for i, flags in enumerate((0x8001 | 0x0002, 0x8001 | 0x0004)):
+                offset = i * 40
+                struct.pack_into("I", inputs, offset, 0)  # type = INPUT_MOUSE
+                struct.pack_into("i", inputs, offset + 4, abs_x)  # dx
+                struct.pack_into("i", inputs, offset + 8, abs_y)  # dy
+                struct.pack_into("I", inputs, offset + 12, 0)  # mouseData
+                struct.pack_into("I", inputs, offset + 16, flags)  # dwFlags
+                struct.pack_into("I", inputs, offset + 20, 0)  # time
+                # dwExtraInfo at offset 24 stays 0
+
+            sent = _user32.SendInput(2, inputs, 40)
+            if sent != 2:
+                return ActionResult(ok=False, error=f"SendInput returned {sent}, expected 2")
+            time.sleep(0.05)
+            return ActionResult(ok=True)
+        except Exception as e:
+            return ActionResult(ok=False, error=str(e))
 
     def press_key(self, key: str, window_id: str | None = None) -> ActionResult:
         vk = _VK_CODES.get(key)
