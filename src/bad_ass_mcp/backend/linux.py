@@ -108,7 +108,7 @@ class LinuxBackend(DesktopBackend):
 
     # ── DesktopBackend impl ───────────────────────────────────────────
 
-    def list_windows(self) -> list[WindowInfo]:
+    def _atspi_list_windows(self) -> list[WindowInfo]:
         desktop = Atspi.get_desktop(0)
         windows = []
         for i in range(desktop.get_child_count()):
@@ -116,18 +116,93 @@ class LinuxBackend(DesktopBackend):
             try:
                 name = app.get_name() or ""
                 pid = app.get_process_id()
-                # Check if any child frame has focus
                 focused = False
-                for j in range(app.get_child_count()):
+                child_count = app.get_child_count()
+                # All frames iconified → window is minimized; capture/click won't
+                # work until something is restored.
+                minimized = child_count > 0
+                for j in range(child_count):
                     frame = app.get_child_at_index(j)
                     ss = frame.get_state_set()
                     if ss.contains(Atspi.StateType.ACTIVE):
                         focused = True
-                        break
-                windows.append(WindowInfo(id=str(pid), name=name, pid=pid, focused=focused))
+                    if not ss.contains(Atspi.StateType.ICONIFIED):
+                        minimized = False
+                windows.append(
+                    WindowInfo(id=str(pid), name=name, pid=pid, focused=focused, minimized=minimized)
+                )
             except Exception:
                 continue
         return windows
+
+    def _x11_list_windows(self) -> list[WindowInfo]:
+        """Discover top-level X11 windows for processes not in the AT-SPI tree.
+
+        Uses _NET_CLIENT_LIST (window manager's client list — excludes panels,
+        tooltips, and other unmanaged windows) so the result stays tidy.
+        Covers Tauri / Electron / Qt apps that don't register with AT-SPI.
+        """
+        import re
+
+        try:
+            raw = subprocess.check_output(
+                ["xprop", "-root", "_NET_CLIENT_LIST"],
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+            ).decode()
+            wids = re.findall(r"0x[0-9a-fA-F]+", raw)
+        except Exception:
+            return []
+
+        seen_pids: set[int] = set()
+        results = []
+        for wid in wids:
+            try:
+                pid = int(
+                    subprocess.check_output(
+                        ["xdotool", "getwindowpid", wid],
+                        stderr=subprocess.DEVNULL,
+                        timeout=1,
+                    )
+                    .decode()
+                    .strip()
+                )
+            except Exception:
+                continue
+            if pid in seen_pids:
+                continue
+            try:
+                geom_out = subprocess.check_output(
+                    ["xdotool", "getwindowgeometry", wid],
+                    stderr=subprocess.DEVNULL,
+                    timeout=1,
+                ).decode()
+                w = h = 0
+                for line in geom_out.splitlines():
+                    if "Geometry:" in line:
+                        dims = line.split(":")[1].strip()
+                        w, h = map(int, dims.split("x"))
+                if w < 50 or h < 50:
+                    continue
+                name = subprocess.check_output(
+                    ["xdotool", "getwindowname", wid],
+                    stderr=subprocess.DEVNULL,
+                    timeout=1,
+                ).decode().strip()
+                if not name:
+                    continue
+                seen_pids.add(pid)
+                results.append(WindowInfo(id=str(pid), name=name, pid=pid, focused=False))
+            except Exception:
+                continue
+        return results
+
+    def list_windows(self) -> list[WindowInfo]:
+        atspi = self._atspi_list_windows()
+        atspi_pids = {w.pid for w in atspi}
+        # Supplement with top-level X11 windows whose process isn't in AT-SPI
+        extra = [w for w in self._x11_list_windows() if w.pid not in atspi_pids]
+        return atspi + extra
 
     def get_tree(self, window_id: str) -> ElementHandle:
         app = self._find_app(window_id)
@@ -143,6 +218,26 @@ class LinuxBackend(DesktopBackend):
             return []
         nodes = self._search(app, role, name)
         return [self._to_handle(n) for n in nodes]
+
+    def click_at(self, x: float, y: float, window_id: str | None = None) -> ActionResult:
+        ix, iy = int(round(x)), int(round(y))
+        try:
+            subprocess.run(
+                ["xdotool", "mousemove", "--sync", str(ix), str(iy)],
+                capture_output=True,
+                check=True,
+            )
+            subprocess.run(
+                ["xdotool", "click", "--clearmodifiers", "1"],
+                capture_output=True,
+                check=True,
+            )
+            time.sleep(0.05)
+            return ActionResult(ok=True)
+        except FileNotFoundError:
+            return ActionResult(ok=False, error="xdotool not found; install it to use click_at")
+        except subprocess.CalledProcessError as e:
+            return ActionResult(ok=False, error=e.stderr.decode(errors="replace") or "xdotool click failed")
 
     def click(self, handle_id: str) -> ActionResult:
         node = self._resolve(handle_id)
@@ -285,19 +380,49 @@ class LinuxBackend(DesktopBackend):
                 target = f.name
             cleanup = True
         try:
+            geom = None
             if window_id:
                 app = self._find_app(window_id)
                 if app:
                     try:
-                        for _i in range(app.get_child_count()):
-                            break
+                        child_count = app.get_child_count()
+                        if child_count > 0 and all(
+                            app.get_child_at_index(j)
+                            .get_state_set()
+                            .contains(Atspi.StateType.ICONIFIED)
+                            for j in range(child_count)
+                        ):
+                            raise ValueError(
+                                f"Window for {window_id!r} is minimized — "
+                                "restore it before capturing"
+                            )
+                    except ValueError:
+                        raise
                     except Exception:
                         pass
-            subprocess.run(["scrot", target], check=True, capture_output=True)
+                # Resolve geometry — works for AT-SPI apps and non-AX apps
+                # (Tauri/Electron) via the xdotool PID fallback in _window_geometry.
+                geom = self._window_geometry(window_id)
+                if geom is None:
+                    raise ValueError(
+                        f"Window {window_id!r} not found — "
+                        "pass None for a full-desktop capture"
+                    )
+            if geom:
+                x, y, w, h = geom
+                subprocess.run(
+                    ["scrot", "-a", f"{x},{y},{w},{h}", target],
+                    check=True,
+                    capture_output=True,
+                )
+            else:
+                subprocess.run(["scrot", target], check=True, capture_output=True)
             if output_path:
                 return b""
             with open(target, "rb") as f:
                 return f.read()
+        except ValueError:
+            raise  # propagate to server layer for proper {ok: False, error: ...} response
         except Exception:
             return b""
         finally:
@@ -335,10 +460,20 @@ class LinuxBackend(DesktopBackend):
             return None
 
     def _window_geometry(self, window_id: str) -> tuple[int, int, int, int] | None:
-        """Return (x, y, width, height) using xdotool, falling back to AT-SPI."""
+        """Return (x, y, width, height) using xdotool, falling back to AT-SPI.
+
+        Handles non-AT-SPI apps (Tauri, Electron, Qt) by treating window_id as
+        a raw PID when the AT-SPI lookup returns nothing.
+        """
         # Try xdotool first — reliable across toolkits and HiDPI setups
         app = self._find_app(window_id)
         pid = app.get_process_id() if app else None
+        # Non-AT-SPI fallback: interpret window_id directly as a PID
+        if pid is None:
+            try:
+                pid = int(window_id)
+            except ValueError:
+                pass
         if pid:
             try:
                 wids = (
