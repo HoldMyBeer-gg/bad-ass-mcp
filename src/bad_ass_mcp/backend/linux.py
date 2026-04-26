@@ -129,7 +129,9 @@ class LinuxBackend(DesktopBackend):
                     if not ss.contains(Atspi.StateType.ICONIFIED):
                         minimized = False
                 windows.append(
-                    WindowInfo(id=str(pid), name=name, pid=pid, focused=focused, minimized=minimized)
+                    WindowInfo(
+                        id=str(pid), name=name, pid=pid, focused=focused, minimized=minimized
+                    )
                 )
             except Exception:
                 continue
@@ -237,7 +239,9 @@ class LinuxBackend(DesktopBackend):
         except FileNotFoundError:
             return ActionResult(ok=False, error="xdotool not found; install it to use click_at")
         except subprocess.CalledProcessError as e:
-            return ActionResult(ok=False, error=e.stderr.decode(errors="replace") or "xdotool click failed")
+            return ActionResult(
+                ok=False, error=e.stderr.decode(errors="replace") or "xdotool click failed"
+            )
 
     def click(self, handle_id: str) -> ActionResult:
         node = self._resolve(handle_id)
