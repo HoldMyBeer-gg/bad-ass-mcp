@@ -45,8 +45,9 @@ def list_windows() -> list[dict]:
       accessible: false signals the platform a11y tree has nothing for
         this window — find_elements / get_tree will return empty. Skip
         those tools and use screenshot + click_at directly. Common causes:
-        immediate-mode UI toolkits (egui, Dear ImGui), Tauri/Electron
-        before their AX handshake, custom OpenGL/Vulkan canvases."""
+        Tauri/Electron before their AX handshake, custom OpenGL/Vulkan
+        canvases, raw immediate-mode toolkits without an AccessKit
+        adapter. (egui+accesskit surfaces normally as accessible=true.)"""
     return [w.__dict__ for w in _backend().list_windows()]
 
 

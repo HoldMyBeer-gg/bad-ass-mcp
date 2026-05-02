@@ -20,8 +20,9 @@ class WindowInfo:
     # macOS, _NET_CLIENT_LIST on Linux). find_elements / get_tree will
     # return empty for those windows — callers should go straight to
     # screenshot + click_at instead of round-tripping through AX. Cases:
-    # immediate-mode UI (egui, Dear ImGui), pre-handshake Tauri/Electron,
-    # custom OpenGL/Vulkan canvases.
+    # pre-handshake Tauri/Electron, custom OpenGL/Vulkan canvases, raw
+    # immediate-mode toolkits without AccessKit. Note: egui *with* the
+    # accesskit feature DOES surface here as accessible=True.
     accessible: bool = True
 
 
