@@ -382,6 +382,7 @@ class MacOSBackend(DesktopBackend):
                     pid=pid,
                     focused=(pid == active_pid),
                     bounds=rect,
+                    accessible=False,
                 )
             )
             seen_pids.add(pid)
