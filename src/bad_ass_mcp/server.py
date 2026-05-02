@@ -35,7 +35,12 @@ def _backend():
 
 @mcp.tool()
 def list_windows() -> list[dict]:
-    """List all visible application windows on the desktop."""
+    """List all visible application windows on the desktop.
+
+    Each entry includes id, name, pid, focused, minimized, and bounds —
+    bounds is [x, y, width, height] in global screen coords (top-left
+    origin) when available, or null when the platform can't report it.
+    Use bounds to translate screenshot pixels to click_at coordinates."""
     return [w.__dict__ for w in _backend().list_windows()]
 
 

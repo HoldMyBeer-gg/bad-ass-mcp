@@ -121,6 +121,7 @@ class LinuxBackend(DesktopBackend):
                 # All frames iconified → window is minimized; capture/click won't
                 # work until something is restored.
                 minimized = child_count > 0
+                bounds: tuple[int, int, int, int] | None = None
                 for j in range(child_count):
                     frame = app.get_child_at_index(j)
                     ss = frame.get_state_set()
@@ -128,9 +129,21 @@ class LinuxBackend(DesktopBackend):
                         focused = True
                     if not ss.contains(Atspi.StateType.ICONIFIED):
                         minimized = False
+                    if bounds is None:
+                        try:
+                            ext = frame.get_extents(Atspi.CoordType.SCREEN)
+                            if ext is not None and ext.width > 0 and ext.height > 0:
+                                bounds = (ext.x, ext.y, ext.width, ext.height)
+                        except Exception:
+                            pass
                 windows.append(
                     WindowInfo(
-                        id=str(pid), name=name, pid=pid, focused=focused, minimized=minimized
+                        id=str(pid),
+                        name=name,
+                        pid=pid,
+                        focused=focused,
+                        minimized=minimized,
+                        bounds=bounds,
                     )
                 )
             except Exception:
@@ -180,10 +193,15 @@ class LinuxBackend(DesktopBackend):
                     timeout=1,
                 ).decode()
                 w = h = 0
+                px = py = 0
                 for line in geom_out.splitlines():
                     if "Geometry:" in line:
                         dims = line.split(":")[1].strip()
                         w, h = map(int, dims.split("x"))
+                    elif "Position:" in line:
+                        # "Position: 100,200 (screen: 0)"
+                        pos = line.split(":")[1].strip().split(" ")[0]
+                        px, py = map(int, pos.split(","))
                 if w < 50 or h < 50:
                     continue
                 name = (
@@ -198,7 +216,15 @@ class LinuxBackend(DesktopBackend):
                 if not name:
                     continue
                 seen_pids.add(pid)
-                results.append(WindowInfo(id=str(pid), name=name, pid=pid, focused=False))
+                results.append(
+                    WindowInfo(
+                        id=str(pid),
+                        name=name,
+                        pid=pid,
+                        focused=False,
+                        bounds=(px, py, w, h),
+                    )
+                )
             except Exception:
                 continue
         return results

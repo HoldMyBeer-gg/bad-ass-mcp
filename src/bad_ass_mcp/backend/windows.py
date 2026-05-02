@@ -483,6 +483,7 @@ class WindowsBackend(DesktopBackend):
                     pid=pid.value,
                     focused=(hwnd == foreground),
                     minimized=bool(_user32.IsIconic(hwnd)),
+                    bounds=self._window_rect(hwnd),
                 )
             )
             return True
