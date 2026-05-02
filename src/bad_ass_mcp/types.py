@@ -15,6 +15,14 @@ class WindowInfo:
     # wmctrl). Callers compositing screenshot-relative click_at coords
     # need this to translate image pixels to screen pixels.
     bounds: tuple[int, int, int, int] | None = None
+    # False when the window was discovered via an OS-level fallback path
+    # because it never appeared in the platform a11y tree (CGWindowList on
+    # macOS, _NET_CLIENT_LIST on Linux). find_elements / get_tree will
+    # return empty for those windows — callers should go straight to
+    # screenshot + click_at instead of round-tripping through AX. Cases:
+    # immediate-mode UI (egui, Dear ImGui), pre-handshake Tauri/Electron,
+    # custom OpenGL/Vulkan canvases.
+    accessible: bool = True
 
 
 @dataclass

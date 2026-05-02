@@ -121,6 +121,9 @@ class LinuxBackend(DesktopBackend):
                 # All frames iconified → window is minimized; capture/click won't
                 # work until something is restored.
                 minimized = child_count > 0
+                # No frames means AT-SPI knows the app exists but exposes no
+                # tree to walk; same UX gap as the X11-fallback case.
+                accessible = child_count > 0
                 bounds: tuple[int, int, int, int] | None = None
                 for j in range(child_count):
                     frame = app.get_child_at_index(j)
@@ -144,6 +147,7 @@ class LinuxBackend(DesktopBackend):
                         focused=focused,
                         minimized=minimized,
                         bounds=bounds,
+                        accessible=accessible,
                     )
                 )
             except Exception:
@@ -223,6 +227,7 @@ class LinuxBackend(DesktopBackend):
                         pid=pid,
                         focused=False,
                         bounds=(px, py, w, h),
+                        accessible=False,
                     )
                 )
             except Exception:

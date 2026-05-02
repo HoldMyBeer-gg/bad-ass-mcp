@@ -37,10 +37,16 @@ def _backend():
 def list_windows() -> list[dict]:
     """List all visible application windows on the desktop.
 
-    Each entry includes id, name, pid, focused, minimized, and bounds —
-    bounds is [x, y, width, height] in global screen coords (top-left
-    origin) when available, or null when the platform can't report it.
-    Use bounds to translate screenshot pixels to click_at coordinates."""
+    Fields per entry:
+      id, name, pid, focused, minimized
+      bounds: [x, y, width, height] in global screen coords (top-left
+        origin), or null when the platform can't report it. Use this to
+        translate screenshot pixels to click_at coordinates.
+      accessible: false signals the platform a11y tree has nothing for
+        this window — find_elements / get_tree will return empty. Skip
+        those tools and use screenshot + click_at directly. Common causes:
+        immediate-mode UI toolkits (egui, Dear ImGui), Tauri/Electron
+        before their AX handshake, custom OpenGL/Vulkan canvases."""
     return [w.__dict__ for w in _backend().list_windows()]
 
 
