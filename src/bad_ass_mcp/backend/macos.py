@@ -247,12 +247,29 @@ class MacOSBackend(DesktopBackend):
     ) -> ElementHandle:
         handle = self._to_handle(element, pid)
         if depth < max_depth:
-            for child in _ax_get(element, "AXChildren") or []:
+            for child in self._ax_descendants(element, depth):
                 try:
                     handle.children.append(self._walk(child, depth + 1, max_depth, pid))
                 except Exception:
                     pass
         return handle
+
+    def _ax_descendants(self, element: Any, depth: int) -> list[Any]:
+        """Children to recurse into, with the AXApplication-root quirk handled.
+
+        On an AXApplication element, AXChildren and AXWindows are parallel
+        attributes. Some toolkits (accesskit-macos as embedded by eframe,
+        custom NSApplication subclasses) populate AXWindows but leave
+        AXChildren empty on the app root, which would otherwise dead-end
+        the walk at depth 0 even though System Events / VoiceOver see the
+        full tree via 'windows of process X'. Prefer AXWindows there;
+        fall back to AXChildren so menu-bar-only apps still work.
+        """
+        if depth == 0:
+            wins = _ax_get(element, "AXWindows") or []
+            if wins:
+                return list(wins)
+        return list(_ax_get(element, "AXChildren") or [])
 
     def _find_app_element(self, window_id: str) -> Any | None:
         for app in NSWorkspace.sharedWorkspace().runningApplications():
@@ -284,15 +301,17 @@ class MacOSBackend(DesktopBackend):
                 continue
         return None
 
-    def _search(self, element: Any, role: str | None, name: str | None) -> list[Any]:
+    def _search(
+        self, element: Any, role: str | None, name: str | None, depth: int = 0
+    ) -> list[Any]:
         results: list[Any] = []
         try:
             node_role = _role_name(element)
             node_name = _ax_get(element, "AXTitle") or _ax_get(element, "AXDescription") or ""
             if (role is None or node_role == role) and (name is None or node_name == name):
                 results.append(element)
-            for child in _ax_get(element, "AXChildren") or []:
-                results.extend(self._search(child, role, name))
+            for child in self._ax_descendants(element, depth):
+                results.extend(self._search(child, role, name, depth + 1))
         except Exception:
             pass
         return results
