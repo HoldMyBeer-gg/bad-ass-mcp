@@ -10,6 +10,11 @@ class WindowInfo:
     pid: int
     focused: bool
     minimized: bool = False
+    # (x, y, width, height) in global screen coords, top-left origin.
+    # None when the platform can't cheaply report it (e.g. Linux without
+    # wmctrl). Callers compositing screenshot-relative click_at coords
+    # need this to translate image pixels to screen pixels.
+    bounds: tuple[int, int, int, int] | None = None
 
 
 @dataclass

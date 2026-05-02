@@ -32,6 +32,11 @@ def test_list_windows_has_required_fields(backend):
     assert isinstance(w.name, str)
     assert isinstance(w.pid, int)
     assert isinstance(w.focused, bool)
+    assert w.bounds is None or (
+        isinstance(w.bounds, tuple)
+        and len(w.bounds) == 4
+        and all(isinstance(v, int) for v in w.bounds)
+    )
 
 
 # ── get_tree ─────────────────────────────────────────────────────────

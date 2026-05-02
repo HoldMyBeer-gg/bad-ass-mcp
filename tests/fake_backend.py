@@ -68,7 +68,15 @@ class FakeBackend(DesktopBackend):
     # ── DesktopBackend impl ──────────────────────────────────────────
 
     def list_windows(self) -> list[WindowInfo]:
-        return [WindowInfo(id=FAKE_WINDOW_ID, name="Fake App", pid=9999, focused=True)]
+        return [
+            WindowInfo(
+                id=FAKE_WINDOW_ID,
+                name="Fake App",
+                pid=9999,
+                focused=True,
+                bounds=(100, 200, 800, 600),
+            )
+        ]
 
     def get_tree(self, window_id: str) -> ElementHandle:
         return _TREE

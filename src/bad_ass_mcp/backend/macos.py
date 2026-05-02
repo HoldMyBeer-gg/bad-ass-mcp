@@ -340,6 +340,7 @@ class MacOSBackend(DesktopBackend):
                     pid=pid,
                     focused=(pid == active_pid),
                     minimized=minimized,
+                    bounds=self._cg_primary_bounds_for_pid(pid),
                 )
             )
             seen_pids.add(pid)
@@ -357,6 +358,15 @@ class MacOSBackend(DesktopBackend):
             try:
                 pid = int(win.get("kCGWindowOwnerPID", 0))
                 layer = int(win.get("kCGWindowLayer", 0))
+                bounds = win.get("kCGWindowBounds") or {}
+                rect: tuple[int, int, int, int] | None = (
+                    int(bounds.get("X", 0)),
+                    int(bounds.get("Y", 0)),
+                    int(bounds.get("Width", 0)),
+                    int(bounds.get("Height", 0)),
+                )
+                if rect[2] * rect[3] <= 0:
+                    rect = None
             except (TypeError, ValueError):
                 continue
             if pid <= 0 or pid in seen_pids or layer != 0:
@@ -366,7 +376,13 @@ class MacOSBackend(DesktopBackend):
             if not owner:
                 continue
             windows.append(
-                WindowInfo(id=str(pid), name=owner, pid=pid, focused=(pid == active_pid))
+                WindowInfo(
+                    id=str(pid),
+                    name=owner,
+                    pid=pid,
+                    focused=(pid == active_pid),
+                    bounds=rect,
+                )
             )
             seen_pids.add(pid)
         return windows
@@ -474,6 +490,44 @@ class MacOSBackend(DesktopBackend):
                 return (w, h)
             except (TypeError, ValueError):
                 continue
+        return None
+
+    def _cg_primary_bounds_for_pid(self, pid: int) -> tuple[int, int, int, int] | None:
+        """Largest layer-0 window bounds (x, y, w, h) for a PID, in global coords.
+
+        Mirrors the selection logic in _cg_window_number_for_pid so the
+        bounds reported by list_windows correspond to the window screenshot
+        would capture. Falls back to other layers when there's no layer-0
+        match (Tauri/Electron settings panels show up that way).
+        """
+        primary: tuple[int, tuple[int, int, int, int]] | None = None
+        secondary: tuple[int, tuple[int, int, int, int]] | None = None
+        for win in _cg_onscreen_windows():
+            try:
+                if int(win.get("kCGWindowOwnerPID", 0)) != pid:
+                    continue
+                layer = int(win.get("kCGWindowLayer", 0))
+                bounds = win.get("kCGWindowBounds") or {}
+                x = int(bounds.get("X", 0))
+                y = int(bounds.get("Y", 0))
+                w = int(bounds.get("Width", 0))
+                h = int(bounds.get("Height", 0))
+            except (TypeError, ValueError):
+                continue
+            area = w * h
+            if area <= 0:
+                continue
+            rect = (x, y, w, h)
+            if layer == 0:
+                if primary is None or area > primary[0]:
+                    primary = (area, rect)
+            else:
+                if secondary is None or area > secondary[0]:
+                    secondary = (area, rect)
+        if primary is not None:
+            return primary[1]
+        if secondary is not None:
+            return secondary[1]
         return None
 
     def _cg_window_number_for_pid(self, pid: int) -> int | None:
