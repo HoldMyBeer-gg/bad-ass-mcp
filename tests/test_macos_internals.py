@@ -208,6 +208,68 @@ def test_window_geometry_returns_none_when_no_windows():
             assert backend._window_geometry("999") is None
 
 
+# ── _find_app_element CG-fallback for lagged NSWorkspace ──────────────
+
+
+@_darwin
+def test_find_app_element_falls_back_to_cg_when_nsworkspace_lags():
+    """NSWorkspace.runningApplications() can lag for several seconds after a
+    bundled .app launches. _find_app_element used to return None in that
+    window, which broke get_tree/find_elements with 'No window found' even
+    though AXUIElementCreateApplication(pid) would have worked. This test
+    pins the fallback so the regression doesn't return."""
+    from bad_ass_mcp.backend.macos import MacOSBackend
+
+    backend = MacOSBackend()
+    fresh_pid = 99999  # PID NSWorkspace doesn't yet know about
+    fake_ax_app = MagicMock(name="ax_app")
+
+    with (
+        patch("bad_ass_mcp.backend.macos.NSWorkspace") as ns,
+        patch(
+            "bad_ass_mcp.backend.macos._cg_onscreen_windows",
+            return_value=[{"kCGWindowOwnerPID": fresh_pid}],
+        ),
+        patch(
+            "bad_ass_mcp.backend.macos.AXUIElementCreateApplication",
+            return_value=fake_ax_app,
+        ),
+        patch(
+            "bad_ass_mcp.backend.macos._ax_get",
+            return_value=[MagicMock()],  # AXWindows non-empty → real AX
+        ),
+    ):
+        ns.sharedWorkspace.return_value.runningApplications.return_value = []
+        result = backend._find_app_element(str(fresh_pid))
+
+    assert result is fake_ax_app
+
+
+@_darwin
+def test_find_app_element_returns_none_when_pid_has_no_ax_windows():
+    """If AXUIElementCreateApplication(pid) succeeds but the app has no
+    AXWindows, the element is for a dead/AX-less PID — return None instead
+    of handing back a useless element."""
+    from bad_ass_mcp.backend.macos import MacOSBackend
+
+    backend = MacOSBackend()
+    fresh_pid = 88888
+
+    with (
+        patch("bad_ass_mcp.backend.macos.NSWorkspace") as ns,
+        patch(
+            "bad_ass_mcp.backend.macos._cg_onscreen_windows",
+            return_value=[{"kCGWindowOwnerPID": fresh_pid}],
+        ),
+        patch("bad_ass_mcp.backend.macos.AXUIElementCreateApplication", return_value=MagicMock()),
+        patch("bad_ass_mcp.backend.macos._ax_get", return_value=None),  # AXWindows empty
+    ):
+        ns.sharedWorkspace.return_value.runningApplications.return_value = []
+        result = backend._find_app_element(str(fresh_pid))
+
+    assert result is None
+
+
 # ── stop_recording path validation ────────────────────────────────────
 
 

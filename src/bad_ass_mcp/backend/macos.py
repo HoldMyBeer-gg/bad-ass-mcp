@@ -277,6 +277,24 @@ class MacOSBackend(DesktopBackend):
             name = app.localizedName() or ""
             if str(pid) == window_id or name == window_id:
                 return AXUIElementCreateApplication(pid)
+        # NSWorkspace.runningApplications() can lag in a long-running daemon —
+        # fall back to direct AX-by-PID. AXUIElementCreateApplication accepts
+        # any PID; we only return the element if it actually has AXWindows
+        # (otherwise we've created an element for a dead/AX-less PID and
+        # downstream queries would silently return nothing).
+        try:
+            pid_int = int(window_id)
+        except (TypeError, ValueError):
+            return None
+        for win in _cg_onscreen_windows():
+            try:
+                if int(win.get("kCGWindowOwnerPID", 0)) == pid_int:
+                    ax_app = AXUIElementCreateApplication(pid_int)
+                    if _ax_get(ax_app, "AXWindows"):
+                        return ax_app
+                    return None
+            except (TypeError, ValueError):
+                continue
         return None
 
     def _pid_for_window(self, window_id: str) -> int | None:
@@ -394,6 +412,16 @@ class MacOSBackend(DesktopBackend):
             owner = (app.localizedName() if app else None) or win.get("kCGWindowOwnerName") or ""
             if not owner:
                 continue
+            # NSWorkspace.runningApplications() lags in a long-running daemon,
+            # so apps that launched after server init can land here even when
+            # they DO have a working AX adapter (egui+accesskit, freshly
+            # bundled .apps, etc.). Probe AX directly via the PID rather than
+            # blindly stamping accessible=False — the marker is meant for
+            # genuinely-canvas-only apps (Tauri/Electron pre-handshake), not
+            # for any app NSWorkspace happened to miss this tick.
+            ax_app = AXUIElementCreateApplication(pid)
+            ax_wins = _ax_get(ax_app, "AXWindows") or []
+            ax_accessible = bool(ax_wins)
             windows.append(
                 WindowInfo(
                     id=str(pid),
@@ -401,7 +429,7 @@ class MacOSBackend(DesktopBackend):
                     pid=pid,
                     focused=(pid == active_pid),
                     bounds=rect,
-                    accessible=False,
+                    accessible=ax_accessible,
                 )
             )
             seen_pids.add(pid)
