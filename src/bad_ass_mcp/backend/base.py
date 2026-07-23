@@ -9,6 +9,72 @@ from ..types import ActionResult, ElementHandle, StaleHandleError, WindowInfo
 _MAX_SEQUENCE_STEPS = 500
 _MAX_SEQUENCE_RUNTIME = 300.0  # seconds
 
+# Roles that carry no semantic meaning of their own: pure layout/grouping
+# containers. Chromium buries real content under long chains of these, which
+# is why an unpruned get_tree on a busy page runs to ~1.9 MB — mostly empty
+# AXGroups. A wrapper is prunable only if it is one of these roles AND has no
+# name, no value, and no interactive/meaningful state; its children graft up
+# to its parent so nothing real is lost.
+_STRUCTURAL_ROLES = frozenset(
+    {
+        "group",
+        "genericcontainer",
+        "generic",
+        "pane",
+        "panel",
+        "section",
+        "filler",
+        "unknown",
+        "",
+    }
+)
+# States that make a node worth keeping even when it is otherwise an empty,
+# nameless structural wrapper (it is focusable/checkable/etc., so a caller
+# might target it).
+_MEANINGFUL_STATES = frozenset(
+    {"focused", "selected", "checked", "editable", "expanded", "collapsed"}
+)
+
+
+def _is_noise_wrapper(handle: "ElementHandle") -> bool:
+    """True when this node is a pure layout wrapper safe to collapse away.
+
+    Structural role, no name, no value, and no meaningful state. Such nodes
+    exist only to nest; dropping them and lifting their children preserves
+    every named or interactive descendant while cutting the empty-group
+    chains Chromium generates.
+    """
+    if (handle.role or "").lower() not in _STRUCTURAL_ROLES:
+        return False
+    if (handle.name or "").strip():
+        return False
+    if handle.value not in (None, ""):
+        return False
+    if handle.states & _MEANINGFUL_STATES:
+        return False
+    return True
+
+
+def prune_tree(root: "ElementHandle") -> "ElementHandle":
+    """Collapse noise wrappers in-place, grafting their children upward.
+
+    The root is never dropped (callers rely on it as the window anchor).
+    Applied bottom-up so a chain of empty groups collapses fully in one pass.
+    """
+
+    def prune_children(node: "ElementHandle") -> None:
+        kept: list[ElementHandle] = []
+        for child in node.children:
+            prune_children(child)
+            if _is_noise_wrapper(child):
+                kept.extend(child.children)  # graft grandchildren up
+            else:
+                kept.append(child)
+        node.children = kept
+
+    prune_children(root)
+    return root
+
 
 class DesktopBackend(ABC):
     @abstractmethod
@@ -16,8 +82,14 @@ class DesktopBackend(ABC):
         """Return all visible application windows."""
 
     @abstractmethod
-    def get_tree(self, window_id: str) -> ElementHandle:
-        """Return full accessibility tree rooted at the given window."""
+    def get_tree(self, window_id: str, *, max_depth: int | None = None) -> ElementHandle:
+        """Return the accessibility tree rooted at the given window.
+
+        Noise wrappers (empty, nameless layout groups) are pruned so the
+        result stays compact on content-heavy pages; every named or
+        interactive node is preserved. max_depth caps recursion depth
+        (None uses the backend default, which clears real Chromium nesting).
+        """
 
     @abstractmethod
     def find_elements(

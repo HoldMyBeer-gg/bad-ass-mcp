@@ -54,9 +54,15 @@ def list_windows() -> list[dict]:
 
 
 @mcp.tool()
-def get_tree(window_id: str) -> dict:
-    """Return the full accessibility tree for a window as nested JSON.
-    Use list_windows() first to get a window_id."""
+def get_tree(window_id: str, max_depth: int | None = None) -> dict:
+    """Return the accessibility tree for a window as nested JSON.
+    Use list_windows() first to get a window_id.
+
+    Empty, nameless layout wrappers are pruned automatically, so the tree
+    stays compact even on content-heavy pages while every named or
+    interactive node is preserved. On very large pages the tree can still be
+    big; pass max_depth (e.g. 8) to cap recursion depth and shrink the
+    result further, or use find_elements() to target specific controls."""
 
     def serialise(el):
         return {
@@ -68,7 +74,7 @@ def get_tree(window_id: str) -> dict:
             "children": [serialise(c) for c in el.children],
         }
 
-    return serialise(_backend().get_tree(window_id))
+    return serialise(_backend().get_tree(window_id, max_depth=max_depth))
 
 
 @mcp.tool()
