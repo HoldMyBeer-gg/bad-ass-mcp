@@ -7,7 +7,7 @@ import uuid
 from typing import Any
 
 from ..types import ActionResult, ElementHandle, StaleHandleError, WindowInfo
-from .base import DesktopBackend
+from .base import DesktopBackend, prune_tree
 
 try:
     from AppKit import NSWorkspace
@@ -502,11 +502,13 @@ class MacOSBackend(DesktopBackend):
             seen_pids.add(pid)
         return windows
 
-    def get_tree(self, window_id: str) -> ElementHandle:
+    def get_tree(self, window_id: str, *, max_depth: int | None = None) -> ElementHandle:
         app = self._find_app_element(window_id)
         if app is None:
             raise ValueError(f"No window found for id {window_id!r}")
-        return self._walk(app, pid=self._pid_for_window(window_id))
+        depth_cap = _WALK_MAX_DEPTH if max_depth is None else max_depth
+        tree = self._walk(app, max_depth=depth_cap, pid=self._pid_for_window(window_id))
+        return prune_tree(tree)
 
     def find_elements(
         self, window_id: str, *, role=None, name=None, index=0

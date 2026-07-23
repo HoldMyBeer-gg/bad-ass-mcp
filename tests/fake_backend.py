@@ -78,7 +78,7 @@ class FakeBackend(DesktopBackend):
             )
         ]
 
-    def get_tree(self, window_id: str) -> ElementHandle:
+    def get_tree(self, window_id: str, *, max_depth: int | None = None) -> ElementHandle:
         return _TREE
 
     def find_elements(self, window_id, *, role=None, name=None, index=0) -> list[ElementHandle]:

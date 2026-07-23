@@ -19,7 +19,7 @@ import zlib
 from typing import Any
 
 from ..types import ActionResult, ElementHandle, StaleHandleError, WindowInfo
-from .base import DesktopBackend
+from .base import DesktopBackend, prune_tree
 
 _HAS_UIA = False
 
@@ -612,7 +612,7 @@ class WindowsBackend(DesktopBackend):
 
         return windows
 
-    def get_tree(self, window_id: str) -> ElementHandle:
+    def get_tree(self, window_id: str, *, max_depth: int | None = None) -> ElementHandle:
         hwnd = int(window_id)
         if not _user32.IsWindow(hwnd):
             raise ValueError(f"No window found for id {window_id!r}")
@@ -620,7 +620,8 @@ class WindowsBackend(DesktopBackend):
         root = self._uia.ElementFromHandle(target)
         if root is None:
             raise ValueError(f"No window found for id {window_id!r}")
-        return self._walk(root, hwnd=hwnd)
+        depth_cap = self._WALK_MAX_DEPTH if max_depth is None else max_depth
+        return prune_tree(self._walk(root, max_depth=depth_cap, hwnd=hwnd))
 
     def find_elements(
         self, window_id: str, *, role=None, name=None, index=0

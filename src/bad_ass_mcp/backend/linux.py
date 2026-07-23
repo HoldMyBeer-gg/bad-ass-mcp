@@ -11,7 +11,7 @@ gi.require_version("Atspi", "2.0")
 from gi.repository import Atspi  # noqa: E402
 
 from ..types import ActionResult, ElementHandle, StaleHandleError, WindowInfo  # noqa: E402
-from .base import DesktopBackend  # noqa: E402
+from .base import DesktopBackend, prune_tree  # noqa: E402
 
 
 class LinuxBackend(DesktopBackend):
@@ -431,11 +431,12 @@ class LinuxBackend(DesktopBackend):
                 extra = [w for w in extra if w.pid not in atspi_pids]
         return atspi + extra
 
-    def get_tree(self, window_id: str) -> ElementHandle:
+    def get_tree(self, window_id: str, *, max_depth: int | None = None) -> ElementHandle:
         app = self._find_app_waking(window_id)
         if app is None:
             raise ValueError(f"No window found for id {window_id!r}")
-        return self._walk(app)
+        depth_cap = self._WALK_MAX_DEPTH if max_depth is None else max_depth
+        return prune_tree(self._walk(app, max_depth=depth_cap))
 
     def find_elements(
         self, window_id: str, *, role=None, name=None, index=0
