@@ -191,6 +191,15 @@ _KEY_CODES: dict[str, int] = {
 _AX_WAKE_ATTRS = ("AXManualAccessibility", "AXEnhancedUserInterface")
 # How long to wait for a freshly-woken webview to publish AXWindows.
 _AX_WAKE_TIMEOUT = 1.5
+# Chromium (Electron/CEF and every Chromium browser) nests the real content
+# deep: from the AXApplication root, Vivaldi's mail/web area doesn't begin
+# until depth ~13 and runs to ~22, and GPU-composited pages add still more
+# wrapper layers. A shallow cap returns a hollow husk of empty AXGroups —
+# get_tree looked broken while find_elements (uncapped) saw everything. 60
+# clears real trees with headroom; _WALK_MAX_NODES keeps the walk bounded
+# regardless of depth so a pathological/cyclic tree can't run away.
+_WALK_MAX_DEPTH = 60
+_WALK_MAX_NODES = 20000
 
 
 class MacOSBackend(DesktopBackend):
@@ -254,13 +263,28 @@ class MacOSBackend(DesktopBackend):
         return ElementHandle(id=handle_id, role=role, name=name, value=value, states=states)
 
     def _walk(
-        self, element: Any, depth: int = 0, max_depth: int = 12, pid: int | None = None
+        self,
+        element: Any,
+        depth: int = 0,
+        max_depth: int = _WALK_MAX_DEPTH,
+        pid: int | None = None,
+        budget: list[int] | None = None,
     ) -> ElementHandle:
+        # budget is a shared 1-element list so the node cap spans the whole
+        # recursion, not each branch. Chromium trees are deep (see
+        # _WALK_MAX_DEPTH); the cap keeps a runaway/cyclic tree bounded.
+        if budget is None:
+            budget = [_WALK_MAX_NODES]
         handle = self._to_handle(element, pid)
-        if depth < max_depth:
+        budget[0] -= 1
+        if depth < max_depth and budget[0] > 0:
             for child in self._ax_descendants(element, depth):
+                if budget[0] <= 0:
+                    break
                 try:
-                    handle.children.append(self._walk(child, depth + 1, max_depth, pid))
+                    handle.children.append(
+                        self._walk(child, depth + 1, max_depth, pid, budget)
+                    )
                 except Exception:
                     pass
         return handle

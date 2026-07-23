@@ -486,6 +486,82 @@ def test_wake_ax_windows_once_per_pid():
     ax_set.assert_called_once()
 
 
+# ── _walk depth: Chromium content lives deep ──────────────────────────
+
+
+@_darwin
+def test_walk_descends_past_chromium_group_nesting():
+    """Chromium (Vivaldi et al.) buries its web area ~13+ levels below the
+    app root, deeper with GPU-composited pages. A shallow max_depth returned
+    a hollow husk of empty AXGroups — get_tree looked broken while
+    find_elements (uncapped) saw everything. Pin that the walk reaches a
+    node deeper than the old 12-level cap so that regression can't return.
+    """
+    from bad_ass_mcp.backend.macos import _WALK_MAX_DEPTH, MacOSBackend
+
+    backend = MacOSBackend()
+
+    DEEP = 20  # within real Chromium range (Vivaldi content ran to depth ~22)
+    assert DEEP > 12, "test must probe past the old cap"
+    assert DEEP < _WALK_MAX_DEPTH, "cap must clear real Chromium nesting"
+
+    # Build a synthetic chain DEEP wrapper groups long with a named leaf at
+    # the bottom. Drive _walk via _ax_descendants (one child per level) and a
+    # _to_handle that stamps the node's level as its name.
+    from bad_ass_mcp.types import ElementHandle
+
+    def fake_descendants(element, depth):
+        return [depth + 1] if depth < DEEP else []
+
+    def fake_to_handle(element, pid=None):
+        level = 0 if not isinstance(element, int) else element
+        name = "LEAF" if level == DEEP else ""
+        return ElementHandle(id=str(level), role="group", name=name, value=None, states=[])
+
+    with (
+        patch.object(backend, "_ax_descendants", side_effect=fake_descendants),
+        patch.object(backend, "_to_handle", side_effect=fake_to_handle),
+    ):
+        tree = backend._walk("root")
+
+    # Descend the single chain to the bottom and confirm the deep leaf survived.
+    node, levels = tree, 0
+    while node.children:
+        node = node.children[0]
+        levels += 1
+    assert levels == DEEP
+    assert node.name == "LEAF"
+
+
+@_darwin
+def test_walk_respects_node_budget():
+    """The node budget must bound a wide/pathological tree regardless of
+    depth — a runaway or cyclic tree can't exhaust memory."""
+    from bad_ass_mcp.backend.macos import MacOSBackend
+    from bad_ass_mcp.types import ElementHandle
+
+    backend = MacOSBackend()
+
+    # Every node reports 10 children forever → unbounded without the budget.
+    def fake_descendants(element, depth):
+        return [object() for _ in range(10)]
+
+    def fake_to_handle(element, pid=None):
+        return ElementHandle(id="x", role="group", name="", value=None, states=[])
+
+    def count(h):
+        return 1 + sum(count(c) for c in h.children)
+
+    with (
+        patch("bad_ass_mcp.backend.macos._WALK_MAX_NODES", 500),
+        patch.object(backend, "_ax_descendants", side_effect=fake_descendants),
+        patch.object(backend, "_to_handle", side_effect=fake_to_handle),
+    ):
+        tree = backend._walk("root", budget=[500])
+
+    assert count(tree) <= 500
+
+
 @_darwin
 def test_find_app_element_wakes_lazy_webview():
     """PID fallback: AXWindows empty on first probe, but a successful wake
