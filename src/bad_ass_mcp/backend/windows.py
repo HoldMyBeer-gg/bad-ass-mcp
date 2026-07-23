@@ -266,7 +266,7 @@ class WindowsBackend(DesktopBackend):
             interface=IUIAutomation,
             clsctx=comtypes.CLSCTX_INPROC_SERVER,
         )
-        self._waked_pids: set[int] = set()
+        self._wake_results: dict[int, bool] = {}  # pid → did the wake produce a tree
         self._screen_reader_flag_set = False
 
     # ── Internal helpers ──────────────────────────────────────────────
@@ -311,11 +311,14 @@ class WindowsBackend(DesktopBackend):
         """Set the screen-reader-running flag so Chromium populates its UIA tree.
 
         Returns True if the tree has content after waiting, False otherwise.
-        Pokes once per PID per server lifetime to avoid spam.
+        Pokes once per PID per server lifetime to avoid spam; the outcome is
+        cached so a failed wake keeps reporting accessible=False instead of
+        silently flipping to True on the next list_windows call.
         """
-        if pid in self._waked_pids:
-            return True
-        self._waked_pids.add(pid)
+        cached = self._wake_results.get(pid)
+        if cached is not None:
+            return cached
+        self._wake_results[pid] = False
 
         # Set the system-wide screen reader flag (idempotent — only done once)
         if not self._screen_reader_flag_set:
@@ -344,6 +347,7 @@ class WindowsBackend(DesktopBackend):
                 cond = self._uia.CreateTrueCondition()
                 children = root.FindAll(_TreeScope_Children, cond)
                 if children and children.Length > 3:
+                    self._wake_results[pid] = True
                     return True
             except Exception:
                 pass
