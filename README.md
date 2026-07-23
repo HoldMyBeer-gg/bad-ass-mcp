@@ -61,8 +61,11 @@ re-probes before giving up:
   documented switch), falling back to `AXEnhancedUserInterface` (what
   VoiceOver sets, watched by plain Chrome/CEF). The attribute set only
   succeeds on apps that support it, so it's a free no-op elsewhere.
-- **Windows**: nothing needed — connecting a UIA client *is* the
-  announcement; Chromium wakes on contact.
+- **Windows**: sets the system `SPI_SETSCREENREADERRUNNING` flag, then
+  queries the `Chrome_RenderWidgetHostHWND` child window — Chromium
+  hangs its DOM tree off that renderer child, not the top-level HWND
+  (which only shows empty panes). `get_tree` / `find_elements` are
+  routed through the renderer child automatically.
 
 One wake attempt per process per server run. If `list_windows` still
 reports `accessible: false` after this, the window is genuinely
