@@ -324,9 +324,7 @@ class MacOSBackend(DesktopBackend):
                 if budget[0] <= 0:
                     break
                 try:
-                    handle.children.append(
-                        self._walk(child, depth + 1, max_depth, pid, budget)
-                    )
+                    handle.children.append(self._walk(child, depth + 1, max_depth, pid, budget))
                 except Exception:
                     pass
         return handle
