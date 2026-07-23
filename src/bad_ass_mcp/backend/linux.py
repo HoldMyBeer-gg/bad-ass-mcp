@@ -17,6 +17,14 @@ from .base import DesktopBackend  # noqa: E402
 class LinuxBackend(DesktopBackend):
     # How long to wait for a freshly-woken webview to register with AT-SPI.
     _WAKE_TIMEOUT = 2.0
+    # Chromium nests real content deep (its web area can sit 13+ levels down
+    # from the app root, deeper still with GPU-composited pages). A shallow
+    # cap returns a hollow husk of empty groups; here it's usually reached via
+    # the app frame so it bit less than on macOS, but the cap was still
+    # fragile. 60 clears real trees; _WALK_MAX_NODES bounds a runaway/cyclic
+    # walk regardless of depth.
+    _WALK_MAX_DEPTH = 60
+    _WALK_MAX_NODES = 20000
     # Process-name/cmdline markers for toolkits that build their a11y tree
     # lazily and watch the screen-reader flag: Chromium family (Electron,
     # CEF, browsers) and WebKitGTK (Tauri on Linux).
@@ -99,13 +107,26 @@ class LinuxBackend(DesktopBackend):
             pass
         return ElementHandle(id=handle_id, role=role, name=name, value=value, states=states)
 
-    def _walk(self, node: Any, depth: int = 0, max_depth: int = 12) -> ElementHandle:
+    def _walk(
+        self,
+        node: Any,
+        depth: int = 0,
+        max_depth: int = _WALK_MAX_DEPTH,
+        budget: list[int] | None = None,
+    ) -> ElementHandle:
+        # budget is a shared 1-element list so the node cap spans the whole
+        # recursion, not each branch.
+        if budget is None:
+            budget = [self._WALK_MAX_NODES]
         handle = self._to_handle(node)
-        if depth < max_depth:
+        budget[0] -= 1
+        if depth < max_depth and budget[0] > 0:
             try:
                 for i in range(node.get_child_count()):
+                    if budget[0] <= 0:
+                        break
                     child = node.get_child_at_index(i)
-                    handle.children.append(self._walk(child, depth + 1, max_depth))
+                    handle.children.append(self._walk(child, depth + 1, max_depth, budget))
             except Exception:
                 pass
         return handle
