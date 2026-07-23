@@ -75,6 +75,77 @@ def test_ax_value_to_rect_returns_none_for_cgpoint_only():
     assert _ax_value_to_rect(_Point()) is None
 
 
+# ── _ax_name label fallback ───────────────────────────────────────────
+
+
+def _fake_ax_get(attrs: dict):
+    """Return an _ax_get stand-in backed by a dict of attr -> value.
+
+    Elements are represented as dicts; a linked AXTitleUIElement is itself
+    such a dict. Missing attrs return None, matching real _ax_get.
+    """
+
+    def getter(element, attr):
+        if not isinstance(element, dict):
+            return None
+        return element.get(attr)
+
+    return getter
+
+
+def _name_of(attrs: dict) -> str:
+    from unittest.mock import patch
+
+    from bad_ass_mcp.backend.macos import _ax_name
+
+    with patch("bad_ass_mcp.backend.macos._ax_get", side_effect=_fake_ax_get(attrs)):
+        return _ax_name(attrs)
+
+
+def test_ax_name_prefers_title():
+    assert _name_of({"AXTitle": "Save", "AXDescription": "d", "AXHelp": "h"}) == "Save"
+
+
+def test_ax_name_falls_back_to_description():
+    assert _name_of({"AXRole": "AXButton", "AXDescription": "Close window"}) == "Close window"
+
+
+def test_ax_name_uses_linked_title_element():
+    # A field labelled by a separate static-text element beside it.
+    label = {"AXTitle": "Email address"}
+    field = {"AXRole": "AXTextField", "AXTitleUIElement": label}
+    assert _name_of(field) == "Email address"
+
+
+def test_ax_name_linked_title_element_value_fallback():
+    label = {"AXValue": "Password"}  # label carries its text in AXValue
+    field = {"AXRole": "AXTextField", "AXTitleUIElement": label}
+    assert _name_of(field) == "Password"
+
+
+def test_ax_name_falls_back_to_help():
+    # Icon button with only a tooltip.
+    el = {"AXRole": "AXButton", "AXHelp": "Zoom the window"}
+    assert _name_of(el) == "Zoom the window"
+
+
+def test_ax_name_uses_specific_role_description():
+    # AXRoleDescription that adds information beyond the bare role.
+    el = {"AXRole": "AXButton", "AXRoleDescription": "close button"}
+    assert _name_of(el) == "close button"
+
+
+def test_ax_name_skips_role_description_that_echoes_role():
+    # "button" for a button adds nothing over the role field — drop it.
+    el = {"AXRole": "AXButton", "AXRoleDescription": "button"}
+    assert _name_of(el) == ""
+
+
+def test_ax_name_empty_when_unlabelled_everywhere():
+    el = {"AXRole": "AXButton"}
+    assert _name_of(el) == ""
+
+
 # ── error constant values ─────────────────────────────────────────────
 
 
