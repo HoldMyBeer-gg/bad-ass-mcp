@@ -326,8 +326,11 @@ def test_run_sequence_aborts_at_runtime_limit(backend, capsys):
 
     from bad_ass_mcp.backend.base import _MAX_SEQUENCE_RUNTIME
 
-    # Force the deadline to expire before the first step
-    with patch("bad_ass_mcp.backend.base._MAX_SEQUENCE_RUNTIME", 0.0):
+    # Force the deadline strictly into the past. 0.0 is not enough: on
+    # Windows Python <3.13 time.monotonic() is GetTickCount64() with 15.6ms
+    # resolution, so back-to-back calls return the same tick and
+    # `monotonic() > deadline` never fires for a whole batch of fast steps.
+    with patch("bad_ass_mcp.backend.base._MAX_SEQUENCE_RUNTIME", -1.0):
         results = backend.run_sequence([{"action": "click", "handle": "btn-ok"}] * 5)
 
     assert any(r.get("error") == "sequence runtime limit exceeded" for r in results)
