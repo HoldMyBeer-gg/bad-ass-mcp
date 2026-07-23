@@ -150,6 +150,48 @@ def _role_name(element: Any) -> str:
     return role[2:].lower() if role.startswith("AX") else role.lower()
 
 
+def _ax_name(element: Any) -> str:
+    """Best available human-readable label for an element.
+
+    AXTitle/AXDescription cover most controls, but icon buttons and other
+    graphical controls often carry neither — they surface as name="" and a
+    caller can't tell what they do. Fall back through the attributes screen
+    readers use to voice such controls, most specific first:
+
+      AXTitle           the visible label
+      AXDescription     the accessibility description
+      AXTitleUIElement  a separate element that labels this one (e.g. the
+                        text beside a field); use its own title/value
+      AXHelp            tooltip text
+      AXRoleDescription a human phrase for the role ("close button") — the
+                        weakest, only when nothing more specific labels it
+
+    Returns "" when the element is genuinely unlabelled everywhere.
+    """
+    name = _ax_get(element, "AXTitle") or _ax_get(element, "AXDescription")
+    if name:
+        return name
+
+    title_el = _ax_get(element, "AXTitleUIElement")
+    if title_el is not None:
+        linked = _ax_get(title_el, "AXTitle") or _ax_get(title_el, "AXValue")
+        if linked:
+            return str(linked)
+
+    help_text = _ax_get(element, "AXHelp")
+    if help_text:
+        return str(help_text)
+
+    # AXRoleDescription is the last resort. Skip it when it just echoes the
+    # role ("button" for a button) — that adds nothing over the role field.
+    # Keep it when it's more specific ("close button", "minimize button").
+    role_desc = _ax_get(element, "AXRoleDescription")
+    if role_desc and role_desc.lower() != _role_name(element):
+        return str(role_desc)
+
+    return ""
+
+
 # macOS virtual key codes for named keys
 _KEY_CODES: dict[str, int] = {
     "Return": 0x24,
@@ -237,7 +279,7 @@ class MacOSBackend(DesktopBackend):
         handle_id = self._register(element, pid)
         role = _role_name(element)
 
-        name = _ax_get(element, "AXTitle") or _ax_get(element, "AXDescription") or ""
+        name = _ax_name(element)
 
         value = None
         raw = _ax_get(element, "AXValue")
@@ -387,7 +429,7 @@ class MacOSBackend(DesktopBackend):
         results: list[Any] = []
         try:
             node_role = _role_name(element)
-            node_name = _ax_get(element, "AXTitle") or _ax_get(element, "AXDescription") or ""
+            node_name = _ax_name(element)
             if (role is None or node_role == role) and (name is None or node_name == name):
                 results.append(element)
             for child in self._ax_descendants(element, depth):
