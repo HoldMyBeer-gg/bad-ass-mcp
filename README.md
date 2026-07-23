@@ -176,7 +176,7 @@ bad_ass_mcp/
     └── windows.py     # UI Automation + ctypes Win32
 ```
 
-The abstract backend interface means adding a new platform is just implementing one class. The same 24 contract tests run against every backend via `FakeBackend`.
+The abstract backend interface means adding a new platform is just implementing one class. The full contract-test suite runs against every backend via `FakeBackend`.
 
 ## Releasing
 
