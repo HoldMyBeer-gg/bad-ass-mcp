@@ -7,7 +7,7 @@ import uuid
 from typing import Any
 
 from ..types import ActionResult, ElementHandle, StaleHandleError, WindowInfo
-from .base import DesktopBackend
+from .base import DesktopBackend, prune_tree
 
 try:
     from AppKit import NSWorkspace
@@ -150,6 +150,48 @@ def _role_name(element: Any) -> str:
     return role[2:].lower() if role.startswith("AX") else role.lower()
 
 
+def _ax_name(element: Any) -> str:
+    """Best available human-readable label for an element.
+
+    AXTitle/AXDescription cover most controls, but icon buttons and other
+    graphical controls often carry neither — they surface as name="" and a
+    caller can't tell what they do. Fall back through the attributes screen
+    readers use to voice such controls, most specific first:
+
+      AXTitle           the visible label
+      AXDescription     the accessibility description
+      AXTitleUIElement  a separate element that labels this one (e.g. the
+                        text beside a field); use its own title/value
+      AXHelp            tooltip text
+      AXRoleDescription a human phrase for the role ("close button") — the
+                        weakest, only when nothing more specific labels it
+
+    Returns "" when the element is genuinely unlabelled everywhere.
+    """
+    name = _ax_get(element, "AXTitle") or _ax_get(element, "AXDescription")
+    if name:
+        return name
+
+    title_el = _ax_get(element, "AXTitleUIElement")
+    if title_el is not None:
+        linked = _ax_get(title_el, "AXTitle") or _ax_get(title_el, "AXValue")
+        if linked:
+            return str(linked)
+
+    help_text = _ax_get(element, "AXHelp")
+    if help_text:
+        return str(help_text)
+
+    # AXRoleDescription is the last resort. Skip it when it just echoes the
+    # role ("button" for a button) — that adds nothing over the role field.
+    # Keep it when it's more specific ("close button", "minimize button").
+    role_desc = _ax_get(element, "AXRoleDescription")
+    if role_desc and role_desc.lower() != _role_name(element):
+        return str(role_desc)
+
+    return ""
+
+
 # macOS virtual key codes for named keys
 _KEY_CODES: dict[str, int] = {
     "Return": 0x24,
@@ -191,6 +233,15 @@ _KEY_CODES: dict[str, int] = {
 _AX_WAKE_ATTRS = ("AXManualAccessibility", "AXEnhancedUserInterface")
 # How long to wait for a freshly-woken webview to publish AXWindows.
 _AX_WAKE_TIMEOUT = 1.5
+# Chromium (Electron/CEF and every Chromium browser) nests the real content
+# deep: from the AXApplication root, Vivaldi's mail/web area doesn't begin
+# until depth ~13 and runs to ~22, and GPU-composited pages add still more
+# wrapper layers. A shallow cap returns a hollow husk of empty AXGroups —
+# get_tree looked broken while find_elements (uncapped) saw everything. 60
+# clears real trees with headroom; _WALK_MAX_NODES keeps the walk bounded
+# regardless of depth so a pathological/cyclic tree can't run away.
+_WALK_MAX_DEPTH = 60
+_WALK_MAX_NODES = 20000
 
 
 class MacOSBackend(DesktopBackend):
@@ -228,7 +279,7 @@ class MacOSBackend(DesktopBackend):
         handle_id = self._register(element, pid)
         role = _role_name(element)
 
-        name = _ax_get(element, "AXTitle") or _ax_get(element, "AXDescription") or ""
+        name = _ax_name(element)
 
         value = None
         raw = _ax_get(element, "AXValue")
@@ -254,13 +305,28 @@ class MacOSBackend(DesktopBackend):
         return ElementHandle(id=handle_id, role=role, name=name, value=value, states=states)
 
     def _walk(
-        self, element: Any, depth: int = 0, max_depth: int = 12, pid: int | None = None
+        self,
+        element: Any,
+        depth: int = 0,
+        max_depth: int = _WALK_MAX_DEPTH,
+        pid: int | None = None,
+        budget: list[int] | None = None,
     ) -> ElementHandle:
+        # budget is a shared 1-element list so the node cap spans the whole
+        # recursion, not each branch. Chromium trees are deep (see
+        # _WALK_MAX_DEPTH); the cap keeps a runaway/cyclic tree bounded.
+        if budget is None:
+            budget = [_WALK_MAX_NODES]
         handle = self._to_handle(element, pid)
-        if depth < max_depth:
+        budget[0] -= 1
+        if depth < max_depth and budget[0] > 0:
             for child in self._ax_descendants(element, depth):
+                if budget[0] <= 0:
+                    break
                 try:
-                    handle.children.append(self._walk(child, depth + 1, max_depth, pid))
+                    handle.children.append(
+                        self._walk(child, depth + 1, max_depth, pid, budget)
+                    )
                 except Exception:
                     pass
         return handle
@@ -363,7 +429,7 @@ class MacOSBackend(DesktopBackend):
         results: list[Any] = []
         try:
             node_role = _role_name(element)
-            node_name = _ax_get(element, "AXTitle") or _ax_get(element, "AXDescription") or ""
+            node_name = _ax_name(element)
             if (role is None or node_role == role) and (name is None or node_name == name):
                 results.append(element)
             for child in self._ax_descendants(element, depth):
@@ -478,11 +544,13 @@ class MacOSBackend(DesktopBackend):
             seen_pids.add(pid)
         return windows
 
-    def get_tree(self, window_id: str) -> ElementHandle:
+    def get_tree(self, window_id: str, *, max_depth: int | None = None) -> ElementHandle:
         app = self._find_app_element(window_id)
         if app is None:
             raise ValueError(f"No window found for id {window_id!r}")
-        return self._walk(app, pid=self._pid_for_window(window_id))
+        depth_cap = _WALK_MAX_DEPTH if max_depth is None else max_depth
+        tree = self._walk(app, max_depth=depth_cap, pid=self._pid_for_window(window_id))
+        return prune_tree(tree)
 
     def find_elements(
         self, window_id: str, *, role=None, name=None, index=0
