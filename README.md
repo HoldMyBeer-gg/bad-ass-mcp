@@ -41,6 +41,39 @@ Actions fire on control objects directly, so the target window doesn't need focu
 | `learn_layout` | Resolve semantic names → live handle IDs (one call per session) |
 | `run_sequence` | Execute a list of actions server-side — no per-action round-trips |
 
+## Webviews: waking lazy accessibility trees
+
+Chromium-based apps (Electron, CEF, and every Chromium browser) have a
+full accessibility tree — they just don't *build* it until an assistive
+technology announces itself. Until then the window looks canvas-only:
+`get_tree` returns nothing and screenshot-clicking is the only option.
+
+**bad-ass-mcp announces itself.** When a window's a11y tree comes back
+empty and the process looks like a webview, the backend performs the
+platform's "a screen reader is here" handshake, waits a beat, and
+re-probes before giving up:
+
+- **Linux**: flips `org.a11y.Status.ScreenReaderEnabled` on the session
+  D-Bus — the flag Chromium and WebKitGTK (Tauri) watch. Only fires for
+  processes whose cmdline/exe smells like a webview, so games and GL
+  canvases never trigger it.
+- **macOS**: sets `AXManualAccessibility` on the app (Electron's
+  documented switch), falling back to `AXEnhancedUserInterface` (what
+  VoiceOver sets, watched by plain Chrome/CEF). The attribute set only
+  succeeds on apps that support it, so it's a free no-op elsewhere.
+- **Windows**: nothing needed — connecting a UIA client *is* the
+  announcement; Chromium wakes on contact.
+
+One wake attempt per process per server run. If `list_windows` still
+reports `accessible: false` after this, the window is genuinely
+canvas-only (custom OpenGL/Vulkan surface, immediate-mode toolkit
+without AccessKit) — fall back to `screenshot` + `click_at`.
+
+The tradeoff: a woken app spends some memory/CPU maintaining its tree,
+which is exactly why Chromium lazy-loads it. The wake targets the app
+you're automating, not the whole desktop (the Linux flag is technically
+session-global, but only a11y-aware apps respond, and only on demand).
+
 ## Installation
 
 **Requirements**: Python 3.11+, `ffmpeg` + `gifsicle` for recording (optional)
@@ -117,7 +150,7 @@ find the search box in window 12345 and type "hello"
 → type_text(handle_id="...", text="hello")
 ```
 
-For apps that don't expose a clean accessibility tree (WebKit-based editors, Electron apps), `type_text` falls back to platform-native key injection automatically (AT-SPI on Linux, Quartz events on macOS, `PostMessage` on Windows).
+Electron/CEF apps get their lazy accessibility tree woken automatically (see [Webviews](#webviews-waking-lazy-accessibility-trees) above). For apps that still don't expose a clean tree, `type_text` falls back to platform-native key injection automatically (AT-SPI on Linux, Quartz events on macOS, `PostMessage` on Windows).
 
 ## Architecture
 
