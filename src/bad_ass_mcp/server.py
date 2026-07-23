@@ -19,8 +19,15 @@ mcp = FastMCP("bad-ass-mcp")
 # blow past that. Cap the *serialised* size and stop breadth-first, so the
 # shallow/structural nodes (the useful ones) survive and deep leaves are cut
 # first. The result then carries truncated=true and the dropped-node count so
-# the caller knows to narrow with max_depth or find_elements. ~40 KB of JSON
-# is roughly 10K tokens: comfortably under the cap with headroom for framing.
+# the caller knows to narrow with max_depth or find_elements.
+#
+# get_tree returns a COMPACT JSON string, not a dict. FastMCP serialises a
+# returned dict with pydantic_core.to_json(..., indent=2) — that hardcoded
+# indent inflates a compact tree ~2.4x, so a dict measured at 40 KB landed at
+# 96 KB on the wire and overflowed anyway. Returning a pre-serialised compact
+# string sidesteps the framework's indenting entirely, so the byte budget
+# below is the size the client actually receives. ~40 KB is roughly 11K
+# tokens: under the ~25K cap with headroom.
 _TREE_BYTE_BUDGET = 40_000
 
 
@@ -87,10 +94,12 @@ def _serialise_tree(root, byte_budget: int = _TREE_BYTE_BUDGET) -> dict:
             "children": [],
         }
 
-    # Per-node byte cost: the node's own JSON with no children. Cheap upper
-    # bound on what attaching it adds, so we never overshoot the real size.
+    # Per-node byte cost: the node's own JSON with no children, serialised the
+    # SAME way get_tree emits the finished tree (compact, no spaces), so the
+    # budget reflects the exact size the client receives. Cheap upper bound on
+    # what attaching the node adds, so we never overshoot.
     def node_cost(d: dict) -> int:
-        return len(json.dumps({**d, "children": []}))
+        return len(json.dumps({**d, "children": []}, separators=(",", ":")))
 
     root_dict = node_dict(root)
     used = node_cost(root_dict)
@@ -122,19 +131,24 @@ def _count_descendants(el) -> int:
 
 
 @mcp.tool()
-def get_tree(window_id: str, max_depth: int | None = None) -> dict:
-    """Return the accessibility tree for a window as nested JSON.
+def get_tree(window_id: str, max_depth: int | None = None) -> str:
+    """Return the accessibility tree for a window as a compact JSON string.
     Use list_windows() first to get a window_id.
 
     Empty, nameless layout wrappers are pruned automatically, so the tree
     stays compact even on content-heavy pages while every named or
     interactive node is preserved. Very large pages are additionally capped
     to a byte budget so the result always fits the client: when that happens
-    the root carries "truncated": true and "dropped_nodes" (a count). To see
-    the cut content, pass max_depth (e.g. 8) to cap recursion depth, or use
-    find_elements() to target specific controls."""
+    the root object carries "truncated": true and "dropped_nodes" (a count).
+    To see the cut content, pass max_depth (e.g. 8) to cap recursion depth, or
+    use find_elements() to target specific controls.
 
-    return _serialise_tree(_backend().get_tree(window_id, max_depth=max_depth))
+    Returned as a compact JSON string (not a nested object) so the client's
+    result-size cap counts real content, not indentation whitespace; parse it
+    with a JSON loader."""
+
+    tree = _serialise_tree(_backend().get_tree(window_id, max_depth=max_depth))
+    return json.dumps(tree, separators=(",", ":"))
 
 
 @mcp.tool()
