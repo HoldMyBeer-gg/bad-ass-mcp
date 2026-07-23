@@ -340,13 +340,15 @@ class WindowsBackend(DesktopBackend):
         except Exception:
             return False
 
-        # Wait up to 2s for Chromium to build the a11y tree
+        # Wait up to 2s for Chromium to build the a11y tree.
+        # Check subtree, not just direct children — some browsers (Vivaldi)
+        # wrap the entire DOM under a single unnamed group element.
         deadline = time.monotonic() + 2.0
         while time.monotonic() < deadline:
             try:
                 cond = self._uia.CreateTrueCondition()
-                children = root.FindAll(_TreeScope_Children, cond)
-                if children and children.Length > 3:
+                subtree = root.FindAll(_TreeScope_Subtree, cond)
+                if subtree and subtree.Length > 5:
                     self._wake_results[pid] = True
                     return True
             except Exception:
