@@ -317,3 +317,86 @@ def test_pid_smells_webview_matches_electron_cmdline(tmp_path):
     with patch("builtins.open", side_effect=FileNotFoundError):
         with patch("os.path.realpath", return_value="/usr/bin/supertuxkart"):
             assert backend._pid_smells_webview(42) is False
+
+
+# ── asleep-Chromium detection (launched before the flag was on) ──────
+
+
+def _fake_atspi_app(name, pid, toolkit, frame_children):
+    frame = MagicMock()
+    frame.get_child_count.return_value = frame_children
+    ss = MagicMock()
+    ss.contains.return_value = False
+    frame.get_state_set.return_value = ss
+    frame.get_extents.side_effect = Exception("no extents in stub")
+    app = MagicMock()
+    app.get_name.return_value = name
+    app.get_process_id.return_value = pid
+    app.get_child_count.return_value = 1
+    app.get_child_at_index.return_value = frame
+    app.get_toolkit_name.return_value = toolkit
+    return app
+
+
+def _list_with_fake_desktop(backend, mod, app):
+    desktop = MagicMock()
+    desktop.get_child_count.return_value = 1
+    desktop.get_child_at_index.return_value = app
+    with (
+        patch.object(mod.Atspi, "get_desktop", return_value=desktop),
+        patch.object(backend, "_x11_list_windows", return_value=[]),
+    ):
+        return backend.list_windows()
+
+
+def test_asleep_chromium_frame_stamped_inaccessible():
+    """Chromium registered with AT-SPI but with an empty frame launched
+    before the screen-reader flag. It must report accessible=False, not a hollow True."""
+    backend, mod = _make_backend()
+    app = _fake_atspi_app("Vivaldi", 42, "Chromium", frame_children=0)
+
+    wins = _list_with_fake_desktop(backend, mod, app)
+
+    assert len(wins) == 1
+    assert wins[0].accessible is False
+
+
+def test_awake_chromium_frame_stays_accessible():
+    backend, mod = _make_backend()
+    app = _fake_atspi_app("Vivaldi", 42, "Chromium", frame_children=12)
+
+    wins = _list_with_fake_desktop(backend, mod, app)
+
+    assert wins[0].accessible is True
+
+
+def test_empty_non_chromium_frame_stays_accessible():
+    """A GTK app with an empty frame is genuinely empty, not asleep.
+    Don't reclassify it."""
+    backend, mod = _make_backend()
+    app = _fake_atspi_app("gedit", 43, "GTK", frame_children=0)
+
+    wins = _list_with_fake_desktop(backend, mod, app)
+
+    assert wins[0].accessible is True
+
+
+def test_init_attempts_screen_reader_flag():
+    """The flag must be set proactively at server start; Linux Chromium
+    samples it at launch."""
+    backend, _mod = _make_backend()
+    assert backend._sr_flag_done is True
+
+
+def test_phantom_child_chromium_stamped_inaccessible():
+    """Asleep Chromium advertises child_count=1 on the frame but returns
+    None when the child is fetched. That must count as asleep, not
+    content (live-observed on flatpak Vivaldi)."""
+    backend, mod = _make_backend()
+    app = _fake_atspi_app("Vivaldi", 42, "Chromium", frame_children=1)
+    frame = app.get_child_at_index.return_value
+    frame.get_child_at_index.return_value = None  # phantom child
+
+    wins = _list_with_fake_desktop(backend, mod, app)
+
+    assert wins[0].accessible is False

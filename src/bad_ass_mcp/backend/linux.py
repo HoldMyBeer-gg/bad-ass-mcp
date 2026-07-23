@@ -39,6 +39,15 @@ class LinuxBackend(DesktopBackend):
         self._woken_pids: set[int] = set()  # PIDs we've already tried to wake
         self._sr_flag_done = False  # screen-reader flag poke attempted
         self._recordings: dict[str, tuple[Any, str]] = {}
+        # Waking is proactive on Linux: set the screen-reader flag at
+        # server start so Chromium/Electron apps launched afterwards see
+        # it from birth. Flipping it after launch did not populate an
+        # already-running Vivaldi's tree in live testing (Vivaldi ships
+        # accessibility off and ignored the flag entirely; it needs
+        # --force-renderer-accessibility), so apps already running may
+        # stay asleep; _atspi_list_windows detects those and stamps them
+        # accessible=False.
+        self._ensure_screen_reader_flag()
 
     # ── Internal helpers ──────────────────────────────────────────────
 
@@ -185,6 +194,19 @@ class LinuxBackend(DesktopBackend):
         self._woken_pids.add(pid)
         return self._ensure_screen_reader_flag()
 
+    def _toolkit_is_chromium(self, app: Any) -> bool:
+        """Ask AT-SPI for the app's toolkit: flatpak-proof, unlike /proc.
+
+        Sandboxed apps (flatpak Vivaldi et al.) report the sandbox helper's
+        PID to AT-SPI, so _pid_smells_webview reads the wrong process's
+        cmdline. The toolkit name comes from the app itself over the a11y
+        bus and says "Chromium" regardless of packaging.
+        """
+        try:
+            return (app.get_toolkit_name() or "").lower() in ("chromium", "chrome")
+        except Exception:
+            return False
+
     def _find_app_waking(self, window_id: str) -> Any | None:
         """_find_app, but pokes lazy webviews awake before giving up."""
         app = self._find_app(window_id)
@@ -236,6 +258,7 @@ class LinuxBackend(DesktopBackend):
                 # tree to walk; same UX gap as the X11-fallback case.
                 accessible = child_count > 0
                 bounds: tuple[int, int, int, int] | None = None
+                frames_have_content = False
                 for j in range(child_count):
                     frame = app.get_child_at_index(j)
                     ss = frame.get_state_set()
@@ -243,6 +266,14 @@ class LinuxBackend(DesktopBackend):
                         focused = True
                     if not ss.contains(Atspi.StateType.ICONIFIED):
                         minimized = False
+                    try:
+                        # Asleep Chromium advertises a phantom child: the
+                        # count says 1 but fetching it returns None. Only a
+                        # fetchable child counts as content.
+                        if frame.get_child_count() > 0 and frame.get_child_at_index(0) is not None:
+                            frames_have_content = True
+                    except Exception:
+                        pass
                     if bounds is None:
                         try:
                             ext = frame.get_extents(Atspi.CoordType.SCREEN)
@@ -250,6 +281,14 @@ class LinuxBackend(DesktopBackend):
                                 bounds = (ext.x, ext.y, ext.width, ext.height)
                         except Exception:
                             pass
+                # A Chromium window whose frame has no fetchable children
+                # has not enabled accessibility. Either it launched before
+                # the screen-reader flag went up, or the browser is holding
+                # the tree behind a user consent prompt (Vivaldi does this).
+                # Report it inaccessible so callers use screenshot+click_at
+                # instead of trusting a hollow frame.
+                if accessible and not frames_have_content and self._toolkit_is_chromium(app):
+                    accessible = False
                 windows.append(
                     WindowInfo(
                         id=str(pid),
