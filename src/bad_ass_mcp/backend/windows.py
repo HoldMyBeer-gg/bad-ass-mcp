@@ -61,6 +61,10 @@ except (ImportError, AttributeError, OSError):
 
 # ── Win32 constants ──────────────────────────────────────────────────
 
+_SPI_GETSCREENREADERRUNNING = 0x0046
+_SPI_SETSCREENREADERRUNNING = 0x0047
+_SPIF_SENDCHANGE = 0x0002
+
 _WM_KEYDOWN = 0x0100
 _WM_KEYUP = 0x0101
 _WM_CHAR = 0x0102
@@ -262,8 +266,89 @@ class WindowsBackend(DesktopBackend):
             interface=IUIAutomation,
             clsctx=comtypes.CLSCTX_INPROC_SERVER,
         )
+        self._waked_pids: set[int] = set()
+        self._screen_reader_flag_set = False
 
     # ── Internal helpers ──────────────────────────────────────────────
+
+    def _is_chromium_window(self, hwnd: int) -> bool:
+        """Check if a window belongs to a Chromium-family app (Electron, CEF, Chrome)."""
+        buf = ctypes.create_unicode_buffer(256)
+        _user32.GetClassNameW(hwnd, buf, 256)
+        return buf.value == "Chrome_WidgetWin_1"
+
+    def _find_renderer_hwnd(self, hwnd: int) -> int | None:
+        """Find the Chrome_RenderWidgetHostHWND child — the actual DOM UIA root."""
+        renderer = None
+
+        @ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+        def cb(child, _):
+            nonlocal renderer
+            buf = ctypes.create_unicode_buffer(256)
+            _user32.GetClassNameW(child, buf, 256)
+            if buf.value == "Chrome_RenderWidgetHostHWND":
+                renderer = child
+                return False  # stop enumeration
+            return True
+
+        _user32.EnumChildWindows(hwnd, cb, 0)
+        return renderer
+
+    def _chromium_root(self, hwnd: int) -> int:
+        """Return the best HWND for UIA tree access on a Chromium window.
+
+        For Chromium-family windows the DOM content lives under the
+        Chrome_RenderWidgetHostHWND child, not the top-level HWND.
+        Falls back to the original HWND if no renderer child is found.
+        """
+        if self._is_chromium_window(hwnd):
+            renderer = self._find_renderer_hwnd(hwnd)
+            if renderer is not None:
+                return renderer
+        return hwnd
+
+    def _wake_chromium(self, hwnd: int, pid: int) -> bool:
+        """Set the screen-reader-running flag so Chromium populates its UIA tree.
+
+        Returns True if the tree has content after waiting, False otherwise.
+        Pokes once per PID per server lifetime to avoid spam.
+        """
+        if pid in self._waked_pids:
+            return True
+        self._waked_pids.add(pid)
+
+        # Set the system-wide screen reader flag (idempotent — only done once)
+        if not self._screen_reader_flag_set:
+            try:
+                _user32.SystemParametersInfoW(
+                    _SPI_SETSCREENREADERRUNNING, 1, None, _SPIF_SENDCHANGE
+                )
+                self._screen_reader_flag_set = True
+            except Exception:
+                pass
+
+        # Find the renderer child and query it to trigger tree construction
+        renderer = self._find_renderer_hwnd(hwnd)
+        target = renderer if renderer else hwnd
+        try:
+            root = self._uia.ElementFromHandle(target)
+            if root is None:
+                return False
+        except Exception:
+            return False
+
+        # Wait up to 2s for Chromium to build the a11y tree
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            try:
+                cond = self._uia.CreateTrueCondition()
+                children = root.FindAll(_TreeScope_Children, cond)
+                if children and children.Length > 3:
+                    return True
+            except Exception:
+                pass
+            time.sleep(0.2)
+        return False
 
     def _register(self, element: Any, hwnd: int | None = None) -> str:
         h = str(uuid.uuid4())
@@ -484,18 +569,27 @@ class WindowsBackend(DesktopBackend):
                     focused=(hwnd == foreground),
                     minimized=bool(_user32.IsIconic(hwnd)),
                     bounds=self._window_rect(hwnd),
+                    accessible=True,  # updated below for Chromium windows
                 )
             )
             return True
 
         _user32.EnumWindows(_enum_cb, 0)
+
+        # Wake Chromium/Electron windows so their UIA trees are populated
+        for w in windows:
+            hwnd = int(w.id)
+            if self._is_chromium_window(hwnd):
+                w.accessible = self._wake_chromium(hwnd, w.pid)
+
         return windows
 
     def get_tree(self, window_id: str) -> ElementHandle:
         hwnd = int(window_id)
         if not _user32.IsWindow(hwnd):
             raise ValueError(f"No window found for id {window_id!r}")
-        root = self._uia.ElementFromHandle(hwnd)
+        target = self._chromium_root(hwnd)
+        root = self._uia.ElementFromHandle(target)
         if root is None:
             raise ValueError(f"No window found for id {window_id!r}")
         return self._walk(root, hwnd=hwnd)
@@ -506,7 +600,8 @@ class WindowsBackend(DesktopBackend):
         hwnd = int(window_id)
         if not _user32.IsWindow(hwnd):
             return []
-        root = self._uia.ElementFromHandle(hwnd)
+        target = self._chromium_root(hwnd)
+        root = self._uia.ElementFromHandle(target)
         if root is None:
             return []
         return [self._to_handle(n, hwnd) for n in self._search(root, role, name)]
