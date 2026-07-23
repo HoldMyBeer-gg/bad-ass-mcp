@@ -53,10 +53,17 @@ empty and the process looks like a webview, the backend performs the
 platform's "a screen reader is here" handshake, waits a beat, and
 re-probes before giving up:
 
-- **Linux**: flips `org.a11y.Status.ScreenReaderEnabled` on the session
-  D-Bus — the flag Chromium and WebKitGTK (Tauri) watch. Only fires for
-  processes whose cmdline/exe smells like a webview, so games and GL
-  canvases never trigger it.
+- **Linux**: sets `org.a11y.Status.ScreenReaderEnabled` on the session
+  D-Bus **at server start** so Chromium/Electron apps launched
+  afterwards enable accessibility from birth. Windows that stay hollow
+  (an application+frame whose phantom child fetches as `None`) are
+  detected via the AT-SPI toolkit name and reported
+  `accessible: false`: the app either launched before the flag went up
+  or opts out on its own. Restarting the app (with the server running)
+  picks the flag up. Vivaldi is stubborner than most: it ships with
+  accessibility off, and in live testing neither the flag nor its own
+  first-run assistive-technology toggle produced a tree; launching it
+  with `--force-renderer-accessibility` is what reliably works.
 - **macOS**: sets `AXManualAccessibility` on the app (Electron's
   documented switch), falling back to `AXEnhancedUserInterface` (what
   VoiceOver sets, watched by plain Chrome/CEF). The attribute set only
