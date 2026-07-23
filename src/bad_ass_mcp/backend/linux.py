@@ -38,6 +38,7 @@ class LinuxBackend(DesktopBackend):
         self._handles: dict[str, Any] = {}  # handle_id → live Atspi.Accessible
         self._woken_pids: set[int] = set()  # PIDs we've already tried to wake
         self._sr_flag_done = False  # screen-reader flag poke attempted
+        self._recordings: dict[str, tuple[Any, str]] = {}
 
     # ── Internal helpers ──────────────────────────────────────────────
 
@@ -801,9 +802,6 @@ class LinuxBackend(DesktopBackend):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        self._recordings: dict  # ensure attr exists
-        if not hasattr(self, "_recordings"):
-            self._recordings = {}
         self._recordings[handle] = (proc, video_path)
         return handle
 
@@ -814,7 +812,7 @@ class LinuxBackend(DesktopBackend):
         if not canonical.lower().endswith(".gif"):
             raise ValueError(f"output_path must end with .gif (got {output_path!r})")
 
-        if not hasattr(self, "_recordings") or handle not in self._recordings:
+        if handle not in self._recordings:
             raise ValueError(f"No active recording with handle {handle!r}")
 
         proc, video_path = self._recordings.pop(handle)
