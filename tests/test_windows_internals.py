@@ -201,3 +201,44 @@ def test_stop_recording_rejects_unknown_handle():
     backend = WindowsBackend()
     with pytest.raises(ValueError, match="No active recording"):
         backend.stop_recording("no-such-handle", "C:\\tmp\\out.gif")
+
+
+# ── _wake_chromium result caching ─────────────────────────────────────
+
+
+@_win32
+def test_wake_chromium_failed_wake_stays_false():
+    """A failed wake must keep reporting False on later calls — returning
+    True for merely-attempted PIDs flips accessible=true on the second
+    list_windows even though the tree never populated."""
+    from bad_ass_mcp.backend.windows import WindowsBackend
+
+    backend = WindowsBackend()
+    backend._screen_reader_flag_set = True  # skip the system-wide poke
+
+    with (
+        patch.object(backend, "_find_renderer_hwnd", return_value=None),
+        patch.object(backend._uia, "ElementFromHandle", return_value=None),
+    ):
+        assert backend._wake_chromium(1234, 42) is False
+        assert backend._wake_chromium(1234, 42) is False  # cached, not True
+
+
+@_win32
+def test_wake_chromium_successful_wake_cached_true():
+    from bad_ass_mcp.backend.windows import WindowsBackend
+
+    backend = WindowsBackend()
+    backend._screen_reader_flag_set = True
+
+    fake_root = MagicMock()
+    fake_root.FindAll.return_value = MagicMock(Length=10)
+
+    with (
+        patch.object(backend, "_find_renderer_hwnd", return_value=None),
+        patch.object(backend._uia, "ElementFromHandle", return_value=fake_root) as efh,
+    ):
+        assert backend._wake_chromium(1234, 43) is True
+        assert backend._wake_chromium(1234, 43) is True
+
+    efh.assert_called_once()  # second call served from cache
