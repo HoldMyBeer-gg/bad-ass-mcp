@@ -19,9 +19,12 @@ class WindowInfo:
     # because it never appeared in the platform a11y tree (CGWindowList on
     # macOS, _NET_CLIENT_LIST on Linux). find_elements / get_tree will
     # return empty for those windows — callers should go straight to
-    # screenshot + click_at instead of round-tripping through AX. Cases:
-    # pre-handshake Tauri/Electron, custom OpenGL/Vulkan canvases, raw
-    # immediate-mode toolkits without AccessKit. Note: egui *with* the
+    # screenshot + click_at instead of round-tripping through AX.
+    # Backends poke lazy Chromium-family trees awake (AXManualAccessibility
+    # on macOS, the AT-SPI screen-reader flag on Linux) before stamping
+    # this False, so Electron/CEF windows normally end up True; remaining
+    # False cases are genuinely canvas-only: custom OpenGL/Vulkan surfaces,
+    # raw immediate-mode toolkits without AccessKit. Note: egui *with* the
     # accesskit feature DOES surface here as accessible=True.
     accessible: bool = True
 

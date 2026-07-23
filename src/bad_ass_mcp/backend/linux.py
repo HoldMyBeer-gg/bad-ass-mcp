@@ -15,8 +15,29 @@ from .base import DesktopBackend  # noqa: E402
 
 
 class LinuxBackend(DesktopBackend):
+    # How long to wait for a freshly-woken webview to register with AT-SPI.
+    _WAKE_TIMEOUT = 2.0
+    # Process-name/cmdline markers for toolkits that build their a11y tree
+    # lazily and watch the screen-reader flag: Chromium family (Electron,
+    # CEF, browsers) and WebKitGTK (Tauri on Linux).
+    _WEBVIEW_MARKERS = (
+        "electron",
+        "chromium",
+        "chrome",
+        "libcef",
+        "cef",
+        "msedge",
+        "brave",
+        "vivaldi",
+        "opera",
+        "webkit",
+        "tauri",
+    )
+
     def __init__(self):
         self._handles: dict[str, Any] = {}  # handle_id → live Atspi.Accessible
+        self._woken_pids: set[int] = set()  # PIDs we've already tried to wake
+        self._sr_flag_done = False  # screen-reader flag poke attempted
 
     # ── Internal helpers ──────────────────────────────────────────────
 
@@ -91,6 +112,95 @@ class LinuxBackend(DesktopBackend):
                     return app
             except Exception:
                 continue
+        return None
+
+    def _pid_smells_webview(self, pid: int) -> bool:
+        import os
+
+        blob = ""
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                blob = f.read().decode(errors="replace").lower()
+        except Exception:
+            pass
+        try:
+            blob += " " + os.path.realpath(f"/proc/{pid}/exe").lower()
+        except Exception:
+            pass
+        return any(m in blob for m in self._WEBVIEW_MARKERS)
+
+    def _ensure_screen_reader_flag(self) -> bool:
+        """Turn on org.a11y.Status.ScreenReaderEnabled on the session bus.
+
+        Chromium-family apps and WebKitGTK build their AT-SPI tree lazily and
+        only materialise it when this flag says an assistive tech is
+        listening. Returns True the first time the flag transitions to on —
+        i.e. when a re-probe wait is worthwhile. Already-on (apps registered
+        at launch, or will as soon as they see it) and D-Bus-unavailable both
+        return False.
+        """
+        if self._sr_flag_done:
+            return False
+        self._sr_flag_done = True
+        try:
+            from gi.repository import Gio, GLib  # noqa: PLC0415
+
+            bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            current = bus.call_sync(
+                "org.a11y.Bus",
+                "/org/a11y/bus",
+                "org.freedesktop.DBus.Properties",
+                "Get",
+                GLib.Variant("(ss)", ("org.a11y.Status", "ScreenReaderEnabled")),
+                None,
+                Gio.DBusCallFlags.NONE,
+                2000,
+                None,
+            )
+            if current and current.unpack()[0]:
+                return False
+            bus.call_sync(
+                "org.a11y.Bus",
+                "/org/a11y/bus",
+                "org.freedesktop.DBus.Properties",
+                "Set",
+                GLib.Variant(
+                    "(ssv)",
+                    ("org.a11y.Status", "ScreenReaderEnabled", GLib.Variant("b", True)),
+                ),
+                None,
+                Gio.DBusCallFlags.NONE,
+                2000,
+                None,
+            )
+            return True
+        except Exception:
+            return False
+
+    def _wake_webview_a11y(self, pid: int) -> bool:
+        """Try to wake a lazy webview a11y tree. True → caller should re-probe."""
+        if pid in self._woken_pids or not self._pid_smells_webview(pid):
+            return False
+        self._woken_pids.add(pid)
+        return self._ensure_screen_reader_flag()
+
+    def _find_app_waking(self, window_id: str) -> Any | None:
+        """_find_app, but pokes lazy webviews awake before giving up."""
+        app = self._find_app(window_id)
+        if app is not None:
+            return app
+        try:
+            pid = int(window_id)
+        except ValueError:
+            return None
+        if not self._wake_webview_a11y(pid):
+            return None
+        deadline = time.monotonic() + self._WAKE_TIMEOUT
+        while time.monotonic() < deadline:
+            time.sleep(0.25)
+            app = self._find_app(window_id)
+            if app is not None:
+                return app
         return None
 
     def _search(self, node: Any, role: str | None, name: str | None) -> list[Any]:
@@ -239,10 +349,29 @@ class LinuxBackend(DesktopBackend):
         atspi_pids = {w.pid for w in atspi}
         # Supplement with top-level X11 windows whose process isn't in AT-SPI
         extra = [w for w in self._x11_list_windows() if w.pid not in atspi_pids]
+        # Webview processes build their a11y tree lazily — poke the
+        # screen-reader flag and give them a moment to register, then fold
+        # any newcomers into the AT-SPI side instead of stamping them
+        # accessible=false forever.
+        fresh = [
+            w for w in extra if w.pid not in self._woken_pids and self._pid_smells_webview(w.pid)
+        ]
+        if fresh:
+            self._woken_pids.update(w.pid for w in fresh)
+            if self._ensure_screen_reader_flag():
+                waiting = {w.pid for w in fresh}
+                deadline = time.monotonic() + self._WAKE_TIMEOUT
+                while time.monotonic() < deadline:
+                    time.sleep(0.25)
+                    atspi = self._atspi_list_windows()
+                    atspi_pids = {w.pid for w in atspi}
+                    if waiting <= atspi_pids:
+                        break
+                extra = [w for w in extra if w.pid not in atspi_pids]
         return atspi + extra
 
     def get_tree(self, window_id: str) -> ElementHandle:
-        app = self._find_app(window_id)
+        app = self._find_app_waking(window_id)
         if app is None:
             raise ValueError(f"No window found for id {window_id!r}")
         return self._walk(app)
@@ -250,7 +379,7 @@ class LinuxBackend(DesktopBackend):
     def find_elements(
         self, window_id: str, *, role=None, name=None, index=0
     ) -> list[ElementHandle]:
-        app = self._find_app(window_id)
+        app = self._find_app_waking(window_id)
         if app is None:
             return []
         nodes = self._search(app, role, name)
