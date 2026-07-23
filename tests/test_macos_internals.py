@@ -75,6 +75,77 @@ def test_ax_value_to_rect_returns_none_for_cgpoint_only():
     assert _ax_value_to_rect(_Point()) is None
 
 
+# ── _ax_name label fallback ───────────────────────────────────────────
+
+
+def _fake_ax_get(attrs: dict):
+    """Return an _ax_get stand-in backed by a dict of attr -> value.
+
+    Elements are represented as dicts; a linked AXTitleUIElement is itself
+    such a dict. Missing attrs return None, matching real _ax_get.
+    """
+
+    def getter(element, attr):
+        if not isinstance(element, dict):
+            return None
+        return element.get(attr)
+
+    return getter
+
+
+def _name_of(attrs: dict) -> str:
+    from unittest.mock import patch
+
+    from bad_ass_mcp.backend.macos import _ax_name
+
+    with patch("bad_ass_mcp.backend.macos._ax_get", side_effect=_fake_ax_get(attrs)):
+        return _ax_name(attrs)
+
+
+def test_ax_name_prefers_title():
+    assert _name_of({"AXTitle": "Save", "AXDescription": "d", "AXHelp": "h"}) == "Save"
+
+
+def test_ax_name_falls_back_to_description():
+    assert _name_of({"AXRole": "AXButton", "AXDescription": "Close window"}) == "Close window"
+
+
+def test_ax_name_uses_linked_title_element():
+    # A field labelled by a separate static-text element beside it.
+    label = {"AXTitle": "Email address"}
+    field = {"AXRole": "AXTextField", "AXTitleUIElement": label}
+    assert _name_of(field) == "Email address"
+
+
+def test_ax_name_linked_title_element_value_fallback():
+    label = {"AXValue": "Password"}  # label carries its text in AXValue
+    field = {"AXRole": "AXTextField", "AXTitleUIElement": label}
+    assert _name_of(field) == "Password"
+
+
+def test_ax_name_falls_back_to_help():
+    # Icon button with only a tooltip.
+    el = {"AXRole": "AXButton", "AXHelp": "Zoom the window"}
+    assert _name_of(el) == "Zoom the window"
+
+
+def test_ax_name_uses_specific_role_description():
+    # AXRoleDescription that adds information beyond the bare role.
+    el = {"AXRole": "AXButton", "AXRoleDescription": "close button"}
+    assert _name_of(el) == "close button"
+
+
+def test_ax_name_skips_role_description_that_echoes_role():
+    # "button" for a button adds nothing over the role field — drop it.
+    el = {"AXRole": "AXButton", "AXRoleDescription": "button"}
+    assert _name_of(el) == ""
+
+
+def test_ax_name_empty_when_unlabelled_everywhere():
+    el = {"AXRole": "AXButton"}
+    assert _name_of(el) == ""
+
+
 # ── error constant values ─────────────────────────────────────────────
 
 
@@ -484,6 +555,82 @@ def test_wake_ax_windows_once_per_pid():
     assert first
     assert second == []
     ax_set.assert_called_once()
+
+
+# ── _walk depth: Chromium content lives deep ──────────────────────────
+
+
+@_darwin
+def test_walk_descends_past_chromium_group_nesting():
+    """Chromium (Vivaldi et al.) buries its web area ~13+ levels below the
+    app root, deeper with GPU-composited pages. A shallow max_depth returned
+    a hollow husk of empty AXGroups — get_tree looked broken while
+    find_elements (uncapped) saw everything. Pin that the walk reaches a
+    node deeper than the old 12-level cap so that regression can't return.
+    """
+    from bad_ass_mcp.backend.macos import _WALK_MAX_DEPTH, MacOSBackend
+
+    backend = MacOSBackend()
+
+    DEEP = 20  # within real Chromium range (Vivaldi content ran to depth ~22)
+    assert DEEP > 12, "test must probe past the old cap"
+    assert DEEP < _WALK_MAX_DEPTH, "cap must clear real Chromium nesting"
+
+    # Build a synthetic chain DEEP wrapper groups long with a named leaf at
+    # the bottom. Drive _walk via _ax_descendants (one child per level) and a
+    # _to_handle that stamps the node's level as its name.
+    from bad_ass_mcp.types import ElementHandle
+
+    def fake_descendants(element, depth):
+        return [depth + 1] if depth < DEEP else []
+
+    def fake_to_handle(element, pid=None):
+        level = 0 if not isinstance(element, int) else element
+        name = "LEAF" if level == DEEP else ""
+        return ElementHandle(id=str(level), role="group", name=name, value=None, states=[])
+
+    with (
+        patch.object(backend, "_ax_descendants", side_effect=fake_descendants),
+        patch.object(backend, "_to_handle", side_effect=fake_to_handle),
+    ):
+        tree = backend._walk("root")
+
+    # Descend the single chain to the bottom and confirm the deep leaf survived.
+    node, levels = tree, 0
+    while node.children:
+        node = node.children[0]
+        levels += 1
+    assert levels == DEEP
+    assert node.name == "LEAF"
+
+
+@_darwin
+def test_walk_respects_node_budget():
+    """The node budget must bound a wide/pathological tree regardless of
+    depth — a runaway or cyclic tree can't exhaust memory."""
+    from bad_ass_mcp.backend.macos import MacOSBackend
+    from bad_ass_mcp.types import ElementHandle
+
+    backend = MacOSBackend()
+
+    # Every node reports 10 children forever → unbounded without the budget.
+    def fake_descendants(element, depth):
+        return [object() for _ in range(10)]
+
+    def fake_to_handle(element, pid=None):
+        return ElementHandle(id="x", role="group", name="", value=None, states=[])
+
+    def count(h):
+        return 1 + sum(count(c) for c in h.children)
+
+    with (
+        patch("bad_ass_mcp.backend.macos._WALK_MAX_NODES", 500),
+        patch.object(backend, "_ax_descendants", side_effect=fake_descendants),
+        patch.object(backend, "_to_handle", side_effect=fake_to_handle),
+    ):
+        tree = backend._walk("root", budget=[500])
+
+    assert count(tree) <= 500
 
 
 @_darwin

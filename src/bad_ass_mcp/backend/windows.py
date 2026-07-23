@@ -19,7 +19,7 @@ import zlib
 from typing import Any
 
 from ..types import ActionResult, ElementHandle, StaleHandleError, WindowInfo
-from .base import DesktopBackend
+from .base import DesktopBackend, prune_tree
 
 _HAS_UIA = False
 
@@ -243,6 +243,14 @@ def _make_lparam(vk: int, is_up: bool = False) -> int:
 class WindowsBackend(DesktopBackend):
     """Windows backend using UI Automation + ctypes Win32 API."""
 
+    # Chromium nests real content deep. get_tree() reroutes to the
+    # Chrome_RenderWidgetHostHWND renderer child, which starts the DOM
+    # shallower than the top-level HWND, so a shallow cap bit less here than
+    # on macOS — but it was still fragile for deep pages. 60 clears real
+    # trees; _WALK_MAX_NODES bounds a runaway/cyclic walk regardless of depth.
+    _WALK_MAX_DEPTH = 60
+    _WALK_MAX_NODES = 20000
+
     def __init__(self) -> None:
         if not _HAS_UIA:
             raise RuntimeError(
@@ -447,18 +455,32 @@ class WindowsBackend(DesktopBackend):
         return ElementHandle(id=handle_id, role=role, name=name, value=value, states=states)
 
     def _walk(
-        self, element: Any, depth: int = 0, max_depth: int = 12, hwnd: int | None = None
+        self,
+        element: Any,
+        depth: int = 0,
+        max_depth: int = _WALK_MAX_DEPTH,
+        hwnd: int | None = None,
+        budget: list[int] | None = None,
     ) -> ElementHandle:
+        # budget is a shared 1-element list so the node cap spans the whole
+        # recursion, not each branch.
+        if budget is None:
+            budget = [self._WALK_MAX_NODES]
         handle = self._to_handle(element, hwnd)
-        if depth < max_depth:
+        budget[0] -= 1
+        if depth < max_depth and budget[0] > 0:
             try:
                 cond = self._uia.CreateTrueCondition()
                 children = element.FindAll(_TreeScope_Children, cond)
                 if children:
                     for i in range(children.Length):
+                        if budget[0] <= 0:
+                            break
                         try:
                             child = children.GetElement(i)
-                            handle.children.append(self._walk(child, depth + 1, max_depth, hwnd))
+                            handle.children.append(
+                                self._walk(child, depth + 1, max_depth, hwnd, budget)
+                            )
                         except Exception:
                             pass
             except Exception:
@@ -590,7 +612,7 @@ class WindowsBackend(DesktopBackend):
 
         return windows
 
-    def get_tree(self, window_id: str) -> ElementHandle:
+    def get_tree(self, window_id: str, *, max_depth: int | None = None) -> ElementHandle:
         hwnd = int(window_id)
         if not _user32.IsWindow(hwnd):
             raise ValueError(f"No window found for id {window_id!r}")
@@ -598,7 +620,8 @@ class WindowsBackend(DesktopBackend):
         root = self._uia.ElementFromHandle(target)
         if root is None:
             raise ValueError(f"No window found for id {window_id!r}")
-        return self._walk(root, hwnd=hwnd)
+        depth_cap = self._WALK_MAX_DEPTH if max_depth is None else max_depth
+        return prune_tree(self._walk(root, max_depth=depth_cap, hwnd=hwnd))
 
     def find_elements(
         self, window_id: str, *, role=None, name=None, index=0
