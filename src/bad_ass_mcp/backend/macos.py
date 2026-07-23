@@ -183,6 +183,16 @@ _KEY_CODES: dict[str, int] = {
 }
 
 
+# Attributes that tell Chromium-family apps "an assistive tech is listening"
+# so they build their (lazy) AX tree. AXManualAccessibility is Electron's
+# documented switch; AXEnhancedUserInterface is what VoiceOver sets and what
+# plain Chrome/CEF watch — but it also makes some apps animate window moves,
+# so it's the fallback, not the first choice.
+_AX_WAKE_ATTRS = ("AXManualAccessibility", "AXEnhancedUserInterface")
+# How long to wait for a freshly-woken webview to publish AXWindows.
+_AX_WAKE_TIMEOUT = 1.5
+
+
 class MacOSBackend(DesktopBackend):
     def __init__(self) -> None:
         if not _HAS_PYOBJC:
@@ -190,6 +200,7 @@ class MacOSBackend(DesktopBackend):
         self._handles: dict[str, Any] = {}
         self._handle_pids: dict[str, int] = {}  # handle_id → owning process PID
         self._recordings: dict[str, tuple[Any, str]] = {}
+        self._woken_pids: set[int] = set()  # PIDs we've already tried to wake
 
     # ── Internal helpers ──────────────────────────────────────────────
 
@@ -271,6 +282,31 @@ class MacOSBackend(DesktopBackend):
                 return list(wins)
         return list(_ax_get(element, "AXChildren") or [])
 
+    def _wake_ax_windows(self, pid: int) -> list[Any]:
+        """Poke a lazy webview AX tree awake and wait briefly for AXWindows.
+
+        Chromium (and therefore Electron/CEF) skips building its AX tree
+        until an assistive tech announces itself; until then AXWindows is
+        empty and the app looks canvas-only. Setting a wake attribute is the
+        announcement. The set call only succeeds on apps that implement one
+        of the attributes, so this is a cheap no-op for genuinely AX-less
+        windows — no process-name sniffing needed. One attempt per PID per
+        server lifetime.
+        """
+        if pid in self._woken_pids:
+            return []
+        self._woken_pids.add(pid)
+        ax_app = AXUIElementCreateApplication(pid)
+        if not any(_ax_set(ax_app, attr, True) for attr in _AX_WAKE_ATTRS):
+            return []
+        deadline = time.monotonic() + _AX_WAKE_TIMEOUT
+        while time.monotonic() < deadline:
+            time.sleep(0.25)
+            wins = _ax_get(ax_app, "AXWindows") or []
+            if wins:
+                return list(wins)
+        return []
+
     def _find_app_element(self, window_id: str) -> Any | None:
         for app in NSWorkspace.sharedWorkspace().runningApplications():
             pid = app.processIdentifier()
@@ -291,6 +327,8 @@ class MacOSBackend(DesktopBackend):
                 if int(win.get("kCGWindowOwnerPID", 0)) == pid_int:
                     ax_app = AXUIElementCreateApplication(pid_int)
                     if _ax_get(ax_app, "AXWindows"):
+                        return ax_app
+                    if self._wake_ax_windows(pid_int):
                         return ax_app
                     return None
             except (TypeError, ValueError):
@@ -421,6 +459,11 @@ class MacOSBackend(DesktopBackend):
             # for any app NSWorkspace happened to miss this tick.
             ax_app = AXUIElementCreateApplication(pid)
             ax_wins = _ax_get(ax_app, "AXWindows") or []
+            if not ax_wins:
+                # Chromium-family trees are lazy, not absent — announce
+                # ourselves as an assistive tech and re-probe before
+                # stamping accessible=False.
+                ax_wins = self._wake_ax_windows(pid)
             ax_accessible = bool(ax_wins)
             windows.append(
                 WindowInfo(

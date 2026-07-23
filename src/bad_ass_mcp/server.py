@@ -44,10 +44,12 @@ def list_windows() -> list[dict]:
         translate screenshot pixels to click_at coordinates.
       accessible: false signals the platform a11y tree has nothing for
         this window — find_elements / get_tree will return empty. Skip
-        those tools and use screenshot + click_at directly. Common causes:
-        Tauri/Electron before their AX handshake, custom OpenGL/Vulkan
-        canvases, raw immediate-mode toolkits without an AccessKit
-        adapter. (egui+accesskit surfaces normally as accessible=true.)"""
+        those tools and use screenshot + click_at directly. Chromium-family
+        windows (Electron/CEF) get an automatic wake poke first — their
+        lazy a11y trees are enabled and re-probed before this is stamped
+        false — so a false here means genuinely canvas-only: custom
+        OpenGL/Vulkan surfaces, raw immediate-mode toolkits without an
+        AccessKit adapter. (egui+accesskit surfaces as accessible=true.)"""
     return [w.__dict__ for w in _backend().list_windows()]
 
 

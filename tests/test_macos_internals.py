@@ -414,3 +414,102 @@ def test_stop_recording_accepts_valid_gif_path():
                 os.unlink(p)
             except FileNotFoundError:
                 pass
+
+
+# ── webview AX wake-probe ─────────────────────────────────────────────
+
+
+@_darwin
+def test_wake_ax_windows_pokes_manual_accessibility_first():
+    """AXManualAccessibility succeeding must short-circuit — the
+    AXEnhancedUserInterface fallback has window-animation side effects."""
+    from bad_ass_mcp.backend.macos import MacOSBackend
+
+    backend = MacOSBackend()
+    fake_win = MagicMock()
+    set_calls = []
+
+    def fake_ax_set(el, attr, value):
+        set_calls.append(attr)
+        return attr == "AXManualAccessibility"
+
+    with (
+        patch("bad_ass_mcp.backend.macos.AXUIElementCreateApplication"),
+        patch("bad_ass_mcp.backend.macos._ax_set", side_effect=fake_ax_set),
+        patch("bad_ass_mcp.backend.macos._ax_get", return_value=[fake_win]),
+        patch("time.sleep"),
+    ):
+        result = backend._wake_ax_windows(4242)
+
+    assert result == [fake_win]
+    assert set_calls == ["AXManualAccessibility"]
+
+
+@_darwin
+def test_wake_ax_windows_noop_when_attrs_unsupported():
+    """Apps without a Chromium-style wake attribute (games, GL canvases)
+    must return immediately — no poll loop, no sleep."""
+    from bad_ass_mcp.backend.macos import MacOSBackend
+
+    backend = MacOSBackend()
+
+    with (
+        patch("bad_ass_mcp.backend.macos.AXUIElementCreateApplication"),
+        patch("bad_ass_mcp.backend.macos._ax_set", return_value=False),
+        patch("bad_ass_mcp.backend.macos._ax_get") as ax_get,
+        patch("time.sleep") as slept,
+    ):
+        result = backend._wake_ax_windows(4243)
+
+    assert result == []
+    ax_get.assert_not_called()
+    slept.assert_not_called()
+
+
+@_darwin
+def test_wake_ax_windows_once_per_pid():
+    from bad_ass_mcp.backend.macos import MacOSBackend
+
+    backend = MacOSBackend()
+
+    with (
+        patch("bad_ass_mcp.backend.macos.AXUIElementCreateApplication"),
+        patch("bad_ass_mcp.backend.macos._ax_set", return_value=True) as ax_set,
+        patch("bad_ass_mcp.backend.macos._ax_get", return_value=[MagicMock()]),
+        patch("time.sleep"),
+    ):
+        first = backend._wake_ax_windows(4244)
+        second = backend._wake_ax_windows(4244)
+
+    assert first
+    assert second == []
+    ax_set.assert_called_once()
+
+
+@_darwin
+def test_find_app_element_wakes_lazy_webview():
+    """PID fallback: AXWindows empty on first probe, but a successful wake
+    means the element is real — return it instead of None."""
+    from bad_ass_mcp.backend.macos import MacOSBackend
+
+    backend = MacOSBackend()
+    fresh_pid = 77777
+    fake_ax_app = MagicMock(name="ax_app")
+
+    with (
+        patch("bad_ass_mcp.backend.macos.NSWorkspace") as ns,
+        patch(
+            "bad_ass_mcp.backend.macos._cg_onscreen_windows",
+            return_value=[{"kCGWindowOwnerPID": fresh_pid}],
+        ),
+        patch(
+            "bad_ass_mcp.backend.macos.AXUIElementCreateApplication",
+            return_value=fake_ax_app,
+        ),
+        patch("bad_ass_mcp.backend.macos._ax_get", return_value=None),  # AXWindows empty
+        patch.object(backend, "_wake_ax_windows", return_value=[MagicMock()]),
+    ):
+        ns.sharedWorkspace.return_value.runningApplications.return_value = []
+        result = backend._find_app_element(str(fresh_pid))
+
+    assert result is fake_ax_app
