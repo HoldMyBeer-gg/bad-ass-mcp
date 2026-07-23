@@ -59,11 +59,12 @@ re-probes before giving up:
   (an application+frame whose phantom child fetches as `None`) are
   detected via the AT-SPI toolkit name and reported
   `accessible: false`: the app either launched before the flag went up
-  or opts out on its own. Restarting the app (with the server running)
-  picks the flag up. Vivaldi is stubborner than most: it ships with
-  accessibility off, and in live testing neither the flag nor its own
-  first-run assistive-technology toggle produced a tree; launching it
-  with `--force-renderer-accessibility` is what reliably works.
+  or opts out on its own. Restarting the app with the server running
+  should pick the flag up per Chromium's documented behavior, but note
+  that is not yet verified here: the only Linux app live-tested so far
+  (flatpak Vivaldi) ignores the flag entirely, its own first-run
+  assistive-technology toggle included, and only produces a tree when
+  launched with `--force-renderer-accessibility`.
 - **macOS**: sets `AXManualAccessibility` on the app (Electron's
   documented switch), falling back to `AXEnhancedUserInterface` (what
   VoiceOver sets, watched by plain Chrome/CEF). The attribute set only
