@@ -4,13 +4,24 @@ from __future__ import annotations
 # is fully trusted. There is no authentication. Do not expose this server over a
 # network socket or to untrusted processes — the AX/AT-SPI permissions it holds
 # grant control over every application on the desktop.
+import json
 import platform
+from collections import deque
 
 from mcp.server.fastmcp import FastMCP
 
 from .types import StaleHandleError
 
 mcp = FastMCP("bad-ass-mcp")
+
+# get_tree's JSON must fit the MCP client's per-tool-result cap (~25K tokens
+# in Claude Code). Even after pruning empty wrappers, a content-heavy page can
+# blow past that. Cap the *serialised* size and stop breadth-first, so the
+# shallow/structural nodes (the useful ones) survive and deep leaves are cut
+# first. The result then carries truncated=true and the dropped-node count so
+# the caller knows to narrow with max_depth or find_elements. ~40 KB of JSON
+# is roughly 10K tokens: comfortably under the cap with headroom for framing.
+_TREE_BYTE_BUDGET = 40_000
 
 
 def _backend():
@@ -53,6 +64,63 @@ def list_windows() -> list[dict]:
     return [w.__dict__ for w in _backend().list_windows()]
 
 
+def _serialise_tree(root, byte_budget: int = _TREE_BYTE_BUDGET) -> dict:
+    """Serialise a tree to nested dicts, breadth-first, within a byte budget.
+
+    Every node's own fields are always emitted; children are attached
+    breadth-first until the running JSON size would exceed byte_budget, then
+    the walk stops. Shallow, structural nodes (the useful ones) survive; deep
+    leaves are dropped first. When anything is cut, the root gains
+    truncated=true and dropped_nodes so the caller can narrow the query.
+
+    The root itself is always emitted whole, even if it alone exceeds the
+    budget: a non-empty result beats an empty one.
+    """
+
+    def node_dict(el) -> dict:
+        return {
+            "id": el.id,
+            "role": el.role,
+            "name": el.name,
+            "value": el.value,
+            "states": sorted(el.states),
+            "children": [],
+        }
+
+    # Per-node byte cost: the node's own JSON with no children. Cheap upper
+    # bound on what attaching it adds, so we never overshoot the real size.
+    def node_cost(d: dict) -> int:
+        return len(json.dumps({**d, "children": []}))
+
+    root_dict = node_dict(root)
+    used = node_cost(root_dict)
+    dropped = 0
+    # Queue of (source_element, its_dict) whose children we still owe.
+    queue: deque = deque([(root, root_dict)])
+
+    while queue:
+        src, dst = queue.popleft()
+        for child in src.children:
+            child_dict = node_dict(child)
+            cost = node_cost(child_dict)
+            if used + cost > byte_budget:
+                # No room: this child and everything under it is dropped.
+                dropped += 1 + _count_descendants(child)
+                continue
+            used += cost
+            dst["children"].append(child_dict)
+            queue.append((child, child_dict))
+
+    if dropped:
+        root_dict["truncated"] = True
+        root_dict["dropped_nodes"] = dropped
+    return root_dict
+
+
+def _count_descendants(el) -> int:
+    return sum(1 + _count_descendants(c) for c in el.children)
+
+
 @mcp.tool()
 def get_tree(window_id: str, max_depth: int | None = None) -> dict:
     """Return the accessibility tree for a window as nested JSON.
@@ -60,21 +128,13 @@ def get_tree(window_id: str, max_depth: int | None = None) -> dict:
 
     Empty, nameless layout wrappers are pruned automatically, so the tree
     stays compact even on content-heavy pages while every named or
-    interactive node is preserved. On very large pages the tree can still be
-    big; pass max_depth (e.g. 8) to cap recursion depth and shrink the
-    result further, or use find_elements() to target specific controls."""
+    interactive node is preserved. Very large pages are additionally capped
+    to a byte budget so the result always fits the client: when that happens
+    the root carries "truncated": true and "dropped_nodes" (a count). To see
+    the cut content, pass max_depth (e.g. 8) to cap recursion depth, or use
+    find_elements() to target specific controls."""
 
-    def serialise(el):
-        return {
-            "id": el.id,
-            "role": el.role,
-            "name": el.name,
-            "value": el.value,
-            "states": sorted(el.states),
-            "children": [serialise(c) for c in el.children],
-        }
-
-    return serialise(_backend().get_tree(window_id, max_depth=max_depth))
+    return _serialise_tree(_backend().get_tree(window_id, max_depth=max_depth))
 
 
 @mcp.tool()
