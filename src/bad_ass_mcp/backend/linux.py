@@ -598,6 +598,70 @@ class LinuxBackend(DesktopBackend):
             time.sleep(0.1)
         return None
 
+    def _display_backend(self) -> str:
+        """Return 'x11', 'kwin', or 'other'.
+
+        Wayland changed how screenshots work: apps can't grab pixels through the
+        old X11 root-window path, so `import -window root` returns a black frame
+        or fails outright. KWin (KDE Plasma / SteamOS gaming-mode's desktop)
+        exposes ScreenShot2 over DBus and ships `spectacle` as its CLI front-end.
+        Other Wayland compositors (GNOME, sway, Hyprland) need per-compositor
+        paths that aren't implemented yet.
+        """
+        import os
+
+        session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
+        wayland_display = os.environ.get("WAYLAND_DISPLAY", "")
+        if session_type == "x11" or (not wayland_display and session_type != "wayland"):
+            return "x11"
+        # Wayland session — probe for KWin. qdbus is cheap and the KWin object
+        # is only present when the KWin compositor is running.
+        try:
+            r = subprocess.run(
+                ["qdbus", "org.kde.KWin", "/KWin"],
+                capture_output=True,
+                timeout=1.0,
+            )
+            if r.returncode == 0:
+                return "kwin"
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+        return "other"
+
+    def _capture_full_screen(self, target: str) -> None:
+        """Write a full-screen PNG to `target`. Raises RuntimeError with stderr on failure."""
+        import os
+
+        backend = self._display_backend()
+        if backend == "kwin":
+            # Spectacle ships with KDE Plasma; -bnf = background, no notify, fullscreen.
+            r = subprocess.run(
+                ["spectacle", "-b", "-n", "-f", "-o", target],
+                capture_output=True,
+            )
+            if r.returncode != 0 or not os.path.exists(target):
+                raise RuntimeError(
+                    "spectacle capture failed: "
+                    + (r.stderr.decode(errors="replace").strip() or "no output written")
+                )
+            return
+        if backend == "x11":
+            r = subprocess.run(
+                ["import", "-window", "root", target],
+                capture_output=True,
+            )
+            if r.returncode != 0:
+                raise RuntimeError(
+                    "ImageMagick `import` failed: "
+                    + (r.stderr.decode(errors="replace").strip() or "unknown error")
+                )
+            return
+        raise RuntimeError(
+            "Screenshot is not supported on this Wayland compositor yet — "
+            "only X11 and KWin (KDE Plasma) are implemented. "
+            f"XDG_SESSION_TYPE={os.environ.get('XDG_SESSION_TYPE', '')!r}"
+        )
+
     def screenshot(self, window_id: str | None = None, output_path: str | None = None) -> bytes:
         import os
         import tempfile
@@ -637,9 +701,15 @@ class LinuxBackend(DesktopBackend):
                     raise ValueError(
                         f"Window {window_id!r} not found — pass None for a full-desktop capture"
                     )
-            if geom:
-                # Capture the specific window by its X11 window ID — cleaner
-                # than a cropped root grab and handles window decorations.
+
+            backend = self._display_backend()
+
+            if not geom:
+                # Full-screen capture path.
+                self._capture_full_screen(target)
+            elif backend == "x11":
+                # X11 window-scoped capture: prefer capturing by xwid (handles
+                # decorations); fall back to a geometry crop from root.
                 xwid = None
                 app = self._find_app(window_id) if window_id else None
                 pid = app.get_process_id() if app else None
@@ -651,15 +721,18 @@ class LinuxBackend(DesktopBackend):
                 if pid:
                     xwid = self._find_xwid(pid)
                 if xwid:
-                    subprocess.run(
+                    r = subprocess.run(
                         ["import", "-window", xwid, target],
-                        check=True,
                         capture_output=True,
                     )
+                    if r.returncode != 0:
+                        raise RuntimeError(
+                            "ImageMagick `import` failed: "
+                            + (r.stderr.decode(errors="replace").strip() or "unknown error")
+                        )
                 else:
-                    # Fallback: crop from root using geometry
                     x, y, w, h = geom
-                    subprocess.run(
+                    r = subprocess.run(
                         [
                             "import",
                             "-window",
@@ -669,28 +742,53 @@ class LinuxBackend(DesktopBackend):
                             "+repage",
                             target,
                         ],
-                        check=True,
                         capture_output=True,
                     )
+                    if r.returncode != 0:
+                        raise RuntimeError(
+                            "ImageMagick `import` failed: "
+                            + (r.stderr.decode(errors="replace").strip() or "unknown error")
+                        )
             else:
-                subprocess.run(
-                    ["import", "-window", "root", target],
-                    check=True,
-                    capture_output=True,
-                )
+                # KWin (or fallback): capture full screen, then crop with ImageMagick.
+                # Spectacle can't scope by PID, so we shoot the whole screen and
+                # crop using the geometry we already resolved.
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as fs:
+                    full = fs.name
+                try:
+                    self._capture_full_screen(full)
+                    x, y, w, h = geom
+                    r = subprocess.run(
+                        [
+                            "convert",
+                            full,
+                            "-crop",
+                            f"{w}x{h}+{x}+{y}",
+                            "+repage",
+                            target,
+                        ],
+                        capture_output=True,
+                    )
+                    if r.returncode != 0:
+                        raise RuntimeError(
+                            "ImageMagick `convert` crop failed: "
+                            + (r.stderr.decode(errors="replace").strip() or "unknown error")
+                        )
+                finally:
+                    try:
+                        os.unlink(full)
+                    except OSError:
+                        pass
+
             if output_path:
                 return b""
             with open(target, "rb") as f:
                 return f.read()
-        except ValueError:
-            raise
-        except Exception:
-            return b""
         finally:
             if cleanup:
                 try:
                     os.unlink(target)
-                except Exception:
+                except OSError:
                     pass
 
     def _find_xwid(self, pid: int) -> str | None:

@@ -275,7 +275,7 @@ def screenshot(window_id: str | None = None, output_path: str | None = None) -> 
 
     try:
         data = _backend().screenshot(window_id, output_path)
-    except ValueError as e:
+    except (ValueError, RuntimeError) as e:
         return {"ok": False, "error": str(e)}
     if output_path:
         import os
