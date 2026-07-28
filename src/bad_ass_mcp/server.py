@@ -270,6 +270,13 @@ def screenshot(window_id: str | None = None, output_path: str | None = None) -> 
 
     Errors with {ok: False, error: ...} if window_id is given but the window
     cannot be located — does NOT silently fall back to a full-desktop capture.
+
+    Caveat on Linux/KWin: per-window capture crops a full-screen shot to the
+    target window's rectangle, because the KDE compositor won't let
+    unprivileged clients capture individual windows. Any other window on top
+    of the target will appear in the crop. Raise or close overlapping
+    windows before capturing if isolation matters. Windows and macOS
+    capture per-window at the compositor level and are unaffected.
     """
     import base64
 
