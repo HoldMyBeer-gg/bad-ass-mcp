@@ -750,30 +750,31 @@ class LinuxBackend(DesktopBackend):
                             + (r.stderr.decode(errors="replace").strip() or "unknown error")
                         )
             else:
-                # KWin (or fallback): capture full screen, then crop with ImageMagick.
-                # Spectacle can't scope by PID, so we shoot the whole screen and
-                # crop using the geometry we already resolved.
+                # KWin (or fallback): spectacle can't scope by PID, so shoot
+                # the full screen and crop to `geom` with Pillow. Pillow is
+                # preferred over ImageMagick because it's a single Python dep
+                # instead of a system binary that may not be installed
+                # (SteamOS ships without ImageMagick, for instance).
+                try:
+                    from PIL import Image
+                except ImportError as e:
+                    raise RuntimeError(
+                        "Pillow is required for per-window screenshots on KWin — "
+                        "install with `pip install Pillow`"
+                    ) from e
                 with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as fs:
                     full = fs.name
                 try:
                     self._capture_full_screen(full)
                     x, y, w, h = geom
-                    r = subprocess.run(
-                        [
-                            "convert",
-                            full,
-                            "-crop",
-                            f"{w}x{h}+{x}+{y}",
-                            "+repage",
-                            target,
-                        ],
-                        capture_output=True,
-                    )
-                    if r.returncode != 0:
-                        raise RuntimeError(
-                            "ImageMagick `convert` crop failed: "
-                            + (r.stderr.decode(errors="replace").strip() or "unknown error")
-                        )
+                    with Image.open(full) as img:
+                        # Assumes the captured image and AT-SPI geometry share
+                        # the same coord system. True for 1x displays (Steam
+                        # Deck docked at 1080p). On HiDPI Wayland the captured
+                        # PNG may be at physical resolution while AT-SPI
+                        # reports logical — the crop will land on the wrong
+                        # region. Fix when we have a HiDPI test rig.
+                        img.crop((x, y, x + w, y + h)).save(target, "PNG")
                 finally:
                     try:
                         os.unlink(full)
@@ -881,17 +882,20 @@ class LinuxBackend(DesktopBackend):
                     return (x, y, w, h)
             except Exception:
                 pass
-        # Fall back to AT-SPI component interface
+        # Fall back to AT-SPI frame extents. Match _atspi_list_windows —
+        # calling get_extents() directly on the frame is more reliable than
+        # going through get_component(), which returns None on some
+        # native-Wayland windows (Firefox on GTK-Wayland, notably) and takes
+        # the whole fallback down with an AttributeError.
         if app:
-            try:
-                for i in range(app.get_child_count()):
+            for i in range(app.get_child_count()):
+                try:
                     frame = app.get_child_at_index(i)
-                    comp = frame.get_component()
-                    ext = comp.get_extents(Atspi.CoordType.SCREEN)
-                    if ext.width > 0 and ext.height > 0:
+                    ext = frame.get_extents(Atspi.CoordType.SCREEN)
+                    if ext is not None and ext.width > 0 and ext.height > 0:
                         return (ext.x, ext.y, ext.width, ext.height)
-            except Exception:
-                pass
+                except Exception:
+                    continue
         return None
 
     def start_recording(self, window_id: str | None = None, fps: int = 15) -> str:
