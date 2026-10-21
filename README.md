@@ -100,17 +100,17 @@ pip install bad-ass-mcp
 pip install 'bad-ass-mcp[windows]'
 ```
 
-**Linux**: PyGObject and AT-SPI are not on PyPI — install them from your distro:
+**Linux**: PyGObject and AT-SPI are not on PyPI, and the backend shells out to `xdotool`, `xprop`, and ImageMagick's `import` (or KDE's `spectacle`) for clicks and screenshots. Install them from your distro:
 
 ```bash
 # Debian/Ubuntu
-sudo apt install python3-gi gir1.2-atspi-2.0 at-spi2-core
+sudo apt install python3-gi gir1.2-atspi-2.0 at-spi2-core xdotool x11-utils imagemagick
 
 # Arch
-sudo pacman -S python-gobject at-spi2-core
+sudo pacman -S python-gobject at-spi2-core xdotool xorg-xprop imagemagick
 
 # Fedora
-sudo dnf install python3-gobject at-spi2-core
+sudo dnf install python3-gobject at-spi2-core xdotool xprop ImageMagick
 ```
 
 Then make sure AT-SPI is enabled (most desktop environments — GNOME, KDE, XFCE — have it on by default):
