@@ -6,6 +6,25 @@ build-backend = "hatchling.build"
 name = "bad-ass-mcp"
 dynamic = ["version"]
 description = "Cross-platform desktop GUI automation MCP — accessibility tree first, vision as last resort"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "jabberwock" }]
+keywords = ["mcp", "accessibility", "automation", "desktop", "gui", "a11y", "claude"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Desktop Environment",
+]
 requires-python = ">=3.11"
 dependencies = [
     "mcp>=1.0.0,<2",
@@ -15,6 +34,12 @@ dependencies = [
 macos = ["pyobjc-framework-Cocoa>=9.0", "pyobjc-framework-ApplicationServices>=9.0", "pyobjc-framework-Quartz>=9.0"]
 windows = ["comtypes>=1.4"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.9"]
+
+[project.urls]
+Homepage = "https://github.com/HoldMyBeer-gg/bad-ass-mcp"
+Repository = "https://github.com/HoldMyBeer-gg/bad-ass-mcp"
+Issues = "https://github.com/HoldMyBeer-gg/bad-ass-mcp/issues"
+Changelog = "https://github.com/HoldMyBeer-gg/bad-ass-mcp/releases"
 
 [project.scripts]
 bad-ass-mcp = "bad_ass_mcp.server:main"

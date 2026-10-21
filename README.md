@@ -6,7 +6,7 @@ A cross-platform MCP server for desktop GUI automation — driven by accessibili
 
 Works with Claude, Codex, Gemini, Ollama, or any OpenAI-compatible client that supports MCP.
 
-![bad-ass-mcp recording itself interacting with MarkTheCrab](docs/demo.gif)
+![bad-ass-mcp recording itself interacting with MarkTheCrab](https://raw.githubusercontent.com/HoldMyBeer-gg/bad-ass-mcp/main/docs/demo.gif)
 *bad-ass-mcp recording itself interacting with [MarkTheCrab](https://github.com/HoldMyBeer-gg/MarkTheCrab)*
 
 ## Why
@@ -180,10 +180,12 @@ The abstract backend interface means adding a new platform is just implementing 
 
 ## Releasing
 
-Tag a version and the release workflow builds and attaches the wheel automatically:
+Tag a version and the release workflow builds the sdist and wheel, publishes them
+to PyPI via trusted publishing, and attaches them (plus the PyInstaller bundles)
+to the GitHub release:
 
 ```bash
-git tag v0.2.0 && git push --tags
+git tag v1.4.0 && git push --tags
 ```
 
 ## License
