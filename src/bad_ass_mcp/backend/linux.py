@@ -447,32 +447,108 @@ class LinuxBackend(DesktopBackend):
         nodes = self._search(app, role, name)
         return [self._to_handle(n) for n in nodes]
 
-    def click_at(self, x: float, y: float, window_id: str | None = None) -> ActionResult:
-        ix, iy = int(round(x)), int(round(y))
+    _XDO_BUTTONS = {"left": "1", "middle": "2", "right": "3"}
+
+    @staticmethod
+    def _xdotool(*args: str) -> ActionResult:
         try:
-            subprocess.run(
-                ["xdotool", "mousemove", "--sync", str(ix), str(iy)],
-                capture_output=True,
-                check=True,
-            )
-            subprocess.run(
-                ["xdotool", "click", "--clearmodifiers", "1"],
-                capture_output=True,
-                check=True,
-            )
-            time.sleep(0.05)
+            subprocess.run(["xdotool", *args], capture_output=True, check=True)
             return ActionResult(ok=True)
         except FileNotFoundError:
-            return ActionResult(ok=False, error="xdotool not found; install it to use click_at")
+            return ActionResult(
+                ok=False, error="xdotool not found; install it to use pointer tools"
+            )
         except subprocess.CalledProcessError as e:
             return ActionResult(
-                ok=False, error=e.stderr.decode(errors="replace") or "xdotool click failed"
+                ok=False, error=e.stderr.decode(errors="replace") or f"xdotool {args[0]} failed"
             )
 
-    def click(self, handle_id: str) -> ActionResult:
+    def click_at(
+        self,
+        x: float,
+        y: float,
+        window_id: str | None = None,
+        button: str = "left",
+        clicks: int = 1,
+    ) -> ActionResult:
+        btn = self._XDO_BUTTONS.get(button)
+        if btn is None:
+            return ActionResult(ok=False, error=f"Unknown button {button!r}")
+        if clicks < 1:
+            return ActionResult(ok=False, error="clicks must be >= 1")
+        ix, iy = int(round(x)), int(round(y))
+        r = self._xdotool("mousemove", "--sync", str(ix), str(iy))
+        if not r.ok:
+            return r
+        args = ["click", "--clearmodifiers"]
+        if clicks > 1:
+            args += ["--repeat", str(clicks), "--delay", "80"]
+        r = self._xdotool(*args, btn)
+        if r.ok:
+            time.sleep(0.05)
+        return r
+
+    def drag(
+        self,
+        from_x: float,
+        from_y: float,
+        to_x: float,
+        to_y: float,
+        button: str = "left",
+        duration: float = 0.3,
+    ) -> ActionResult:
+        btn = self._XDO_BUTTONS.get(button)
+        if btn is None:
+            return ActionResult(ok=False, error=f"Unknown button {button!r}")
+        steps = max(8, int(duration / 0.015))
+        r = self._xdotool("mousemove", "--sync", str(int(round(from_x))), str(int(round(from_y))))
+        if not r.ok:
+            return r
+        time.sleep(0.05)
+        r = self._xdotool("mousedown", btn)
+        if not r.ok:
+            return r
+        time.sleep(0.05)
+        # Toolkits arm a drag only after the pointer travels while held, and
+        # drop targets want a stream of motion events, so interpolate.
+        for i in range(1, steps + 1):
+            t = i / steps
+            px = int(round(from_x + (to_x - from_x) * t))
+            py = int(round(from_y + (to_y - from_y) * t))
+            r = self._xdotool("mousemove", "--sync", str(px), str(py))
+            if not r.ok:
+                self._xdotool("mouseup", btn)
+                return r
+            time.sleep(max(duration, 0.1) / steps)
+        time.sleep(0.05)
+        r = self._xdotool("mouseup", btn)
+        if r.ok:
+            time.sleep(0.05)
+        return r
+
+    def element_bounds(self, handle_id: str) -> tuple[float, float, float, float] | None:
         node = self._resolve(handle_id)
         try:
+            ext = node.query_component().get_extents(Atspi.CoordType.SCREEN)
+        except Exception:
+            return None
+        if ext is None or ext.width <= 0 or ext.height <= 0:
+            return None
+        return (float(ext.x), float(ext.y), float(ext.width), float(ext.height))
+
+    def click(self, handle_id: str, button: str = "left", clicks: int = 1) -> ActionResult:
+        node = self._resolve(handle_id)
+        if button != "left" or clicks != 1:
+            # AT-SPI actions are single primary activations; go physical.
+            return self._click_element_at(handle_id, button=button, clicks=clicks)
+        try:
             n = node.get_n_actions()
+        except Exception:
+            n = 0
+        if n <= 0:
+            # No action interface (custom-drawn widgets): click the center.
+            return self._click_element_at(handle_id)
+        try:
             # Prefer "click" > "press" > action[0]
             names = [node.get_action_name(i) for i in range(n)]
             idx = next((i for i, a in enumerate(names) if a in ("click", "press")), 0)
@@ -480,7 +556,7 @@ class LinuxBackend(DesktopBackend):
             time.sleep(0.15)  # let async UI insertions settle before next tool call
             return ActionResult(ok=True)
         except Exception as e:
-            return ActionResult(ok=False, error=str(e))
+            return ActionResult(ok=False, error=f"Cannot click: {e}")
 
     def type_text(self, handle_id: str, text: str) -> ActionResult:
         node = self._resolve(handle_id)
@@ -553,17 +629,28 @@ class LinuxBackend(DesktopBackend):
 
     def select_option(self, handle_id: str, value: str) -> ActionResult:
         node = self._resolve(handle_id)
+        attempts: list[str] = []
         # Walk children looking for a matching option and select it
         nodes = self._search(node, role="menu item", name=value)
         if not nodes:
             nodes = self._search(node, role="option", name=value)
-        if not nodes:
-            return ActionResult(ok=False, error=f"Option {value!r} not found")
-        try:
-            nodes[0].do_action(0)
-            return ActionResult(ok=True)
-        except Exception as e:
-            return ActionResult(ok=False, error=str(e))
+        if nodes:
+            try:
+                nodes[0].do_action(0)
+                time.sleep(0.1)
+                if self._option_selected(handle_id, value) is not False:
+                    return ActionResult(ok=True)
+                attempts.append("item activated but value did not change")
+            except Exception as e:
+                attempts.append(f"do_action: {e}")
+        else:
+            attempts.append("no matching item in AT-SPI subtree")
+        # Last resort: focus with a real click, type the item, Return.
+        r = self._select_option_by_keystrokes(handle_id, value)
+        if r.ok:
+            return r
+        attempts.append(f"keystrokes: {r.error}")
+        return ActionResult(ok=False, error=f"Option {value!r}: " + "; ".join(attempts))
 
     def get_value(self, handle_id: str) -> str | None:
         node = self._resolve(handle_id)
@@ -969,11 +1056,7 @@ class LinuxBackend(DesktopBackend):
         return handle
 
     def stop_recording(self, handle: str, output_path: str) -> str:
-        import os
-
-        canonical = os.path.realpath(os.path.expanduser(output_path))
-        if not canonical.lower().endswith(".gif"):
-            raise ValueError(f"output_path must end with .gif (got {output_path!r})")
+        canonical, fmt = self._recording_target(output_path)
 
         if handle not in self._recordings:
             raise ValueError(f"No active recording with handle {handle!r}")
@@ -991,31 +1074,7 @@ class LinuxBackend(DesktopBackend):
             proc.kill()
             proc.wait()
 
-        # Convert to GIF using ffmpeg palette trick for quality
-        result = subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-i",
-                video_path,
-                "-vf",
-                "fps=12,scale=900:-1:flags=lanczos,split[s0][s1];"
-                "[s0]palettegen=max_colors=128[p];[s1][p]paletteuse=dither=bayer",
-                canonical,
-            ],
-            capture_output=True,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.decode(errors="replace"))
-
-        import os
-
-        try:
-            os.unlink(video_path)
-        except Exception:
-            pass
-
-        return canonical
+        return self._export_recording(video_path, canonical, fmt)
 
     _KEY_SYMS = {
         "Return": 0xFF0D,

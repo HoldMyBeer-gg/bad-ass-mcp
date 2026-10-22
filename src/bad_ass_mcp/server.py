@@ -168,11 +168,21 @@ def find_elements(
 
 
 @mcp.tool()
-def click(handle_id: str) -> dict:
-    """Click / invoke an element. Foreground-independent — does not steal focus.
-    Get handle_id from find_elements() or get_tree()."""
+def click(handle_id: str, button: str = "left", clicks: int = 1) -> dict:
+    """Click / invoke an element. Get handle_id from find_elements() or get_tree().
+
+    A plain left single click invokes the element's accessibility action
+    (foreground-independent, does not steal focus). If the element exposes
+    no actionable pattern, it falls back to a real pointer click at the
+    element's center, so custom-drawn panels and tab strips that only
+    highlight on a11y Select still get activated.
+
+    button="right" opens context menus; clicks=2 is a real double-click
+    (opens list rows / tree items whose a11y invoke only selects them).
+    Both always use real pointer events at the element's center, so make
+    sure the window is on top for those."""
     try:
-        result = _backend().click(handle_id)
+        result = _backend().click(handle_id, button=button, clicks=clicks)
         return {"ok": result.ok, "error": result.error}
     except StaleHandleError as e:
         return {"ok": False, "error": f"Stale handle: {e}"}
@@ -191,7 +201,14 @@ def type_text(handle_id: str, text: str) -> dict:
 
 @mcp.tool()
 def select_option(handle_id: str, value: str) -> dict:
-    """Select an option in a combo box or list by its visible text."""
+    """Select an option in a combo box or list by its visible text.
+
+    Tries the a11y item list, then SetValue on the control, then a
+    keystroke fallback (real click to focus, type the item text, Return).
+    Each strategy is verified by reading the value back; a strategy that
+    leaves the control showing something else counts as a failure, so
+    ok=false means it really did not change. The keystroke fallback needs
+    the window on top."""
     try:
         result = _backend().select_option(handle_id, value)
         return {"ok": result.ok, "error": result.error}
@@ -307,8 +324,17 @@ def screenshot(window_id: str | None = None, output_path: str | None = None) -> 
 
 
 @mcp.tool()
-def click_at(x: float, y: float, window_id: str | None = None) -> dict:
+def click_at(
+    x: float,
+    y: float,
+    window_id: str | None = None,
+    button: str = "left",
+    clicks: int = 1,
+) -> dict:
     """Click at absolute screen coordinates (top-left origin, in points).
+
+    button: "left" (default), "right" (context menus) or "middle".
+    clicks: 1 (default) or 2 for a real double-click.
 
     Fallback for when accessibility-based clicking can't reach a target —
     webview content (Tauri/Electron/CEF), custom-drawn UI, OpenGL/canvas, etc.
@@ -322,7 +348,57 @@ def click_at(x: float, y: float, window_id: str | None = None) -> dict:
     window_id is advisory only — the call cannot verify delivery, just that
     the events were posted."""
     try:
-        result = _backend().click_at(x, y, window_id)
+        result = _backend().click_at(x, y, window_id, button=button, clicks=clicks)
+        return {"ok": result.ok, "error": result.error}
+    except NotImplementedError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@mcp.tool()
+def drag(
+    from_x: float | None = None,
+    from_y: float | None = None,
+    to_x: float | None = None,
+    to_y: float | None = None,
+    from_handle: str | None = None,
+    to_handle: str | None = None,
+    button: str = "left",
+    duration: float = 0.3,
+) -> dict:
+    """Drag-and-drop with real pointer events: press at the source, move to
+    the target over `duration` seconds, release.
+
+    Give either screen coordinates (from_x/from_y, to_x/to_y, top-left
+    origin in points) or element handles (from_handle/to_handle, from
+    find_elements or get_tree); a handle is resolved to its on-screen
+    center. You can mix: a handle on one end and coordinates on the other.
+
+    For drop targets that have no accessibility path — editors that only
+    accept drops from another panel, list reordering, sliders. Delivery is
+    system-global, so both ends must be visible and the window on top."""
+    be = _backend()
+    try:
+        if from_handle:
+            c = be._element_center(from_handle)
+            if c is None:
+                return {"ok": False, "error": "from_handle reports no screen bounds"}
+            from_x, from_y = c
+        if to_handle:
+            c = be._element_center(to_handle)
+            if c is None:
+                return {"ok": False, "error": "to_handle reports no screen bounds"}
+            to_x, to_y = c
+    except StaleHandleError as e:
+        return {"ok": False, "error": f"Stale handle: {e}"}
+    if None in (from_x, from_y, to_x, to_y):
+        return {
+            "ok": False,
+            "error": "Need from_x/from_y and to_x/to_y, or from_handle/to_handle",
+        }
+    try:
+        result = be.drag(from_x, from_y, to_x, to_y, button=button, duration=duration)
         return {"ok": result.ok, "error": result.error}
     except NotImplementedError as e:
         return {"ok": False, "error": str(e)}
@@ -344,9 +420,13 @@ def start_recording(window_id: str | None = None, fps: int = 15) -> dict:
 
 @mcp.tool()
 def stop_recording(handle: str, output_path: str) -> dict:
-    """Stop recording and export as a GIF.
-    output_path must end in .gif — e.g. '/tmp/demo.gif'.
-    Returns the path to the finished GIF."""
+    """Stop recording and export.
+
+    output_path must end in .gif or .mp4. GIF is transcoded and downscaled
+    to 900px wide at 12 fps, fine for a short clip in a README. MP4 keeps
+    the full-resolution H.264 capture with no re-encode, so use it for
+    anything longer than a minute or two (a 20-minute GIF is both huge and
+    slow to build). Returns the path to the finished file."""
     try:
         path = _backend().stop_recording(handle, output_path)
         return {"ok": True, "path": path}

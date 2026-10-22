@@ -24,12 +24,23 @@ try:
         CGEventPost,
         CGEventPostToPid,
         CGEventSetFlags,
+        CGEventSetIntegerValueField,
         CGWindowListCopyWindowInfo,
         kCGEventFlagMaskCommand,
         kCGEventLeftMouseDown,
+        kCGEventLeftMouseDragged,
         kCGEventLeftMouseUp,
+        kCGEventOtherMouseDown,
+        kCGEventOtherMouseDragged,
+        kCGEventOtherMouseUp,
+        kCGEventRightMouseDown,
+        kCGEventRightMouseDragged,
+        kCGEventRightMouseUp,
         kCGHIDEventTap,
+        kCGMouseButtonCenter,
         kCGMouseButtonLeft,
+        kCGMouseButtonRight,
+        kCGMouseEventClickState,
         kCGNullWindowID,
         kCGSessionEventTap,
         kCGWindowListExcludeDesktopElements,
@@ -95,8 +106,34 @@ def _quartz_key_press(keycode: int, flags: int = 0, pid: int | None = None) -> N
         CGEventPost(kCGSessionEventTap, up)
 
 
-def _quartz_mouse_click(x: float, y: float) -> None:
-    """Inject a left mouse click at the given screen coordinates via the HID
+def _quartz_button(button: str) -> tuple[int, int, int, int]:
+    """(down_type, up_type, dragged_type, CGMouseButton) for a button name."""
+    if button == "left":
+        return (
+            kCGEventLeftMouseDown,
+            kCGEventLeftMouseUp,
+            kCGEventLeftMouseDragged,
+            kCGMouseButtonLeft,
+        )
+    if button == "right":
+        return (
+            kCGEventRightMouseDown,
+            kCGEventRightMouseUp,
+            kCGEventRightMouseDragged,
+            kCGMouseButtonRight,
+        )
+    if button == "middle":
+        return (
+            kCGEventOtherMouseDown,
+            kCGEventOtherMouseUp,
+            kCGEventOtherMouseDragged,
+            kCGMouseButtonCenter,
+        )
+    raise ValueError(f"Unknown button {button!r}")
+
+
+def _quartz_mouse_click(x: float, y: float, button: str = "left", clicks: int = 1) -> None:
+    """Inject a mouse click at the given screen coordinates via the HID
     event tap.
 
     Delivery via kCGHIDEventTap is the lowest-level path — the WindowServer
@@ -108,12 +145,43 @@ def _quartz_mouse_click(x: float, y: float) -> None:
     Tradeoff: HID delivery is system-global, so this DOES affect the focused
     window — whatever is at (x, y) gets the click. Coordinates are in the
     global display space (top-left origin), same as AXFrame.
+
+    clicks > 1 stamps kCGMouseEventClickState on each press/release so AppKit
+    sees a genuine double-click (clickCount 2) rather than two singles.
     """
     point = (float(x), float(y))
-    down = CGEventCreateMouseEvent(None, kCGEventLeftMouseDown, point, kCGMouseButtonLeft)
-    up = CGEventCreateMouseEvent(None, kCGEventLeftMouseUp, point, kCGMouseButtonLeft)
-    CGEventPost(kCGHIDEventTap, down)
-    CGEventPost(kCGHIDEventTap, up)
+    down_t, up_t, _, btn = _quartz_button(button)
+    for n in range(1, clicks + 1):
+        down = CGEventCreateMouseEvent(None, down_t, point, btn)
+        up = CGEventCreateMouseEvent(None, up_t, point, btn)
+        if clicks > 1:
+            CGEventSetIntegerValueField(down, kCGMouseEventClickState, n)
+            CGEventSetIntegerValueField(up, kCGMouseEventClickState, n)
+        CGEventPost(kCGHIDEventTap, down)
+        CGEventPost(kCGHIDEventTap, up)
+        if n < clicks:
+            time.sleep(0.06)
+
+
+def _quartz_mouse_drag(
+    x1: float, y1: float, x2: float, y2: float, button: str = "left", duration: float = 0.3
+) -> None:
+    """Press, interpolate kCGEvent*MouseDragged events to the target, release.
+
+    AppKit's drag session only starts once the pointer moves a few points
+    while held, and NSDraggingDestination needs a stream of draggingUpdated
+    calls to decide to accept, so the path is stepped rather than jumped."""
+    down_t, up_t, drag_t, btn = _quartz_button(button)
+    steps = max(8, int(duration / 0.015))
+    CGEventPost(kCGHIDEventTap, CGEventCreateMouseEvent(None, down_t, (x1, y1), btn))
+    time.sleep(0.05)
+    for i in range(1, steps + 1):
+        t = i / steps
+        pt = (x1 + (x2 - x1) * t, y1 + (y2 - y1) * t)
+        CGEventPost(kCGHIDEventTap, CGEventCreateMouseEvent(None, drag_t, pt, btn))
+        time.sleep(max(duration, 0.1) / steps)
+    time.sleep(0.05)
+    CGEventPost(kCGHIDEventTap, CGEventCreateMouseEvent(None, up_t, (x2, y2), btn))
 
 
 def _cg_onscreen_windows() -> list[dict]:
@@ -559,16 +627,27 @@ class MacOSBackend(DesktopBackend):
         pid = self._pid_for_window(window_id)
         return [self._to_handle(n, pid) for n in self._search(app, role, name)]
 
-    def click(self, handle_id: str) -> ActionResult:
+    def element_bounds(self, handle_id: str) -> tuple[float, float, float, float] | None:
         element = self._resolve(handle_id)
+        rect = _ax_value_to_rect(_ax_get(element, "AXFrame"))
+        if rect and rect[2] > 0 and rect[3] > 0:
+            return rect
+        return None
+
+    def click(self, handle_id: str, button: str = "left", clicks: int = 1) -> ActionResult:
+        element = self._resolve(handle_id)
+        if button != "left" or clicks != 1:
+            # AX has no right- or double-click action; use real pointer events.
+            return self._click_element_at(handle_id, button=button, clicks=clicks)
         try:
             for action in ("AXPress", "AXPick", "AXConfirm"):
                 if _ax_do(element, action):
                     time.sleep(0.15)
                     return ActionResult(ok=True)
-            return ActionResult(ok=False, error="No actionable AX action found")
         except Exception as e:
             return ActionResult(ok=False, error=str(e))
+        # No AX action (custom views, canvas UI): click the element's center.
+        return self._click_element_at(handle_id)
 
     def type_text(self, handle_id: str, text: str) -> ActionResult:
         element = self._resolve(handle_id)
@@ -593,15 +672,29 @@ class MacOSBackend(DesktopBackend):
 
     def select_option(self, handle_id: str, value: str) -> ActionResult:
         element = self._resolve(handle_id)
+        attempts: list[str] = []
         for role in ("menuitem", "option"):
             nodes = self._search(element, role=role, name=value)
-            if nodes:
-                try:
-                    _ax_do(nodes[0], "AXPress")
-                    return ActionResult(ok=True)
-                except Exception as e:
-                    return ActionResult(ok=False, error=str(e))
-        return ActionResult(ok=False, error=f"Option {value!r} not found")
+            if not nodes:
+                continue
+            try:
+                _ax_do(nodes[0], "AXPress")
+            except Exception as e:
+                attempts.append(f"AXPress {role}: {e}")
+                break
+            time.sleep(0.1)
+            if self._option_selected(handle_id, value) is not False:
+                return ActionResult(ok=True)
+            attempts.append(f"{role} pressed but value did not change")
+            break
+        else:
+            attempts.append("no matching item in AX subtree")
+        # Last resort: focus with a real click, type the item, Return.
+        r = self._select_option_by_keystrokes(handle_id, value)
+        if r.ok:
+            return r
+        attempts.append(f"keystrokes: {r.error}")
+        return ActionResult(ok=False, error=f"Option {value!r}: " + "; ".join(attempts))
 
     def get_value(self, handle_id: str) -> str | None:
         element = self._resolve(handle_id)
@@ -835,11 +928,7 @@ class MacOSBackend(DesktopBackend):
         return handle
 
     def stop_recording(self, handle: str, output_path: str) -> str:
-        import os
-
-        canonical = os.path.realpath(os.path.expanduser(output_path))
-        if not canonical.lower().endswith(".gif"):
-            raise ValueError(f"output_path must end with .gif (got {output_path!r})")
+        canonical, fmt = self._recording_target(output_path)
 
         if handle not in self._recordings:
             raise ValueError(f"No active recording with handle {handle!r}")
@@ -855,38 +944,40 @@ class MacOSBackend(DesktopBackend):
             proc.kill()
             proc.wait()
 
-        result = subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-i",
-                video_path,
-                "-vf",
-                "fps=12,scale=900:-1:flags=lanczos,split[s0][s1];"
-                "[s0]palettegen=max_colors=128[p];[s1][p]paletteuse=dither=bayer",
-                canonical,
-            ],
-            capture_output=True,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.decode(errors="replace"))
+        return self._export_recording(video_path, canonical, fmt)
 
-        import os
-
-        try:
-            os.unlink(video_path)
-        except Exception:
-            pass
-        return canonical
-
-    def click_at(self, x: float, y: float, window_id: str | None = None) -> ActionResult:
+    def click_at(
+        self,
+        x: float,
+        y: float,
+        window_id: str | None = None,
+        button: str = "left",
+        clicks: int = 1,
+    ) -> ActionResult:
         # window_id is accepted for API parity but ignored on macOS: HID-tap
         # delivery is global, and PID-targeted delivery (CGEventPostToPid)
         # was tried first but silently no-ops on webview content because it
         # bypasses WindowServer hit-testing. Caller is responsible for
         # ensuring (x, y) lands on the intended window.
+        if clicks < 1:
+            return ActionResult(ok=False, error="clicks must be >= 1")
         try:
-            _quartz_mouse_click(x, y)
+            _quartz_mouse_click(x, y, button=button, clicks=clicks)
+            return ActionResult(ok=True)
+        except Exception as e:
+            return ActionResult(ok=False, error=str(e))
+
+    def drag(
+        self,
+        from_x: float,
+        from_y: float,
+        to_x: float,
+        to_y: float,
+        button: str = "left",
+        duration: float = 0.3,
+    ) -> ActionResult:
+        try:
+            _quartz_mouse_drag(from_x, from_y, to_x, to_y, button=button, duration=duration)
             return ActionResult(ok=True)
         except Exception as e:
             return ActionResult(ok=False, error=str(e))

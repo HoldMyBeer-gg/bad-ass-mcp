@@ -185,13 +185,13 @@ def test_resolve_unknown_handle_raises():
 
 
 @_win32
-def test_stop_recording_rejects_non_gif_extension():
+def test_stop_recording_rejects_unknown_extension():
     from bad_ass_mcp.backend.windows import WindowsBackend
 
     backend = WindowsBackend()
     backend._recordings["h"] = (MagicMock(), "C:\\tmp\\bam-rec-h.mp4")
-    with pytest.raises(ValueError, match=r"\.gif"):
-        backend.stop_recording("h", "C:\\tmp\\output.mp4")
+    with pytest.raises(ValueError, match=r"\.gif or \.mp4"):
+        backend.stop_recording("h", "C:\\tmp\\output.webm")
 
 
 @_win32
@@ -242,3 +242,45 @@ def test_wake_chromium_successful_wake_cached_true():
         assert backend._wake_chromium(1234, 43) is True
 
     efh.assert_called_once()  # second call served from cache
+
+
+# ── mouse button flags ───────────────────────────────────────────────
+
+
+def test_mouse_button_flags_cover_three_buttons():
+    from bad_ass_mcp.backend.windows import _MOUSE_BUTTON_FLAGS
+
+    assert set(_MOUSE_BUTTON_FLAGS) == {"left", "right", "middle"}
+    # MOUSEEVENTF_LEFTDOWN/UP, RIGHTDOWN/UP, MIDDLEDOWN/UP from winuser.h
+    assert _MOUSE_BUTTON_FLAGS["left"] == (0x0002, 0x0004)
+    assert _MOUSE_BUTTON_FLAGS["right"] == (0x0008, 0x0010)
+    assert _MOUSE_BUTTON_FLAGS["middle"] == (0x0020, 0x0040)
+
+
+@_win32
+def test_click_at_rejects_unknown_button():
+    from bad_ass_mcp.backend.windows import WindowsBackend
+
+    backend = WindowsBackend()
+    r = backend.click_at(1, 1, button="trackball")
+    assert not r.ok
+
+
+@_win32
+def test_click_at_double_sends_two_press_release_pairs():
+    from bad_ass_mcp.backend.windows import WindowsBackend
+
+    backend = WindowsBackend()
+    sent: list[list[tuple[int, float, float]]] = []
+
+    def fake_send(events):
+        sent.append(list(events))
+        from bad_ass_mcp.types import ActionResult
+
+        return ActionResult(ok=True)
+
+    with patch.object(backend, "_send_mouse", side_effect=fake_send):
+        assert backend.click_at(5, 6, button="right", clicks=2).ok
+    # one bare move, then DOWN/UP ×2 with right-button flags
+    assert sent[0] == [(0, 5, 6)]
+    assert [f for f, _, _ in sent[1]] == [0x0008, 0x0010, 0x0008, 0x0010]

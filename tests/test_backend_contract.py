@@ -336,3 +336,112 @@ def test_run_sequence_aborts_at_runtime_limit(backend, capsys):
     assert any(r.get("error") == "sequence runtime limit exceeded" for r in results)
     assert "wall-clock limit" in capsys.readouterr().err
     _ = _MAX_SEQUENCE_RUNTIME  # keep import used
+
+
+# ── click: button / clicks / coordinate fallback ──────────────────────
+
+
+def test_click_right_button_uses_element_center(backend):
+    r = backend.click("btn-ok", button="right")
+    assert r.ok
+    # btn-ok bounds are (10, 10, 80, 30) → center (50, 25)
+    assert backend.pointer_log == [("click", 50.0, 25.0, "right", 1)]
+
+
+def test_click_double_uses_element_center(backend):
+    r = backend.click("btn-ok", clicks=2)
+    assert r.ok
+    assert backend.pointer_log == [("click", 50.0, 25.0, "left", 2)]
+
+
+def test_click_right_without_bounds_fails_cleanly(backend):
+    r = backend.click("btn-cancel", button="right")
+    assert not r.ok
+    assert "bounds" in (r.error or "")
+    assert backend.pointer_log == []
+
+
+def test_click_plain_left_does_not_go_physical(backend):
+    assert backend.click("btn-ok").ok
+    assert backend.pointer_log == []
+
+
+# ── select_option keystroke fallback ─────────────────────────────────
+
+
+def test_select_by_keystrokes_clicks_types_and_commits(backend):
+    backend._values["combo-size"] = "Large"
+    r = backend._select_option_by_keystrokes("combo-size", "Large")
+    assert r.ok
+    # combo-size bounds (10, 50, 120, 24) → center (70, 62)
+    assert backend.pointer_log == [("click", 70.0, 62.0, "left", 1)]
+    assert backend.key_log == list("Large") + ["Return"]
+
+
+def test_select_by_keystrokes_reports_mismatch(backend):
+    backend._values["combo-size"] = "Medium"  # control never changes
+    r = backend._select_option_by_keystrokes("combo-size", "Large")
+    assert not r.ok
+    assert "Medium" in (r.error or "")
+
+
+def test_select_by_keystrokes_without_bounds_fails(backend):
+    r = backend._select_option_by_keystrokes("txt-name", "x")
+    assert not r.ok
+    assert backend.key_log == []
+
+
+def test_option_selected_is_none_when_unreadable(backend):
+    assert backend._option_selected("btn-ok", "OK") is None
+
+
+def test_option_selected_compares_case_insensitively(backend):
+    backend._values["combo-size"] = "  large "
+    assert backend._option_selected("combo-size", "Large") is True
+    assert backend._option_selected("combo-size", "Small") is False
+
+
+# ── drag / run_sequence pointer actions ───────────────────────────────
+
+
+def test_run_sequence_click_with_button_and_clicks(backend):
+    res = backend.run_sequence([{"action": "click", "handle": "btn-ok", "button": "right"}])
+    assert res[0]["ok"]
+    assert backend.pointer_log[-1] == ("click", 50.0, 25.0, "right", 1)
+
+
+def test_run_sequence_click_at_passes_button(backend):
+    res = backend.run_sequence(
+        [{"action": "click_at", "x": 1, "y": 2, "button": "middle", "clicks": 2}]
+    )
+    assert res[0]["ok"]
+    assert backend.pointer_log == [("click", 1.0, 2.0, "middle", 2)]
+
+
+def test_run_sequence_drag(backend):
+    res = backend.run_sequence([{"action": "drag", "from_x": 1, "from_y": 2, "to_x": 3, "to_y": 4}])
+    assert res[0]["ok"]
+    assert backend.pointer_log == [("drag", 1.0, 2.0, 3.0, 4.0, "left")]
+
+
+# ── recording output validation ──────────────────────────────────────
+
+
+def test_recording_target_accepts_gif_and_mp4(backend):
+    assert backend._recording_target("/tmp/a.gif")[1] == "gif"
+    assert backend._recording_target("/tmp/a.MP4")[1] == "mp4"
+
+
+def test_recording_target_rejects_other_extensions(backend):
+    with pytest.raises(ValueError, match=r"\.gif or \.mp4"):
+        backend._recording_target("/tmp/a.webm")
+
+
+def test_export_recording_mp4_moves_without_ffmpeg(backend, tmp_path):
+    src = tmp_path / "bam-rec-x.mp4"
+    src.write_bytes(b"not really video")
+    dst = tmp_path / "out.mp4"
+    out = backend._export_recording(str(src), str(dst), "mp4")
+    assert out == str(dst)
+    assert dst.read_bytes() == b"not really video"
+    assert not src.exists()

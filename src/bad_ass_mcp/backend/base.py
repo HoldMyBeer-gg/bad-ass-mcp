@@ -103,8 +103,40 @@ class DesktopBackend(ABC):
         """Find elements by role and/or name. Returns all matches unless index is set."""
 
     @abstractmethod
-    def click(self, handle_id: str) -> ActionResult:
-        """Invoke the element's primary action. Foreground-independent where possible."""
+    def click(self, handle_id: str, button: str = "left", clicks: int = 1) -> ActionResult:
+        """Invoke the element's primary action. Foreground-independent where possible.
+
+        For button != "left" or clicks > 1 there is no a11y action to invoke, so
+        implementations go straight to element_bounds() + click_at(). A plain
+        left click should also fall back to that path when the element exposes
+        no actionable pattern (custom-drawn panels, tab strips that only
+        highlight on Select, list rows that need a real double-click)."""
+
+    def element_bounds(self, handle_id: str) -> tuple[float, float, float, float] | None:
+        """Return (x, y, width, height) of an element in global screen coords.
+
+        None when the platform cannot report it. Used for the coordinate
+        fallbacks in click / select_option / drag."""
+        return None
+
+    def _element_center(self, handle_id: str) -> tuple[float, float] | None:
+        b = self.element_bounds(handle_id)
+        if not b or b[2] <= 0 or b[3] <= 0:
+            return None
+        return (b[0] + b[2] / 2.0, b[1] + b[3] / 2.0)
+
+    def _click_element_at(
+        self, handle_id: str, button: str = "left", clicks: int = 1
+    ) -> ActionResult:
+        """Coordinate fallback: resolve the element's center and send a real
+        pointer click there. Shared by every backend's click()."""
+        center = self._element_center(handle_id)
+        if center is None:
+            return ActionResult(
+                ok=False,
+                error="No actionable a11y pattern and element reports no screen bounds",
+            )
+        return self.click_at(center[0], center[1], None, button=button, clicks=clicks)
 
     @abstractmethod
     def type_text(self, handle_id: str, text: str) -> ActionResult:
@@ -112,7 +144,55 @@ class DesktopBackend(ABC):
 
     @abstractmethod
     def select_option(self, handle_id: str, value: str) -> ActionResult:
-        """Select an option in a combo box / list by visible text or value."""
+        """Select an option in a combo box / list by visible text or value.
+
+        Implementations must verify the selection took effect when the
+        control's value is readable, and report failure rather than returning
+        ok after a silent no-op. _select_option_by_keystrokes() is the shared
+        last-resort strategy."""
+
+    def _option_selected(self, handle_id: str, value: str) -> bool | None:
+        """True/False when the element's current value can be read and
+        compared to `value` (case-insensitive, trimmed); None when the
+        control exposes no readable value so the result cannot be checked."""
+        try:
+            current = self.get_value(handle_id)
+        except Exception:
+            return None
+        if current is None or not str(current).strip():
+            return None
+        return str(current).strip().lower() == value.strip().lower()
+
+    def _select_option_by_keystrokes(self, handle_id: str, value: str) -> ActionResult:
+        """Last-resort combo-box strategy: real click on the control to focus
+        it, type the item text (Win32/Qt/Cocoa combos do incremental search
+        on typed characters), press Return to commit, then read the value
+        back. Used when the a11y item search finds nothing and SetValue
+        silently fails — both happen on stock Win32 droplists."""
+        center = self._element_center(handle_id)
+        if center is None:
+            return ActionResult(ok=False, error="Element reports no screen bounds")
+        r = self.click_at(center[0], center[1], None)
+        if not r.ok:
+            return r
+        time.sleep(0.15)
+        for ch in value:
+            r = self.press_key(ch, None)
+            if not r.ok:
+                return r
+            time.sleep(0.02)
+        time.sleep(0.1)
+        r = self.press_key("Return", None)
+        if not r.ok:
+            return r
+        time.sleep(0.15)
+        verified = self._option_selected(handle_id, value)
+        if verified is False:
+            return ActionResult(
+                ok=False,
+                error=(f"Typed {value!r} but the control now reads {self.get_value(handle_id)!r}"),
+            )
+        return ActionResult(ok=True)
 
     @abstractmethod
     def get_value(self, handle_id: str) -> str | None:
@@ -144,13 +224,85 @@ class DesktopBackend(ABC):
         target window cannot be located (rather than falling back to a full
         desktop capture)."""
 
-    def click_at(self, x: float, y: float, window_id: str | None = None) -> ActionResult:
+    def click_at(
+        self,
+        x: float,
+        y: float,
+        window_id: str | None = None,
+        button: str = "left",
+        clicks: int = 1,
+    ) -> ActionResult:
         """Click at absolute screen coordinates.
 
         Foreground-independent fallback for when accessibility-based clicking
         isn't available — webview content, custom-drawn UI, etc. Backends that
-        can scope events to a specific process should use window_id to do so."""
+        can scope events to a specific process should use window_id to do so.
+
+        button: "left" | "right" | "middle". clicks: 1 or 2 (double-click)."""
         raise NotImplementedError("click_at is not implemented for this platform yet")
+
+    def drag(
+        self,
+        from_x: float,
+        from_y: float,
+        to_x: float,
+        to_y: float,
+        button: str = "left",
+        duration: float = 0.3,
+    ) -> ActionResult:
+        """Press at (from_x, from_y), move to (to_x, to_y) over `duration`
+        seconds, release. Real pointer events — for drag-and-drop targets
+        that have no a11y path (editors that only accept drops from another
+        panel, canvas reorder, sliders)."""
+        raise NotImplementedError("drag is not implemented for this platform yet")
+
+    @staticmethod
+    def _recording_target(output_path: str) -> tuple[str, str]:
+        """Validate a stop_recording output path. Returns (canonical, fmt)
+        where fmt is "gif" or "mp4". The path is realpath'd first so a
+        symlink can't smuggle a different extension through."""
+        import os
+
+        canonical = os.path.realpath(os.path.expanduser(output_path))
+        lower = canonical.lower()
+        if lower.endswith(".gif"):
+            return canonical, "gif"
+        if lower.endswith(".mp4"):
+            return canonical, "mp4"
+        raise ValueError(f"output_path must end with .gif or .mp4 (got {output_path!r})")
+
+    @staticmethod
+    def _export_recording(video_path: str, canonical: str, fmt: str) -> str:
+        """Finish a stopped recording: transcode to GIF, or move the already
+        H.264-encoded capture into place for mp4 (no re-encode, so a
+        half-hour session finishes instantly and keeps full resolution)."""
+        import os
+        import shutil
+        import subprocess
+
+        if fmt == "mp4":
+            shutil.move(video_path, canonical)
+            return canonical
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                video_path,
+                "-vf",
+                "fps=12,scale=900:-1:flags=lanczos,split[s0][s1];"
+                "[s0]palettegen=max_colors=128[p];[s1][p]paletteuse=dither=bayer",
+                canonical,
+            ],
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.decode(errors="replace"))
+        try:
+            os.unlink(video_path)
+        except Exception:
+            pass
+        return canonical
 
     @abstractmethod
     def start_recording(self, window_id: str | None = None, fps: int = 15) -> str:
@@ -158,7 +310,9 @@ class DesktopBackend(ABC):
 
     @abstractmethod
     def stop_recording(self, handle: str, output_path: str) -> str:
-        """Stop recording and export as GIF. Returns the output path."""
+        """Stop recording and export. output_path ends in .gif (transcoded,
+        downscaled) or .mp4 (the raw H.264 capture, moved into place).
+        Returns the output path."""
 
     @abstractmethod
     def press_key(self, key: str, window_id: str | None = None) -> ActionResult:
@@ -198,8 +352,11 @@ class DesktopBackend(ABC):
         """Execute a list of actions server-side in one call.
 
         Supported actions:
-          {"action": "click",            "handle": "..."}
-          {"action": "click_at",         "x": 100.0, "y": 200.0, "window_id": null}
+          {"action": "click",            "handle": "...", "button": "left", "clicks": 1}
+          {"action": "click_at",         "x": 100.0, "y": 200.0, "window_id": null,
+                                         "button": "left", "clicks": 1}
+          {"action": "drag",             "from_x": 0, "from_y": 0, "to_x": 0, "to_y": 0,
+                                         "button": "left", "duration": 0.3}
           {"action": "type",             "handle": "...", "text": "..."}
           {"action": "key",              "key": "Return", "window_id": null}
           {"action": "select",           "handle": "...", "value": "..."}
@@ -238,10 +395,30 @@ class DesktopBackend(ABC):
 
             try:
                 if action == "click":
-                    r = self.click(step["handle"])
+                    r = self.click(
+                        step["handle"],
+                        button=step.get("button", "left"),
+                        clicks=int(step.get("clicks", 1)),
+                    )
                     entry.update(ok=r.ok, error=r.error)
                 elif action == "click_at":
-                    r = self.click_at(float(step["x"]), float(step["y"]), step.get("window_id"))
+                    r = self.click_at(
+                        float(step["x"]),
+                        float(step["y"]),
+                        step.get("window_id"),
+                        button=step.get("button", "left"),
+                        clicks=int(step.get("clicks", 1)),
+                    )
+                    entry.update(ok=r.ok, error=r.error)
+                elif action == "drag":
+                    r = self.drag(
+                        float(step["from_x"]),
+                        float(step["from_y"]),
+                        float(step["to_x"]),
+                        float(step["to_y"]),
+                        button=step.get("button", "left"),
+                        duration=float(step.get("duration", 0.3)),
+                    )
                     entry.update(ok=r.ok, error=r.error)
                 elif action == "type":
                     r = self.type_text(step["handle"], step["text"])

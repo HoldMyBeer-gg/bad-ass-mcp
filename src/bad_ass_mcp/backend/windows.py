@@ -71,6 +71,21 @@ _WM_CHAR = 0x0102
 _WM_PASTE = 0x0302
 _CF_UNICODETEXT = 13
 
+# SendInput mouse flags (MOUSEEVENTF_*)
+_MOUSEEVENTF_MOVE = 0x0001
+_MOUSEEVENTF_ABSOLUTE = 0x8000
+_MOUSE_BUTTON_FLAGS: dict[str, tuple[int, int]] = {
+    "left": (0x0002, 0x0004),
+    "right": (0x0008, 0x0010),
+    "middle": (0x0020, 0x0040),
+}
+_SM_XVIRTUALSCREEN = 76
+_SM_YVIRTUALSCREEN = 77
+_SM_CXVIRTUALSCREEN = 78
+_SM_CYVIRTUALSCREEN = 79
+_SRCCOPY = 0x00CC0020
+_CAPTUREBLT = 0x40000000
+
 # Window style flags for list_windows filtering
 _WS_CAPTION = 0x00C00000
 _WS_EX_TOOLWINDOW = 0x00000080
@@ -635,8 +650,22 @@ class WindowsBackend(DesktopBackend):
             return []
         return [self._to_handle(n, hwnd) for n in self._search(root, role, name)]
 
-    def click(self, handle_id: str) -> ActionResult:
+    def element_bounds(self, handle_id: str) -> tuple[float, float, float, float] | None:
         element = self._resolve(handle_id)
+        try:
+            r = element.CurrentBoundingRectangle  # tagRECT: left, top, right, bottom
+            left, top, right, bottom = r.left, r.top, r.right, r.bottom
+        except Exception:
+            return None
+        if right <= left or bottom <= top:
+            return None
+        return (float(left), float(top), float(right - left), float(bottom - top))
+
+    def click(self, handle_id: str, button: str = "left", clicks: int = 1) -> ActionResult:
+        element = self._resolve(handle_id)
+        if button != "left" or clicks != 1:
+            # No UIA pattern expresses a right- or double-click; go physical.
+            return self._click_element_at(handle_id, button=button, clicks=clicks)
         # InvokePattern — buttons, links, menu items
         try:
             pat = element.GetCurrentPattern(_UIA_InvokePatternId)
@@ -673,7 +702,9 @@ class WindowsBackend(DesktopBackend):
                 return ActionResult(ok=True)
         except Exception:
             pass
-        return ActionResult(ok=False, error="No actionable UIA pattern found")
+        # Nothing actionable (custom-drawn panels, owner-drawn controls):
+        # send a real click at the element's center instead.
+        return self._click_element_at(handle_id)
 
     def type_text(self, handle_id: str, text: str) -> ActionResult:
         element = self._resolve(handle_id)
@@ -711,25 +742,71 @@ class WindowsBackend(DesktopBackend):
             return ActionResult(ok=False, error=f"Cannot set text: {e}")
 
     def select_option(self, handle_id: str, value: str) -> ActionResult:
+        """Three strategies, each verified by reading the value back:
+
+        1. UIA item search under the control + SelectionItem.Select / Invoke.
+           Fails on stock Win32 droplists whose items only exist while the
+           list is dropped down.
+        2. ValuePattern.SetValue on the combo itself. Works on some combos,
+           silently does nothing on others (observed on the same dialog).
+        3. Real click to focus + type the item text + Return — the only
+           strategy that worked every time on Win32 COMBOBOX controls.
+
+        A strategy that returns without error but leaves the control reading
+        something else is treated as a failure, not a success."""
         element = self._resolve(handle_id)
+        attempts: list[str] = []
+
+        # 1. a11y item search
         for role in ("listitem", "menuitem", "treeitem", "tabitem"):
             nodes = self._search(element, role=role, name=value)
-            if nodes:
-                try:
-                    pat = nodes[0].GetCurrentPattern(_UIA_SelectionItemPatternId)
-                    if pat:
-                        pat.QueryInterface(IUIAutomationSelectionItemPattern).Select()
-                        return ActionResult(ok=True)
-                except Exception:
-                    pass
+            if not nodes:
+                continue
+            acted = False
+            try:
+                pat = nodes[0].GetCurrentPattern(_UIA_SelectionItemPatternId)
+                if pat:
+                    pat.QueryInterface(IUIAutomationSelectionItemPattern).Select()
+                    acted = True
+            except Exception:
+                pass
+            if not acted:
                 try:
                     pat = nodes[0].GetCurrentPattern(_UIA_InvokePatternId)
                     if pat:
                         pat.QueryInterface(IUIAutomationInvokePattern).Invoke()
-                        return ActionResult(ok=True)
+                        acted = True
                 except Exception as e:
-                    return ActionResult(ok=False, error=str(e))
-        return ActionResult(ok=False, error=f"Option {value!r} not found")
+                    attempts.append(f"invoke {role}: {e}")
+            if acted:
+                time.sleep(0.1)
+                if self._option_selected(handle_id, value) is not False:
+                    return ActionResult(ok=True)
+                attempts.append(f"{role} selected but value did not change")
+            break
+        else:
+            attempts.append("no matching item in UIA subtree")
+
+        # 2. ValuePattern.SetValue
+        try:
+            pat = element.GetCurrentPattern(_UIA_ValuePatternId)
+            if pat:
+                vp = pat.QueryInterface(IUIAutomationValuePattern)
+                if not vp.CurrentIsReadOnly:
+                    vp.SetValue(value)
+                    time.sleep(0.1)
+                    if self._option_selected(handle_id, value) is True:
+                        return ActionResult(ok=True)
+                    attempts.append("SetValue accepted but value did not change")
+        except Exception as e:
+            attempts.append(f"SetValue: {e}")
+
+        # 3. keystrokes
+        r = self._select_option_by_keystrokes(handle_id, value)
+        if r.ok:
+            return r
+        attempts.append(f"keystrokes: {r.error}")
+        return ActionResult(ok=False, error=f"Option {value!r}: " + "; ".join(attempts))
 
     def get_value(self, handle_id: str) -> str | None:
         element = self._resolve(handle_id)
@@ -774,22 +851,33 @@ class WindowsBackend(DesktopBackend):
                 raise ValueError(f"No on-screen window found for window_id {window_id!r}")
             if _user32.IsIconic(hwnd):
                 raise ValueError(f"Window {window_id!r} is minimized — restore it before capturing")
+            rect = ctypes.wintypes.RECT()
+            _user32.GetWindowRect(hwnd, ctypes.byref(rect))
+            left, top = rect.left, rect.top
+            width = rect.right - rect.left
+            height = rect.bottom - rect.top
         else:
-            hwnd = _user32.GetDesktopWindow()
-
-        rect = ctypes.wintypes.RECT()
-        _user32.GetWindowRect(hwnd, ctypes.byref(rect))
-        width = rect.right - rect.left
-        height = rect.bottom - rect.top
+            # Full screen. PrintWindow on GetDesktopWindow() renders nothing
+            # (solid black) under DWM, so the desktop path BitBlts from the
+            # screen DC over the virtual-screen rectangle instead, which also
+            # covers every monitor rather than just the primary.
+            hwnd = None
+            left = _user32.GetSystemMetrics(_SM_XVIRTUALSCREEN)
+            top = _user32.GetSystemMetrics(_SM_YVIRTUALSCREEN)
+            width = _user32.GetSystemMetrics(_SM_CXVIRTUALSCREEN)
+            height = _user32.GetSystemMetrics(_SM_CYVIRTUALSCREEN)
         if width <= 0 or height <= 0:
             raise ValueError(f"Window {window_id!r} has zero area ({width}x{height})")
 
-        hwnd_dc = _user32.GetWindowDC(hwnd)
+        hwnd_dc = _user32.GetWindowDC(hwnd) if hwnd else _user32.GetDC(None)
         mem_dc = _gdi32.CreateCompatibleDC(hwnd_dc)
         bitmap = _gdi32.CreateCompatibleBitmap(hwnd_dc, width, height)
         old_bmp = _gdi32.SelectObject(mem_dc, bitmap)
 
-        _user32.PrintWindow(hwnd, mem_dc, 2)  # PW_RENDERFULLCONTENT
+        if hwnd:
+            _user32.PrintWindow(hwnd, mem_dc, 2)  # PW_RENDERFULLCONTENT
+        else:
+            _gdi32.BitBlt(mem_dc, 0, 0, width, height, hwnd_dc, left, top, _SRCCOPY | _CAPTUREBLT)
 
         bmi = _BITMAPINFOHEADER()
         bmi.biSize = ctypes.sizeof(_BITMAPINFOHEADER)
@@ -805,7 +893,7 @@ class WindowsBackend(DesktopBackend):
         _gdi32.SelectObject(mem_dc, old_bmp)
         _gdi32.DeleteObject(bitmap)
         _gdi32.DeleteDC(mem_dc)
-        _user32.ReleaseDC(hwnd, hwnd_dc)
+        _user32.ReleaseDC(hwnd or 0, hwnd_dc)
 
         try:
             png = _bgra_to_png(width, height, buf.raw)
@@ -859,9 +947,7 @@ class WindowsBackend(DesktopBackend):
         return handle
 
     def stop_recording(self, handle: str, output_path: str) -> str:
-        canonical = os.path.realpath(os.path.expanduser(output_path))
-        if not canonical.lower().endswith(".gif"):
-            raise ValueError(f"output_path must end with .gif (got {output_path!r})")
+        canonical, fmt = self._recording_target(output_path)
 
         if handle not in self._recordings:
             raise ValueError(f"No active recording with handle {handle!r}")
@@ -877,56 +963,111 @@ class WindowsBackend(DesktopBackend):
             proc.kill()
             proc.wait()
 
-        result = subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-i",
-                video_path,
-                "-vf",
-                "fps=12,scale=900:-1:flags=lanczos,split[s0][s1];"
-                "[s0]palettegen=max_colors=128[p];[s1][p]paletteuse=dither=bayer",
-                canonical,
-            ],
-            capture_output=True,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.decode(errors="replace"))
+        return self._export_recording(video_path, canonical, fmt)
 
-        try:
-            os.unlink(video_path)
-        except Exception:
-            pass
-        return canonical
+    def _send_mouse(self, events: list[tuple[int, float, float]]) -> ActionResult:
+        """Send a batch of absolute mouse events via SendInput.
 
-    def click_at(self, x: float, y: float, window_id: str | None = None) -> ActionResult:
-        # Map pixel coordinates to SendInput's 0–65535 absolute range.
+        events: (flags, x, y) in screen pixels; MOVE|ABSOLUTE is OR'd in so
+        every event carries a position. Coordinates are mapped onto the
+        virtual screen so secondary monitors (and negative origins) work."""
+        vx = _user32.GetSystemMetrics(_SM_XVIRTUALSCREEN)
+        vy = _user32.GetSystemMetrics(_SM_YVIRTUALSCREEN)
+        vw = _user32.GetSystemMetrics(_SM_CXVIRTUALSCREEN)
+        vh = _user32.GetSystemMetrics(_SM_CYVIRTUALSCREEN)
+        if vw <= 0 or vh <= 0:
+            return ActionResult(ok=False, error="Could not determine screen size")
+        # MOUSEEVENTF_VIRTUALDESK (0x4000) makes ABSOLUTE coords span the
+        # whole virtual desktop instead of the primary monitor.
+        base = _MOUSEEVENTF_MOVE | _MOUSEEVENTF_ABSOLUTE | 0x4000
+        n = len(events)
+        inputs = (ctypes.c_ubyte * (n * 40))()  # INPUT is 40 bytes on x64
+        for i, (flags, x, y) in enumerate(events):
+            abs_x = int((round(x) - vx) * 65535 / vw)
+            abs_y = int((round(y) - vy) * 65535 / vh)
+            offset = i * 40
+            struct.pack_into("I", inputs, offset, 0)  # type = INPUT_MOUSE
+            struct.pack_into("i", inputs, offset + 4, abs_x)  # dx
+            struct.pack_into("i", inputs, offset + 8, abs_y)  # dy
+            struct.pack_into("I", inputs, offset + 12, 0)  # mouseData
+            struct.pack_into("I", inputs, offset + 16, base | flags)  # dwFlags
+            struct.pack_into("I", inputs, offset + 20, 0)  # time
+            # dwExtraInfo at offset 24 stays 0
+        sent = _user32.SendInput(n, inputs, 40)
+        if sent != n:
+            return ActionResult(ok=False, error=f"SendInput returned {sent}, expected {n}")
+        return ActionResult(ok=True)
+
+    def click_at(
+        self,
+        x: float,
+        y: float,
+        window_id: str | None = None,
+        button: str = "left",
+        clicks: int = 1,
+    ) -> ActionResult:
         # window_id accepted for API parity but ignored — SendInput is global,
         # same as Quartz CGEvent on macOS and xdotool on Linux.
+        if button not in _MOUSE_BUTTON_FLAGS:
+            return ActionResult(ok=False, error=f"Unknown button {button!r}")
+        if clicks < 1:
+            return ActionResult(ok=False, error="clicks must be >= 1")
+        down, up = _MOUSE_BUTTON_FLAGS[button]
         try:
-            sx = _user32.GetSystemMetrics(0)  # SM_CXSCREEN
-            sy = _user32.GetSystemMetrics(1)  # SM_CYSCREEN
-            if sx <= 0 or sy <= 0:
-                return ActionResult(ok=False, error="Could not determine screen size")
-            abs_x = int(round(x) * 65536 / sx)
-            abs_y = int(round(y) * 65536 / sy)
+            # Move first on its own so hover state settles before the press;
+            # then every press/release pair in one SendInput call so the
+            # inter-click gap stays well inside GetDoubleClickTime().
+            r = self._send_mouse([(0, x, y)])
+            if not r.ok:
+                return r
+            time.sleep(0.03)
+            events = [(down, x, y), (up, x, y)] * clicks
+            r = self._send_mouse(events)
+            if not r.ok:
+                return r
+            time.sleep(0.05)
+            return ActionResult(ok=True)
+        except Exception as e:
+            return ActionResult(ok=False, error=str(e))
 
-            # MOUSEINPUT struct (dx, dy, mouseData, dwFlags, time, dwExtraInfo)
-            #   dwFlags: MOVE|ABSOLUTE = 0x8001, LEFTDOWN = 0x0002, LEFTUP = 0x0004
-            inputs = (ctypes.c_ubyte * (2 * 40))()  # 2 × INPUT (each 40 bytes on x64)
-            for i, flags in enumerate((0x8001 | 0x0002, 0x8001 | 0x0004)):
-                offset = i * 40
-                struct.pack_into("I", inputs, offset, 0)  # type = INPUT_MOUSE
-                struct.pack_into("i", inputs, offset + 4, abs_x)  # dx
-                struct.pack_into("i", inputs, offset + 8, abs_y)  # dy
-                struct.pack_into("I", inputs, offset + 12, 0)  # mouseData
-                struct.pack_into("I", inputs, offset + 16, flags)  # dwFlags
-                struct.pack_into("I", inputs, offset + 20, 0)  # time
-                # dwExtraInfo at offset 24 stays 0
-
-            sent = _user32.SendInput(2, inputs, 40)
-            if sent != 2:
-                return ActionResult(ok=False, error=f"SendInput returned {sent}, expected 2")
+    def drag(
+        self,
+        from_x: float,
+        from_y: float,
+        to_x: float,
+        to_y: float,
+        button: str = "left",
+        duration: float = 0.3,
+    ) -> ActionResult:
+        if button not in _MOUSE_BUTTON_FLAGS:
+            return ActionResult(ok=False, error=f"Unknown button {button!r}")
+        down, up = _MOUSE_BUTTON_FLAGS[button]
+        steps = max(8, int(duration / 0.015))
+        try:
+            r = self._send_mouse([(0, from_x, from_y)])
+            if not r.ok:
+                return r
+            time.sleep(0.05)
+            r = self._send_mouse([(down, from_x, from_y)])
+            if not r.ok:
+                return r
+            # Win32 drag detection needs the pointer to leave the
+            # SM_CXDRAG/SM_CYDRAG rectangle while the button is held, and
+            # most drop targets only arm after several WM_MOUSEMOVEs, so the
+            # move is interpolated rather than jumped.
+            time.sleep(0.05)
+            for i in range(1, steps + 1):
+                t = i / steps
+                r = self._send_mouse(
+                    [(0, from_x + (to_x - from_x) * t, from_y + (to_y - from_y) * t)]
+                )
+                if not r.ok:
+                    return r
+                time.sleep(max(duration, 0.1) / steps)
+            time.sleep(0.05)
+            r = self._send_mouse([(up, to_x, to_y)])
+            if not r.ok:
+                return r
             time.sleep(0.05)
             return ActionResult(ok=True)
         except Exception as e:

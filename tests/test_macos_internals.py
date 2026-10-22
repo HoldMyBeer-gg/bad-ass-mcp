@@ -345,13 +345,13 @@ def test_find_app_element_returns_none_when_pid_has_no_ax_windows():
 
 
 @_darwin
-def test_stop_recording_rejects_non_gif_extension():
+def test_stop_recording_rejects_unknown_extension():
     from bad_ass_mcp.backend.macos import MacOSBackend
 
     backend = MacOSBackend()
     backend._recordings["h"] = (MagicMock(), "/tmp/bam-rec-h.mp4")
-    with pytest.raises(ValueError, match=r"\.gif"):
-        backend.stop_recording("h", "/tmp/output.mp4")
+    with pytest.raises(ValueError, match=r"\.gif or \.mp4"):
+        backend.stop_recording("h", "/tmp/output.webm")
 
 
 @_darwin
@@ -370,7 +370,7 @@ def test_stop_recording_rejects_symlink_resolving_to_non_gif():
     link_path = real_path[:-4] + ".gif"
     try:
         os.symlink(real_path, link_path)
-        with pytest.raises(ValueError, match=r"\.gif"):
+        with pytest.raises(ValueError, match=r"\.gif or \.mp4"):
             backend.stop_recording("h", link_path)
     finally:
         try:
@@ -660,3 +660,45 @@ def test_find_app_element_wakes_lazy_webview():
         result = backend._find_app_element(str(fresh_pid))
 
     assert result is fake_ax_app
+
+
+# ── Quartz button mapping ────────────────────────────────────────────
+
+
+@_darwin
+def test_quartz_button_maps_names():
+    from Quartz import (
+        kCGEventRightMouseDown,
+        kCGEventRightMouseUp,
+        kCGMouseButtonCenter,
+        kCGMouseButtonRight,
+    )
+
+    from bad_ass_mcp.backend.macos import _quartz_button
+
+    down, up, _, btn = _quartz_button("right")
+    assert (down, up, btn) == (kCGEventRightMouseDown, kCGEventRightMouseUp, kCGMouseButtonRight)
+    assert _quartz_button("middle")[3] == kCGMouseButtonCenter
+    with pytest.raises(ValueError):
+        _quartz_button("trackball")
+
+
+@_darwin
+def test_double_click_stamps_click_state():
+    from bad_ass_mcp.backend import macos
+
+    posted: list = []
+    fields: list[tuple] = []
+    with (
+        patch.object(macos, "CGEventPost", side_effect=lambda tap, ev: posted.append(ev)),
+        patch.object(macos, "CGEventCreateMouseEvent", side_effect=lambda *a: ("ev", a[1])),
+        patch.object(
+            macos,
+            "CGEventSetIntegerValueField",
+            side_effect=lambda ev, f, v: fields.append((ev, v)),
+        ),
+    ):
+        macos._quartz_mouse_click(1, 2, clicks=2)
+    assert len(posted) == 4
+    # click state 1 on the first pair, 2 on the second
+    assert [v for _, v in fields] == [1, 1, 2, 2]

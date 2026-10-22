@@ -28,18 +28,33 @@ Actions fire on control objects directly, so the target window doesn't need focu
 | `list_windows` | List all visible application windows |
 | `get_tree` | Full accessibility tree for a window as nested JSON |
 | `find_elements` | Find elements by role and/or name |
-| `click` | Click / invoke an element (foreground-independent) |
-| `click_at` | Click at absolute screen coordinates — fallback for webview/canvas UI |
+| `click` | Click / invoke an element (foreground-independent); `button="right"`, `clicks=2`; falls back to a real click at the element's center |
+| `click_at` | Click at absolute screen coordinates — fallback for webview/canvas UI; takes `button` and `clicks` |
+| `drag` | Drag-and-drop with real pointer events, between coordinates or element handles |
 | `type_text` | Type text into a field (SetValue → EditableText → key injection) |
-| `select_option` | Select an option in a combo box or list |
+| `select_option` | Select an option in a combo box or list (a11y items → SetValue → keystrokes), verified by reading the value back |
 | `get_value` | Get the current value or text of an element |
 | `wait_for_window` | Wait until a window matching a pattern appears |
 | `wait_for_element` | Wait until an element exists and optionally has a given state |
 | `screenshot` | Capture a PNG (write to `output_path` or return base64) |
 | `start_recording` | Start recording the screen (or a specific window) |
-| `stop_recording` | Stop recording and export as a GIF |
+| `stop_recording` | Stop recording and export as GIF (short clips) or MP4 (long sessions, no re-encode) |
 | `learn_layout` | Resolve semantic names → live handle IDs (one call per session) |
 | `run_sequence` | Execute a list of actions server-side — no per-action round-trips |
+
+## Field notes: when the tree isn't enough
+
+Observed driving large native apps (a game editor, a DAW) on Windows:
+
+- **Context menus** don't exist in the a11y tree until they're open, and nothing in UIA opens them. `click(handle, button="right")` or `click_at(x, y, button="right")` does; the menu is then a readable window.
+- **Double-click targets** (list rows that open an editor) often expose only a Select action, which highlights the row and stops. Use `clicks=2`.
+- **Tab strips** can behave the same way: a11y Select highlights the tab without switching the page. `click` now falls back to a real pointer click when no pattern takes, which switches it.
+- **Stock Win32 combo boxes** are unreliable through UIA: the item list only exists while dropped down, and `SetValue` can succeed on one combo and silently no-op on the next one in the same dialog. `select_option` ends with a keystroke strategy (focus, type the item, Return) and reads the value back, so `ok: false` means it really didn't change.
+- **Custom-drawn panels** (owner-drawn frames, canvas views) show up as empty panes. Only the app's native menus and standard file dialogs are readable; everything else is `screenshot` + `click_at`.
+- **Stock message boxes** are fully readable. `wait_for_window("Warning")` then `click` on "Yes to all" works as-is.
+- **SetValue skips the app's event handlers.** Setting a filter box's text won't re-run the filter; press a key or click elsewhere and back to trigger it.
+- **Never send bare keys into an editor without a focused dialog.** In most DAWs and NLEs, single keys are editor shortcuts and will edit the project.
+- **Long demos**: `stop_recording` to a `.mp4` path keeps the raw capture (seconds to finish); GIF transcodes and downscales, fine for under a minute.
 
 ## Webviews: waking lazy accessibility trees
 

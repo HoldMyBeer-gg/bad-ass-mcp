@@ -50,6 +50,12 @@ class FakeBackend(DesktopBackend):
         self._stale: set[str] = set()
         self._values: dict[str, str] = {"txt-name": "", "combo-size": "Medium"}
         self._window_appears_at: float | None = None
+        self._bounds: dict[str, tuple[float, float, float, float]] = {
+            "btn-ok": (10.0, 10.0, 80.0, 30.0),
+            "combo-size": (10.0, 50.0, 120.0, 24.0),
+        }
+        self.pointer_log: list[tuple] = []
+        self.key_log: list[str] = []
 
     def _resolve(self, handle_id: str) -> ElementHandle:
         if handle_id in self._stale:
@@ -89,9 +95,15 @@ class FakeBackend(DesktopBackend):
         ]
         return results
 
-    def click(self, handle_id: str) -> ActionResult:
+    def click(self, handle_id: str, button: str = "left", clicks: int = 1) -> ActionResult:
         self._resolve(handle_id)
+        if button != "left" or clicks != 1:
+            return self._click_element_at(handle_id, button=button, clicks=clicks)
         return ActionResult(ok=True)
+
+    def element_bounds(self, handle_id: str):
+        self._resolve(handle_id)
+        return self._bounds.get(handle_id)
 
     def type_text(self, handle_id: str, text: str) -> ActionResult:
         el = self._resolve(handle_id)
@@ -139,14 +151,21 @@ class FakeBackend(DesktopBackend):
             return b""
         return png
 
-    def click_at(self, x, y, window_id=None) -> ActionResult:
+    def click_at(self, x, y, window_id=None, button="left", clicks=1) -> ActionResult:
+        self.pointer_log.append(("click", x, y, button, clicks))
+        return ActionResult(ok=True)
+
+    def drag(self, from_x, from_y, to_x, to_y, button="left", duration=0.3) -> ActionResult:
+        self.pointer_log.append(("drag", from_x, from_y, to_x, to_y, button))
         return ActionResult(ok=True)
 
     def start_recording(self, window_id=None, fps=15) -> str:
         return "fake-recording-handle"
 
     def stop_recording(self, handle: str, output_path: str) -> str:
-        return output_path
+        canonical, _fmt = self._recording_target(output_path)
+        return canonical
 
     def press_key(self, key: str, window_id: str | None = None) -> ActionResult:
+        self.key_log.append(key)
         return ActionResult(ok=True)
