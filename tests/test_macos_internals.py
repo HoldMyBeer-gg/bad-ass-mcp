@@ -702,3 +702,71 @@ def test_double_click_stamps_click_state():
     assert len(posted) == 4
     # click state 1 on the first pair, 2 on the second
     assert [v for _, v in fields] == [1, 1, 2, 2]
+
+
+# ── avfoundation screen device discovery ─────────────────────────────
+
+_DEVICE_LISTING = b"""[AVFoundation indev @ 0x1] AVFoundation video devices:
+[AVFoundation indev @ 0x1] [0] MacBook Air Camera
+[AVFoundation indev @ 0x1] [1] iPhone Camera
+[AVFoundation indev @ 0x1] [2] MacBook Air Desk View Camera
+[AVFoundation indev @ 0x1] [3] iPhone Desk View Camera
+[AVFoundation indev @ 0x1] [4] Capture screen 0
+[AVFoundation indev @ 0x1] [5] Capture screen 1
+[AVFoundation indev @ 0x1] AVFoundation audio devices:
+[AVFoundation indev @ 0x1] [0] MacBook Air Microphone
+"""
+
+
+@_darwin
+def test_screen_device_skips_cameras():
+    """With an iPhone nearby the screen is not device 1; take the first
+    'Capture screen' entry whatever its index."""
+    from bad_ass_mcp.backend.macos import MacOSBackend
+
+    MacOSBackend._screen_device = None
+    fake = MagicMock(stderr=_DEVICE_LISTING, returncode=1)
+    with patch("bad_ass_mcp.backend.macos.subprocess.run", return_value=fake) as run:
+        assert MacOSBackend._avfoundation_screen_device() == "4"
+        # cached: a second call doesn't re-run ffmpeg
+        assert MacOSBackend._avfoundation_screen_device() == "4"
+        assert run.call_count == 1
+    MacOSBackend._screen_device = None
+
+
+@_darwin
+def test_screen_device_errors_when_none_listed():
+    from bad_ass_mcp.backend.macos import MacOSBackend
+
+    MacOSBackend._screen_device = None
+    fake = MagicMock(stderr=b"[AVFoundation indev @ 0x1] [0] FaceTime HD Camera\n", returncode=1)
+    with patch("bad_ass_mcp.backend.macos.subprocess.run", return_value=fake):
+        with pytest.raises(RuntimeError, match="screen device"):
+            MacOSBackend._avfoundation_screen_device()
+    MacOSBackend._screen_device = None
+
+
+@_darwin
+def test_start_recording_scales_window_crop_for_retina():
+    """AX geometry is in points, avfoundation captures pixels."""
+    from bad_ass_mcp.backend.macos import MacOSBackend
+
+    backend = MacOSBackend()
+    MacOSBackend._screen_device = "4"
+    seen: dict = {}
+
+    def fake_spawn(cmd, video_path):
+        seen["cmd"] = cmd
+        return (MagicMock(), video_path, video_path + ".log")
+
+    with (
+        patch.object(backend, "_window_geometry", return_value=(10, 20, 301, 400)),
+        patch.object(backend, "_main_display_scale", return_value=2.0),
+        patch.object(backend, "_spawn_recorder", side_effect=fake_spawn),
+    ):
+        backend.start_recording("123")
+    MacOSBackend._screen_device = None
+    cmd = seen["cmd"]
+    assert cmd[cmd.index("-i") + 1] == "4:none"
+    # 301 pt → 602 px, 400 pt → 800 px, origin doubled
+    assert cmd[cmd.index("-vf") + 1] == "crop=602:800:20:40"

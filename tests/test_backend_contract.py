@@ -445,3 +445,22 @@ def test_export_recording_mp4_moves_without_ffmpeg(backend, tmp_path):
     assert out == str(dst)
     assert dst.read_bytes() == b"not really video"
     assert not src.exists()
+
+
+def test_spawn_recorder_fails_fast_on_bad_command(backend, tmp_path):
+    video = tmp_path / "bam-rec-x.mp4"
+    # A command that exits immediately stands in for ffmpeg rejecting its device.
+    with pytest.raises(RuntimeError, match="before recording started"):
+        backend._spawn_recorder(["sh", "-c", "echo device busted >&2; exit 3"], str(video))
+    assert not (tmp_path / "bam-rec-x.mp4.log").exists()  # log consumed into the error
+
+
+def test_finish_recorder_raises_when_no_capture_file(backend, tmp_path):
+    import subprocess
+
+    video = tmp_path / "bam-rec-y.mp4"
+    log = tmp_path / "bam-rec-y.mp4.log"
+    log.write_text("Input/output error\n")
+    proc = subprocess.Popen(["cat"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL)
+    with pytest.raises(RuntimeError, match="Input/output error"):
+        backend._finish_recorder((proc, str(video), str(log)))

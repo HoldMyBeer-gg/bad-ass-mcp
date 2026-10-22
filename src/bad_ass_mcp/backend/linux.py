@@ -1026,33 +1026,28 @@ class LinuxBackend(DesktopBackend):
             grab = "1920x1080"
             offset = f"{display}+0,0"
 
-        proc = subprocess.Popen(
-            [
-                "ffmpeg",
-                "-y",
-                "-video_size",
-                grab,
-                "-framerate",
-                str(fps),
-                "-f",
-                "x11grab",
-                "-i",
-                offset,
-                "-t",
-                "1800",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "ultrafast",
-                "-crf",
-                "23",
-                video_path,
-            ],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        self._recordings[handle] = (proc, video_path)
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-video_size",
+            grab,
+            "-framerate",
+            str(fps),
+            "-f",
+            "x11grab",
+            "-i",
+            offset,
+            "-t",
+            "1800",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-crf",
+            "23",
+            video_path,
+        ]
+        self._recordings[handle] = self._spawn_recorder(cmd, video_path)
         return handle
 
     def stop_recording(self, handle: str, output_path: str) -> str:
@@ -1061,19 +1056,7 @@ class LinuxBackend(DesktopBackend):
         if handle not in self._recordings:
             raise ValueError(f"No active recording with handle {handle!r}")
 
-        proc, video_path = self._recordings.pop(handle)
-        # Send 'q' to ffmpeg's stdin — graceful quit writes the moov atom.
-        try:
-            proc.stdin.write(b"q")
-            proc.stdin.flush()
-        except Exception:
-            pass
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-
+        video_path = self._finish_recorder(self._recordings.pop(handle))
         return self._export_recording(video_path, canonical, fmt)
 
     _KEY_SYMS = {

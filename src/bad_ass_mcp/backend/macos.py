@@ -888,6 +888,57 @@ class MacOSBackend(DesktopBackend):
                 except Exception:
                     pass
 
+    _screen_device: str | None = None
+
+    @classmethod
+    def _avfoundation_screen_device(cls) -> str:
+        """Index of the first avfoundation *screen* device.
+
+        The index is not stable: cameras come first, and every Continuity
+        Camera iPhone or Desk View adds entries, so on a Mac with an iPhone
+        nearby "1" is the phone's camera and the screen is "4". Parse
+        ffmpeg's device listing and take the first "Capture screen N"."""
+        if cls._screen_device is not None:
+            return cls._screen_device
+        try:
+            out = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
+                capture_output=True,
+                timeout=15,
+            )
+        except FileNotFoundError:
+            raise RuntimeError("ffmpeg not found; install it to use start_recording")
+        text = out.stderr.decode(errors="replace")
+        for m in re.finditer(r"\[(\d+)\] Capture screen \d+", text):
+            cls._screen_device = m.group(1)
+            return cls._screen_device
+        raise RuntimeError(
+            "ffmpeg lists no avfoundation screen device (needs Screen Recording permission "
+            "for the terminal, and an ffmpeg built with avfoundation)"
+        )
+
+    @staticmethod
+    def _main_display_scale() -> float:
+        """Backing scale of the main display (2.0 on Retina). avfoundation
+        captures in pixels while AX geometry is in points, so a window crop
+        has to be multiplied up or it lands on the wrong quarter."""
+        try:
+            from Quartz import (
+                CGDisplayBounds,
+                CGDisplayCopyDisplayMode,
+                CGDisplayModeGetPixelWidth,
+                CGMainDisplayID,
+            )
+
+            did = CGMainDisplayID()
+            points = CGDisplayBounds(did).size.width
+            pixels = CGDisplayModeGetPixelWidth(CGDisplayCopyDisplayMode(did))
+            if points > 0 and pixels > 0:
+                return float(pixels) / float(points)
+        except Exception:
+            pass
+        return 1.0
+
     def start_recording(self, window_id: str | None = None, fps: int = 15) -> str:
         import os
         import tempfile
@@ -906,25 +957,20 @@ class MacOSBackend(DesktopBackend):
             "-capture_cursor",
             "1",
             "-i",
-            "1:none",
+            f"{self._avfoundation_screen_device()}:none",
         ]
         if window_id:
             geom = self._window_geometry(window_id)
             if geom:
-                x, y, w, h = geom
+                scale = self._main_display_scale()
+                x, y, w, h = (int(round(v * scale)) for v in geom)
                 w -= w % 2
                 h -= h % 2
                 cmd += ["-vf", f"crop={w}:{h}:{x}:{y}"]
 
         cmd += ["-t", "1800", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", video_path]
 
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        self._recordings[handle] = (proc, video_path)
+        self._recordings[handle] = self._spawn_recorder(cmd, video_path)
         return handle
 
     def stop_recording(self, handle: str, output_path: str) -> str:
@@ -932,18 +978,7 @@ class MacOSBackend(DesktopBackend):
 
         if handle not in self._recordings:
             raise ValueError(f"No active recording with handle {handle!r}")
-        proc, video_path = self._recordings.pop(handle)
-        try:
-            proc.stdin.write(b"q")
-            proc.stdin.flush()
-        except Exception:
-            pass
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-
+        video_path = self._finish_recorder(self._recordings.pop(handle))
         return self._export_recording(video_path, canonical, fmt)
 
     def click_at(

@@ -272,6 +272,90 @@ class DesktopBackend(ABC):
         raise ValueError(f"output_path must end with .gif or .mp4 (got {output_path!r})")
 
     @staticmethod
+    def _spawn_recorder(cmd: list[str], video_path: str) -> tuple:
+        """Start an ffmpeg capture and fail fast if it dies immediately.
+
+        ffmpeg's stderr goes to a log beside the capture file instead of
+        DEVNULL, so a bad input device ("Input/output error" on a camera
+        index, a missing display) surfaces as a RuntimeError here rather
+        than as a missing-file error at stop_recording. Returns
+        (proc, video_path, log_path) for the _recordings table."""
+        import subprocess
+        import time as _time
+
+        if cmd and cmd[0] == "ffmpeg" and "-hide_banner" not in cmd:
+            cmd = [cmd[0], "-hide_banner", *cmd[1:]]
+        log_path = video_path + ".log"
+        log = open(log_path, "wb")
+        try:
+            proc = subprocess.Popen(
+                cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=log
+            )
+        except FileNotFoundError:
+            log.close()
+            raise RuntimeError("ffmpeg not found; install it to use start_recording")
+        # Give ffmpeg long enough to open the device and reject it.
+        deadline = _time.monotonic() + 1.5
+        while _time.monotonic() < deadline:
+            if proc.poll() is not None:
+                break
+            _time.sleep(0.1)
+        if proc.poll() is not None:
+            log.close()
+            raise RuntimeError(
+                f"ffmpeg exited with {proc.returncode} before recording started: "
+                + DesktopBackend._log_tail(log_path)
+            )
+        return (proc, video_path, log_path)
+
+    @staticmethod
+    def _log_tail(log_path: str, lines: int = 6) -> str:
+        import os
+
+        try:
+            with open(log_path, "rb") as f:
+                text = f.read().decode(errors="replace")
+        except OSError:
+            return "(no ffmpeg output captured)"
+        finally:
+            try:
+                os.unlink(log_path)
+            except OSError:
+                pass
+        kept = [ln for ln in text.splitlines() if ln.strip()][-lines:]
+        return " | ".join(kept) or "(ffmpeg wrote nothing)"
+
+    @staticmethod
+    def _finish_recorder(entry: tuple) -> str:
+        """Quit ffmpeg gracefully ('q' on stdin writes the moov atom), wait,
+        and return the capture path. Raises with ffmpeg's last stderr lines
+        if the capture file never appeared."""
+        import os
+        import subprocess
+
+        proc, video_path = entry[0], entry[1]
+        log_path = entry[2] if len(entry) > 2 else None
+        try:
+            proc.stdin.write(b"q")
+            proc.stdin.flush()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        if not os.path.exists(video_path):
+            detail = DesktopBackend._log_tail(log_path) if log_path else "(no log)"
+            raise RuntimeError(f"ffmpeg produced no capture file: {detail}")
+        if log_path:
+            try:
+                os.unlink(log_path)
+            except OSError:
+                pass
+        return video_path
+
+    @staticmethod
     def _export_recording(video_path: str, canonical: str, fmt: str) -> str:
         """Finish a stopped recording: transcode to GIF, or move the already
         H.264-encoded capture into place for mp4 (no re-encode, so a

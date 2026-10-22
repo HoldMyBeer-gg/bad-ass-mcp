@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import os
 import struct
-import subprocess
 import time
 import uuid
 import zlib
@@ -1007,13 +1006,7 @@ class WindowsBackend(DesktopBackend):
             video_path,
         ]
 
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        self._recordings[handle] = (proc, video_path)
+        self._recordings[handle] = self._spawn_recorder(cmd, video_path)
         return handle
 
     def stop_recording(self, handle: str, output_path: str) -> str:
@@ -1021,18 +1014,7 @@ class WindowsBackend(DesktopBackend):
 
         if handle not in self._recordings:
             raise ValueError(f"No active recording with handle {handle!r}")
-        proc, video_path = self._recordings.pop(handle)
-        try:
-            proc.stdin.write(b"q")
-            proc.stdin.flush()
-        except Exception:
-            pass
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-
+        video_path = self._finish_recorder(self._recordings.pop(handle))
         return self._export_recording(video_path, canonical, fmt)
 
     def _send_mouse(self, events: list[tuple[int, float, float]]) -> ActionResult:
