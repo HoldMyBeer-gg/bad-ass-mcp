@@ -21,7 +21,7 @@ from bad_ass_mcp.backend.windows import (
     _VK_CODES,
     _bgra_to_png,
 )
-from bad_ass_mcp.types import StaleHandleError
+from bad_ass_mcp.types import ActionResult, StaleHandleError
 
 # ── _bgra_to_png ─────────────────────────────────────────────────────
 
@@ -275,12 +275,51 @@ def test_click_at_double_sends_two_press_release_pairs():
 
     def fake_send(events):
         sent.append(list(events))
-        from bad_ass_mcp.types import ActionResult
-
         return ActionResult(ok=True)
 
-    with patch.object(backend, "_send_mouse", side_effect=fake_send):
+    with (
+        patch.object(backend, "_send_mouse", side_effect=fake_send),
+        patch.object(backend, "_move_pointer", return_value=ActionResult(ok=True)),
+    ):
         assert backend.click_at(5, 6, button="right", clicks=2).ok
-    # one bare move, then DOWN/UP ×2 with right-button flags
-    assert sent[0] == [(0, 5, 6)]
-    assert [f for f, _, _ in sent[1]] == [0x0008, 0x0010, 0x0008, 0x0010]
+    # DOWN/UP ×2 with right-button flags in one batch (the move is separate)
+    assert [f for f, _, _ in sent[0]] == [0x0008, 0x0010, 0x0008, 0x0010]
+
+
+# ── SendInput struct layout ──────────────────────────────────────────
+
+
+def test_input_struct_matches_win64_layout():
+    """INPUT is 40 bytes on x64 with the union at offset 8 (ULONG_PTR
+    alignment). The previous hand-packed layout put dx at 4, which shifted
+    dwFlags into mouseData and made every event a no-op."""
+    import ctypes
+
+    from bad_ass_mcp.backend.windows import _INPUT, _KEYBDINPUT, _MOUSEINPUT
+
+    assert ctypes.sizeof(_INPUT) == 40
+    assert _INPUT.u.offset == 8
+    assert ctypes.sizeof(_MOUSEINPUT) == 32
+    assert _MOUSEINPUT.dx.offset == 0
+    assert _MOUSEINPUT.dy.offset == 4
+    assert _MOUSEINPUT.mouseData.offset == 8
+    assert _MOUSEINPUT.dwFlags.offset == 12
+    assert _MOUSEINPUT.time.offset == 16
+    assert _MOUSEINPUT.dwExtraInfo.offset == 24
+    assert _KEYBDINPUT.dwFlags.offset == 4
+
+
+def test_input_struct_dwflags_lands_at_offset_20():
+    """Writing through the union must put dwFlags at byte 20 of INPUT."""
+
+    from bad_ass_mcp.backend.windows import _INPUT
+
+    inp = _INPUT()
+    inp.type = 0
+    inp.mi.dx = 1
+    inp.mi.dy = 2
+    inp.mi.dwFlags = 0x8001
+    raw = bytes(inp)
+    assert int.from_bytes(raw[8:12], "little") == 1
+    assert int.from_bytes(raw[12:16], "little") == 2
+    assert int.from_bytes(raw[20:24], "little") == 0x8001

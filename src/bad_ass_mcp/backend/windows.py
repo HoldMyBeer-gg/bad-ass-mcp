@@ -85,6 +85,64 @@ _SM_CXVIRTUALSCREEN = 78
 _SM_CYVIRTUALSCREEN = 79
 _SRCCOPY = 0x00CC0020
 _CAPTUREBLT = 0x40000000
+_GA_ROOTOWNER = 3
+
+
+# ── SendInput structures ──────────────────────────────────────────────
+# Real ctypes definitions rather than hand-packed bytes. The INPUT union
+# holds a ULONG_PTR, so on x64 it is 8-aligned and starts at offset 8, not
+# 4: a hand-packed layout that assumed offset 4 shifted every field by one
+# slot, so dwFlags landed in mouseData and SendInput happily delivered
+# forty bytes of nothing while still returning "n events sent". Fixed
+# widths (c_int32 for LONG, c_uint32 for DWORD) keep the layout identical
+# on every host so the offsets can be unit-tested off Windows.
+import ctypes as _ct  # noqa: E402
+
+
+class _MOUSEINPUT(_ct.Structure):
+    _fields_ = [
+        ("dx", _ct.c_int32),
+        ("dy", _ct.c_int32),
+        ("mouseData", _ct.c_uint32),
+        ("dwFlags", _ct.c_uint32),
+        ("time", _ct.c_uint32),
+        ("dwExtraInfo", _ct.c_size_t),
+    ]
+
+
+class _KEYBDINPUT(_ct.Structure):
+    _fields_ = [
+        ("wVk", _ct.c_uint16),
+        ("wScan", _ct.c_uint16),
+        ("dwFlags", _ct.c_uint32),
+        ("time", _ct.c_uint32),
+        ("dwExtraInfo", _ct.c_size_t),
+    ]
+
+
+class _HARDWAREINPUT(_ct.Structure):
+    _fields_ = [
+        ("uMsg", _ct.c_uint32),
+        ("wParamL", _ct.c_uint16),
+        ("wParamH", _ct.c_uint16),
+    ]
+
+
+class _INPUT_UNION(_ct.Union):
+    _fields_ = [("mi", _MOUSEINPUT), ("ki", _KEYBDINPUT), ("hi", _HARDWAREINPUT)]
+
+
+class _INPUT(_ct.Structure):
+    _anonymous_ = ("u",)
+    _fields_ = [("type", _ct.c_uint32), ("u", _INPUT_UNION)]
+
+
+_INPUT_MOUSE = 0
+
+
+class _POINT(_ct.Structure):
+    _fields_ = [("x", _ct.c_int32), ("y", _ct.c_int32)]
+
 
 # Window style flags for list_windows filtering
 _WS_CAPTION = 0x00C00000
@@ -563,17 +621,28 @@ class WindowsBackend(DesktopBackend):
     def list_windows(self) -> list[WindowInfo]:
         windows: list[WindowInfo] = []
         foreground = _user32.GetForegroundWindow()
+        # An owned popup (effect rack, modal dialog) can hold the foreground
+        # while its owner is the app the caller thinks of as focused. Mark
+        # both, so focused:true survives even when the popup itself is
+        # filtered out below.
+        try:
+            fg_owner = _user32.GetAncestor(foreground, _GA_ROOTOWNER) if foreground else 0
+        except Exception:
+            fg_owner = 0
 
         @ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
         def _enum_cb(hwnd, _lparam):
             if not _user32.IsWindowVisible(hwnd):
                 return True
             exstyle = _user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
-            # Skip tool windows (system tray, floating toolbars, etc.)
-            if exstyle & _WS_EX_TOOLWINDOW:
-                return True
             style = _user32.GetWindowLongW(hwnd, _GWL_STYLE)
             has_caption = bool(style & _WS_CAPTION)
+            # Tool windows are usually tray icons and floating toolbars, but
+            # some apps (Adobe's DroverLord frames) open real dialogs with
+            # WS_EX_TOOLWINDOW set. Keep one when it is the foreground window
+            # or the foreground window's owner; drop the rest as before.
+            if exstyle & _WS_EX_TOOLWINDOW and hwnd not in (foreground, fg_owner):
+                return True
             if not has_caption:
                 # Frameless windows (Tauri, Electron, CEF) lack WS_CAPTION.
                 # Accept them if they have a title + nonzero area + aren't
@@ -609,7 +678,7 @@ class WindowsBackend(DesktopBackend):
                     id=str(hwnd),
                     name=name,
                     pid=pid.value,
-                    focused=(hwnd == foreground),
+                    focused=(hwnd == foreground or hwnd == fg_owner),
                     minimized=bool(_user32.IsIconic(hwnd)),
                     bounds=self._window_rect(hwnd),
                     accessible=True,  # updated below for Chromium windows
@@ -981,21 +1050,40 @@ class WindowsBackend(DesktopBackend):
         # whole virtual desktop instead of the primary monitor.
         base = _MOUSEEVENTF_MOVE | _MOUSEEVENTF_ABSOLUTE | 0x4000
         n = len(events)
-        inputs = (ctypes.c_ubyte * (n * 40))()  # INPUT is 40 bytes on x64
+        inputs = (_INPUT * n)()
         for i, (flags, x, y) in enumerate(events):
-            abs_x = int((round(x) - vx) * 65535 / vw)
-            abs_y = int((round(y) - vy) * 65535 / vh)
-            offset = i * 40
-            struct.pack_into("I", inputs, offset, 0)  # type = INPUT_MOUSE
-            struct.pack_into("i", inputs, offset + 4, abs_x)  # dx
-            struct.pack_into("i", inputs, offset + 8, abs_y)  # dy
-            struct.pack_into("I", inputs, offset + 12, 0)  # mouseData
-            struct.pack_into("I", inputs, offset + 16, base | flags)  # dwFlags
-            struct.pack_into("I", inputs, offset + 20, 0)  # time
-            # dwExtraInfo at offset 24 stays 0
-        sent = _user32.SendInput(n, inputs, 40)
+            inputs[i].type = _INPUT_MOUSE
+            inputs[i].mi.dx = int((round(x) - vx) * 65535 / vw)
+            inputs[i].mi.dy = int((round(y) - vy) * 65535 / vh)
+            inputs[i].mi.mouseData = 0
+            inputs[i].mi.dwFlags = base | flags
+            inputs[i].mi.time = 0
+            inputs[i].mi.dwExtraInfo = 0
+        sent = _user32.SendInput(n, inputs, ctypes.sizeof(_INPUT))
         if sent != n:
             return ActionResult(ok=False, error=f"SendInput returned {sent}, expected {n}")
+        return ActionResult(ok=True)
+
+    def _move_pointer(self, x: float, y: float) -> ActionResult:
+        """Move the pointer and verify it arrived. SendInput reports success
+        for events that did nothing (wrong struct layout, UIPI blocking a
+        higher-integrity target, a remote session with no input desktop),
+        so the only trustworthy signal is GetCursorPos afterwards."""
+        r = self._send_mouse([(0, x, y)])
+        if not r.ok:
+            return r
+        time.sleep(0.03)
+        pt = _POINT()
+        if _user32.GetCursorPos(ctypes.byref(pt)):
+            if abs(pt.x - round(x)) > 2 or abs(pt.y - round(y)) > 2:
+                return ActionResult(
+                    ok=False,
+                    error=(
+                        f"Pointer did not reach ({round(x)}, {round(y)}); "
+                        f"it is at ({pt.x}, {pt.y}). SendInput was accepted but "
+                        "had no effect (blocked by a higher-integrity window?)"
+                    ),
+                )
         return ActionResult(ok=True)
 
     def click_at(
@@ -1014,13 +1102,12 @@ class WindowsBackend(DesktopBackend):
             return ActionResult(ok=False, error="clicks must be >= 1")
         down, up = _MOUSE_BUTTON_FLAGS[button]
         try:
-            # Move first on its own so hover state settles before the press;
-            # then every press/release pair in one SendInput call so the
-            # inter-click gap stays well inside GetDoubleClickTime().
-            r = self._send_mouse([(0, x, y)])
+            # Move first on its own (verified) so hover state settles before
+            # the press; then every press/release pair in one SendInput call
+            # so the inter-click gap stays well inside GetDoubleClickTime().
+            r = self._move_pointer(x, y)
             if not r.ok:
                 return r
-            time.sleep(0.03)
             events = [(down, x, y), (up, x, y)] * clicks
             r = self._send_mouse(events)
             if not r.ok:
@@ -1044,7 +1131,7 @@ class WindowsBackend(DesktopBackend):
         down, up = _MOUSE_BUTTON_FLAGS[button]
         steps = max(8, int(duration / 0.015))
         try:
-            r = self._send_mouse([(0, from_x, from_y)])
+            r = self._move_pointer(from_x, from_y)
             if not r.ok:
                 return r
             time.sleep(0.05)
