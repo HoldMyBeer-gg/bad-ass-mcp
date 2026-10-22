@@ -51,6 +51,7 @@ Observed driving large native apps (a game editor, a DAW) on Windows:
 - **Tab strips** can behave the same way: a11y Select highlights the tab without switching the page. `click` now falls back to a real pointer click when no pattern takes, which switches it.
 - **Stock Win32 combo boxes** are unreliable through UIA: the item list only exists while dropped down, and `SetValue` can succeed on one combo and silently no-op on the next one in the same dialog. `select_option` ends with a keystroke strategy (focus, type the item, Return) and reads the value back, so `ok: false` means it really didn't change.
 - **Custom-drawn panels** (owner-drawn frames, canvas views) show up as empty panes. Only the app's native menus and standard file dialogs are readable; everything else is `screenshot` + `click_at`.
+- **Mislabelled controls.** Some dialogs attach each label to the neighbouring control (a combo named "Voice Type" is really the one above it, and the real one has no name). When names look off by one, confirm with `get_value` or pick by position in `get_tree` instead of by name.
 - **Stock message boxes** are fully readable. `wait_for_window("Warning")` then `click` on "Yes to all" works as-is.
 - **SetValue skips the app's event handlers.** Setting a filter box's text won't re-run the filter; press a key or click elsewhere and back to trigger it.
 - **Never send bare keys into an editor without a focused dialog.** In most DAWs and NLEs, single keys are editor shortcuts and will edit the project.

@@ -85,6 +85,7 @@ _SM_CXVIRTUALSCREEN = 78
 _SM_CYVIRTUALSCREEN = 79
 _SRCCOPY = 0x00CC0020
 _CAPTUREBLT = 0x40000000
+_GA_ROOT = 2
 _GA_ROOTOWNER = 3
 
 
@@ -1064,6 +1065,27 @@ class WindowsBackend(DesktopBackend):
             return ActionResult(ok=False, error=f"SendInput returned {sent}, expected {n}")
         return ActionResult(ok=True)
 
+    def _activate_window_at(self, x: float, y: float) -> None:
+        """Bring the top-level window under (x, y) to the foreground if it
+        isn't already. MDI-style child windows (the Creation Kit's form
+        dialogs) swallow the first click of an inactive window as
+        activation only, so a double-click on them opened nothing until the
+        second try. Best effort: SetForegroundWindow may refuse, and the
+        click that follows will still activate the window the old way."""
+        try:
+            pt = _POINT(int(round(x)), int(round(y)))
+            hwnd = _user32.WindowFromPoint(pt)
+            if not hwnd:
+                return
+            root = _user32.GetAncestor(hwnd, _GA_ROOT) or hwnd
+            fg = _user32.GetForegroundWindow()
+            if root == fg or root == (_user32.GetAncestor(fg, _GA_ROOT) if fg else 0):
+                return
+            if _user32.SetForegroundWindow(root):
+                time.sleep(0.1)
+        except Exception:
+            pass
+
     def _move_pointer(self, x: float, y: float) -> ActionResult:
         """Move the pointer and verify it arrived. SendInput reports success
         for events that did nothing (wrong struct layout, UIPI blocking a
@@ -1108,6 +1130,7 @@ class WindowsBackend(DesktopBackend):
             r = self._move_pointer(x, y)
             if not r.ok:
                 return r
+            self._activate_window_at(x, y)
             events = [(down, x, y), (up, x, y)] * clicks
             r = self._send_mouse(events)
             if not r.ok:
