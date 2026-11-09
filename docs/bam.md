@@ -37,6 +37,10 @@ bad-ass-mcp run PATH... [--config bam.json] [--results DIR] [--platform P]
 
 - `PATH`: script files, or folders of `*.json` scripts (run in name order).
 - Exit status 1 if any script failed.
+- On a terminal: a progress bar counted in phases (TMS9928A colours, the Coleco
+  Adam's palette), then one line per script with its duration and failure
+  reason, and a totals line (`3 passed, 1 failed in 2m14s · platform · commit ·
+  start time`). No colour when piped or with `NO_COLOR`.
 - `--resume`: continue the latest run on the same commit and platform; scripts
   that passed are kept, the rest run again.
 
@@ -44,9 +48,11 @@ bad-ass-mcp run PATH... [--config bam.json] [--results DIR] [--platform P]
 
 ```
 bam-results/<time>_<commit>_<platform>/
-  run.json              order, status of each script, commit, platform, config
+  run.json              order, status + seconds of each script, totals, started_at,
+                        finished_at, seconds, commit, platform, config
   01_<script>/
-    result.json         status, failure {phase, step, action, reason}, timings
+    result.json         status, started_at/finished_at, seconds, window,
+                        phases [{name, status, seconds}], failure {phase, step, action, reason}
     phase-N.png         proof screenshot after each phase (screenshot_proof)
     fail.png, tree.json screen and pruned accessibility tree at a failure
     run.mp4             with --video
@@ -65,7 +71,8 @@ Three layers, later wins: the suite file (`--config`), a script's own
 | key | default | meaning |
 |---|---|---|
 | `window` | (required) | title substring of the app's main window |
-| `app` | none | launch command, string or list, or per-platform object; omitted = attach to an already running window |
+| `app` | none | launch command, string or list, or per-platform object; the run then drives only that process's windows (or ones that appeared after launch) |
+| `pid` | none | attach mode: drive only this process's windows. Without `app` or `pid`, two windows matching `window` is a failure, never a guess (it could be the user's own copy) |
 | `launch_timeout` | 20 | seconds to wait for the window after launch |
 | `step_timeout` | 5 | seconds to wait for windows in phases |
 | `screenshot_proof` | true | screenshot after every phase |
@@ -95,7 +102,8 @@ Three layers, later wins: the suite file (`--config`), a script's own
 }
 ```
 
-- **Phases** run in order. Each learns its elements (`learn_layout`) right
+- **Phases** run in order; an optional `"name"` labels one in results and the
+  report (default: its `id`, else "phase N"). Each learns its elements (`learn_layout`) right
   before its steps, since handles go stale when the UI changes. A missing
   element fails the phase.
 - **Steps** are `run_sequence` actions; `"target": "<label>"` becomes the

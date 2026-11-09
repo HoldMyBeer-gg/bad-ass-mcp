@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -68,20 +69,38 @@ class _Run:
         self.screenshots: list[str] = []
         self.manual: list[str] = []
         self.phases_by_id: dict[str, dict] = {}
+        self.phase_log: list[dict] = []
+        self.pid: int | None = config.get("pid")
+        self.before: set[str] | None = None
+        self.progress = None  # callable(phase_number) after each phase
 
     # ── windows ───────────────────────────────────────────────────────
-    def find_window(self, pattern: str, timeout: float) -> str | None:
+    def _ours(self, w) -> bool:
+        """Windows the run may drive: the launched process (or a window that
+        appeared after the launch, for apps started through a wrapper), the
+        configured pid, or anything when neither is known."""
+        if self.pid is None:
+            return True
+        return w.pid == self.pid or (self.before is not None and w.id not in self.before)
+
+    def find_window(self, pattern: str, timeout: float, *, unique: bool = False) -> str | None:
         deadline = time.monotonic() + timeout
         while True:
-            for w in self.b.list_windows():
-                if _matches(w.name, pattern):
-                    return w.id
+            hits = [w for w in self.b.list_windows() if _matches(w.name, pattern) and self._ours(w)]
+            if len(hits) > 1 and unique and self.pid is None:
+                raise ScriptFailure(
+                    f"{len(hits)} windows match {pattern!r} "
+                    f"(pids {', '.join(str(w.pid) for w in hits)}); set `app` so the run "
+                    "launches its own copy, or `pid` to pick one. Refusing to guess."
+                )
+            if hits:
+                return hits[0].id
             if time.monotonic() >= deadline:
                 return None
             time.sleep(0.2)
 
     def count_windows(self, pattern: str) -> int:
-        return sum(1 for w in self.b.list_windows() if _matches(w.name, pattern))
+        return sum(1 for w in self.b.list_windows() if _matches(w.name, pattern) and self._ours(w))
 
     # ── evidence ──────────────────────────────────────────────────────
     def shot(self, name: str, window: str | None) -> str | None:
@@ -127,11 +146,13 @@ class _Run:
         if app:
             cmd = app if isinstance(app, list) else [app]
             args = [str(self.files / a) for a in self.script.get("launch", [])]
+            self.before = {w.id for w in self.b.list_windows()}
             self.proc = subprocess.Popen([*cmd, *args])
+            self.pid = self.proc.pid
             timeout = float(self.config.get("launch_timeout", 20))
         else:
             timeout = float(self.config.get("step_timeout", 5))
-        self.window = self.find_window(pattern, timeout)
+        self.window = self.find_window(pattern, timeout, unique=True)
         if self.window is None:
             raise ScriptFailure(f"no window matching {pattern!r}")
 
@@ -159,6 +180,18 @@ class _Run:
     def run_phase(self, phase: dict) -> None:
         self.phase_no += 1
         n = self.phase_no
+        entry = {"name": phase.get("name") or phase.get("id") or f"phase {n}", "status": "FAIL"}
+        self.phase_log.append(entry)
+        started = time.monotonic()
+        try:
+            self._run_phase(phase, n)
+            entry["status"] = "PASS"
+        finally:
+            entry["seconds"] = round(time.monotonic() - started, 3)
+            if self.progress:
+                self.progress(n)
+
+    def _run_phase(self, phase: dict, n: int) -> None:
         window = self.window
         if "window" in phase:
             pattern = pick(phase["window"], self.platform)
@@ -278,22 +311,38 @@ def _plain_tree(node) -> dict:
     }
 
 
+def _now() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
 def run_script(
-    backend, script_path: Path | str, platform: str, config: dict, out_dir: Path | str
+    backend,
+    script_path: Path | str,
+    platform: str,
+    config: dict,
+    out_dir: Path | str,
+    progress=None,
 ) -> dict[str, Any]:
-    """Run one script; write out_dir/result.json and return the result."""
+    """Run one script; write out_dir/result.json and return the result.
+    `progress(phase_number)` is called after each phase."""
     script_path = Path(script_path)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     script = json.loads(script_path.read_text(encoding="utf-8"))
     name = script.get("name") or script_path.stem
-    result: dict[str, Any] = {"name": name, "script": str(script_path), "platform": platform}
+    result: dict[str, Any] = {
+        "name": name,
+        "script": str(script_path),
+        "platform": platform,
+        "started_at": _now(),
+    }
     started = time.monotonic()
 
     if platform not in script.get("platforms", [platform]):
         result["status"] = "SKIP"
     else:
         run = _Run(backend, platform, config, out_dir, script)
+        run.progress = progress
         recording = None
         try:
             run.setup()
@@ -333,12 +382,16 @@ def run_script(
                 except Exception:
                     pass
             run.teardown()
+        result["phases"] = run.phase_log
+        if run.window is not None:
+            result["window"] = run.window
         result["screenshots"] = run.screenshots
         if run.manual:
             result["manual"] = run.manual
         if (out_dir / "fail.png").exists():
             result["fail_screenshot"] = "fail.png"
 
+    result["finished_at"] = _now()
     result["seconds"] = round(time.monotonic() - started, 2)
     (out_dir / "result.json").write_text(json.dumps(result, indent=2, ensure_ascii=False))
     return result

@@ -401,3 +401,171 @@ def test_cli_collects_scripts_and_builds_overrides(tmp_path):
         "screenshot_proof": False,
     }
     assert args.platform == "linux"
+
+
+# ── result details: names, timestamps, durations ─────────────────────
+
+
+def test_results_record_timestamps_and_per_phase_durations(tmp_path):
+    script = write(
+        tmp_path,
+        "timed",
+        {
+            "phases": [
+                {
+                    "name": "open settings",
+                    "learn": {"ok": {"name": "OK"}},
+                    "steps": [{"action": "click", "target": "ok"}],
+                },
+                {"learn": {"g": {"name": "Ghost"}}, "steps": []},
+            ],
+        },
+    )
+    r = run_script(FakeBackend(), script, "linux", CONFIG, tmp_path / "out")
+    assert r["started_at"] <= r["finished_at"] and "T" in r["started_at"]
+    assert [p["name"] for p in r["phases"]] == ["open settings", "phase 2"]
+    assert [p["status"] for p in r["phases"]] == ["PASS", "FAIL"]
+    assert all(isinstance(p["seconds"], float) for p in r["phases"])
+
+
+def test_run_json_has_totals_and_duration(tmp_path):
+    run_dir = run_suite(
+        FakeBackend(), suite_scripts(tmp_path), "linux", CONFIG, tmp_path / "results", commit="abc"
+    )
+    run = json.loads((run_dir / "run.json").read_text())
+    assert run["totals"] == {"PASS": 2, "FAIL": 1}
+    assert isinstance(run["seconds"], float)
+    assert run["started_at"] <= run["finished_at"]
+    assert all("seconds" in s for s in run["scripts"])
+
+
+def test_cli_summary_shows_durations_and_totals(tmp_path, capsys):
+    from bad_ass_mcp.bam.cli import print_summary
+
+    run_dir = run_suite(
+        FakeBackend(), suite_scripts(tmp_path), "linux", CONFIG, tmp_path / "results", commit="abc"
+    )
+    print_summary(run_dir, color=False)
+    out = capsys.readouterr().out
+    assert "FAIL" in out and "b-bad" in out
+    assert "2 passed, 1 failed" in out
+    assert "s)" in out  # each line carries its duration
+
+
+def test_report_shows_phase_names_and_times(tmp_path):
+    script = write(
+        tmp_path,
+        "timed",
+        {
+            "phases": [{"name": "open settings", "learn": {"ok": {"name": "OK"}}, "steps": []}],
+        },
+    )
+    run_dir = run_suite(
+        FakeBackend(), [script], "linux", CONFIG, tmp_path / "results", commit="abc"
+    )
+    html = write_report(run_dir).read_text()
+    assert "open settings" in html
+
+
+# ── progress ─────────────────────────────────────────────────────────
+
+
+def test_progress_events_count_phases_across_the_run(tmp_path):
+    events = []
+    run_suite(
+        FakeBackend(),
+        suite_scripts(tmp_path),
+        "linux",
+        CONFIG,
+        tmp_path / "results",
+        commit="abc",
+        progress=events.append,
+    )
+    done = [(e["done"], e["total"]) for e in events if e["kind"] == "phase"]
+    # scripts have 0, 1 and 0 phases; each script also counts as one unit for its checks
+    assert done[-1][0] == done[-1][1]
+    assert all(a <= b for (a, _), (b, _) in zip(done, done[1:]))
+    assert [e["status"] for e in events if e["kind"] == "script"] == ["PASS", "FAIL", "PASS"]
+
+
+def test_progress_bar_renders_percent_plain_and_in_colour():
+    from bad_ass_mcp.bam.cli import render_bar
+
+    plain = render_bar(1, 4, width=20, label="emoji-picker", color=False)
+    assert "25%" in plain and "emoji-picker" in plain
+    assert plain.count("█") == 5 and "\x1b[" not in plain
+    full = render_bar(4, 4, width=20, color=False)
+    assert "100%" in full and full.count("█") == 20
+    coloured = render_bar(2, 4, width=20, color=True)
+    assert "\x1b[38;2;" in coloured  # truecolor (TMS9928A palette)
+    assert render_bar(0, 0, width=10, color=False).count("%") == 1  # no divide-by-zero
+
+
+# ── never guess which app to drive ───────────────────────────────────
+
+
+class _TwoApps(FakeBackend):
+    """Two windows match the pattern: the user's own copy and a test build."""
+
+    def list_windows(self):
+        from bad_ass_mcp.types import WindowInfo
+
+        return [
+            WindowInfo(id="user-window", name="Fake App", pid=111, focused=True),
+            WindowInfo(id="fake-window-1", name="Fake App", pid=9999, focused=False),
+        ]
+
+
+def test_attach_mode_refuses_when_several_windows_match(tmp_path):
+    script = write(tmp_path, "ambiguous", {"phases": [], "checks": [{"present": {"name": "OK"}}]})
+    r = run_script(_TwoApps(), script, "linux", CONFIG, tmp_path / "out")
+    assert r["status"] == "FAIL"
+    assert "2 windows match" in r["failure"]["reason"]
+
+
+def test_a_pid_pins_the_window_in_attach_mode(tmp_path):
+    script = write(tmp_path, "pinned", {"phases": [], "checks": [{"present": {"name": "OK"}}]})
+    r = run_script(_TwoApps(), script, "linux", {**CONFIG, "pid": 9999}, tmp_path / "out")
+    assert r["status"] == "PASS", r
+    assert r["window"] == "fake-window-1"
+
+
+def test_launched_app_only_drives_its_own_windows(tmp_path, monkeypatch):
+    from bad_ass_mcp.bam import runner as runner_mod
+
+    class _Proc:
+        pid = 9999
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", lambda *a, **k: _Proc())
+    script = write(tmp_path, "launched", {"phases": [], "checks": [{"present": {"name": "OK"}}]})
+    r = run_script(_TwoApps(), script, "linux", {**CONFIG, "app": "fake-app"}, tmp_path / "out")
+    assert r["status"] == "PASS", r
+    assert r["window"] == "fake-window-1"  # pid 9999 is ours; the user's pid 111 is never touched
+
+
+def test_report_screenshots_open_in_a_lightbox_with_prev_next_close(tmp_path):
+    run_dir = run_suite(
+        FakeBackend(), suite_scripts(tmp_path), "linux", CONFIG, tmp_path / "results", commit="abc"
+    )
+    html = write_report(run_dir).read_text()
+    assert 'id="lightbox"' in html
+    for label in ("Previous screenshot", "Next screenshot", "Close"):
+        assert f'aria-label="{label}"' in html
+    # Every screenshot link is part of the gallery, with a caption, and keeps
+    # its href so it still opens the file without JavaScript.
+    import re
+
+    links = re.findall(r"<a [^>]*data-shot[^>]*>", html)
+    imgs = re.findall(r'<img src="[^"]+\.png"', html)
+    assert len(links) == len(imgs) > 0
+    assert all('href="' in a and 'data-caption="' in a for a in links)
+    assert "Escape" in html and "ArrowLeft" in html and "ArrowRight" in html

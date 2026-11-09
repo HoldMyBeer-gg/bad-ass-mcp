@@ -16,10 +16,11 @@ import json
 import re
 import shutil
 import time
+from collections import Counter
 from pathlib import Path
 
 from .report import write_report
-from .runner import run_script
+from .runner import _now, run_script
 
 _DONE = {"PASS", "SKIP"}
 
@@ -76,8 +77,14 @@ def run_suite(
     commit: str = "unknown",
     resume: bool = False,
     overrides: dict | None = None,
+    progress=None,
 ) -> Path:
-    """Run `scripts` in order; returns the run folder (with report.html)."""
+    """Run `scripts` in order; returns the run folder (with report.html).
+
+    `progress(event)` gets {"kind": "phase", "done", "total", "script",
+    "phase"} after every phase and {"kind": "script", "name", "status",
+    "done", "total"} after every script. Work is counted in phases (plus one
+    unit per script for its final checks), so a bar moves smoothly."""
     results = Path(results_dir)
     scripts = [Path(s) for s in scripts]
     run_dir = _latest_run(results, commit, platform) if resume else None
@@ -95,51 +102,69 @@ def run_suite(
     for i, path in enumerate(scripts, 1):
         name = loaded[i - 1].get("name") or path.stem
         entries.append({"name": name, "script": str(path), "folder": f"{i:02d}_{_safe(name)}"})
+    units = [len(s.get("phases", [])) + 1 for s in loaded]
+    total = sum(units)
+    started = time.monotonic()
     run = {
         "commit": commit,
         "platform": platform,
         "config": config,
-        "started": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "started_at": _now(),
         "scripts": entries,
     }
 
     def save() -> None:
         (run_dir / "run.json").write_text(json.dumps(run, indent=2, ensure_ascii=False))
 
+    def emit(event: dict) -> None:
+        if progress:
+            progress({**event, "total": total})
+
     fail_fast = config.get("fail_fast", False)
     retries = int(config.get("retries", 0))
     stop = False
+    base = 0
     for idx, entry in enumerate(entries):
         prior = previous.get(entry["folder"])
         if prior and prior.get("status") in _DONE:
-            entry.update({k: prior[k] for k in ("status", "attempts") if k in prior})
-            continue
-        if stop:
+            entry.update({k: prior[k] for k in ("status", "attempts", "seconds") if k in prior})
+        elif stop:
             entry["status"] = "NOT_RUN"
-            continue
-        out = run_dir / entry["folder"]
-        attempts = 0
-        while True:
-            attempts += 1
-            if out.exists():
-                shutil.rmtree(out)
-            cfg = effective_config(config, loaded[idx], overrides)
-            result = run_script(backend, scripts[idx], platform, cfg, out)
-            if result["status"] != "FAIL" or attempts > retries:
-                break
-        entry["status"] = result["status"]
-        entry["attempts"] = attempts
-        if "failure" in result:
-            entry["failure"] = result["failure"]
         else:
-            entry.pop("failure", None)
-        save()
-        if result["status"] == "FAIL" and (
-            fail_fast is True or (fail_fast == "first_script" and idx == 0)
-        ):
-            stop = True
+            out = run_dir / entry["folder"]
+            attempts = 0
 
-    run["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            def on_phase(n: int, _base=base, _idx=idx, _name=entry["name"]) -> None:
+                done = _base + min(n, units[_idx] - 1)
+                emit({"kind": "phase", "done": done, "script": _name, "phase": n})
+
+            while True:
+                attempts += 1
+                if out.exists():
+                    shutil.rmtree(out)
+                cfg = effective_config(config, loaded[idx], overrides)
+                result = run_script(backend, scripts[idx], platform, cfg, out, progress=on_phase)
+                if result["status"] != "FAIL" or attempts > retries:
+                    break
+            entry["status"] = result["status"]
+            entry["attempts"] = attempts
+            entry["seconds"] = result.get("seconds", 0.0)
+            if "failure" in result:
+                entry["failure"] = result["failure"]
+            else:
+                entry.pop("failure", None)
+            save()
+            if result["status"] == "FAIL" and (
+                fail_fast is True or (fail_fast == "first_script" and idx == 0)
+            ):
+                stop = True
+        base += units[idx]
+        emit({"kind": "phase", "done": base, "script": entry["name"], "phase": None})
+        emit({"kind": "script", "done": base, "name": entry["name"], "status": entry["status"]})
+
+    run["finished_at"] = _now()
+    run["seconds"] = round(time.monotonic() - started, 2)
+    run["totals"] = dict(Counter(e["status"] for e in entries))
     save()
     write_report(run_dir)
     return run_dir

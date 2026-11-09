@@ -9,6 +9,42 @@ import json
 from html import escape
 from pathlib import Path
 
+_LIGHTBOX = """
+<div id="lightbox" role="dialog" aria-modal="true" aria-label="Screenshot" hidden>
+  <button class="lb-close" type="button" aria-label="Close">✕</button>
+  <button class="lb-prev" type="button" aria-label="Previous screenshot">‹</button>
+  <figure><img alt=""><figcaption></figcaption></figure>
+  <button class="lb-next" type="button" aria-label="Next screenshot">›</button>
+</div>
+<script>
+(() => {
+  const links = [...document.querySelectorAll("a[data-shot]")];
+  const box = document.getElementById("lightbox");
+  if (!links.length || !box) return;
+  const img = box.querySelector("img"), cap = box.querySelector("figcaption");
+  let i = 0;
+  const show = (n) => {
+    i = (n + links.length) % links.length;
+    img.src = links[i].getAttribute("href");
+    cap.textContent = `${links[i].dataset.caption}  (${i + 1} of ${links.length})`;
+  };
+  const open = (n) => { show(n); box.hidden = false; document.body.style.overflow = "hidden"; };
+  const close = () => { box.hidden = true; document.body.style.overflow = ""; links[i].focus(); };
+  links.forEach((a, n) => a.addEventListener("click", (e) => { e.preventDefault(); open(n); }));
+  box.querySelector(".lb-prev").onclick = () => show(i - 1);
+  box.querySelector(".lb-next").onclick = () => show(i + 1);
+  box.querySelector(".lb-close").onclick = close;
+  box.addEventListener("click", (e) => { if (e.target === box) close(); });
+  document.addEventListener("keydown", (e) => {
+    if (box.hidden) return;
+    if (e.key === "Escape") close();
+    else if (e.key === "ArrowLeft") show(i - 1);
+    else if (e.key === "ArrowRight") show(i + 1);
+  });
+})();
+</script>
+"""
+
 _CSS = """
 :root{--bg:#f6f7f9;--card:#fff;--text:#1d2330;--muted:#6b7280;--border:#e3e6eb;
 --pass:#1a7f37;--pass-bg:#e7f6ec;--fail:#c62828;--fail-bg:#fdecec;--warn:#9a6700;--warn-bg:#fff4d6}
@@ -36,6 +72,18 @@ text-decoration:none}
 .shots img{height:120px;border:1px solid var(--border);border-radius:4px;display:block;
 margin-bottom:2px}
 .manual{margin:8px 0 0;padding-left:18px;color:var(--warn)}
+.phases{margin:8px 0 0;padding:0;list-style:none;font-size:12.5px;color:var(--muted)}
+.phases li{display:flex;gap:8px}.phases .ok{color:var(--pass)}.phases .bad{color:var(--fail)}
+.phases .t{margin-left:auto;font-variant-numeric:tabular-nums}
+#lightbox{position:fixed;inset:0;background:rgba(0,0,0,.85);display:flex;align-items:center;
+justify-content:center;gap:12px;padding:16px;z-index:10}#lightbox[hidden]{display:none}
+#lightbox figure{margin:0;max-width:min(1200px,100%);text-align:center}
+#lightbox img{max-width:100%;max-height:82vh;border-radius:6px;display:block;margin:0 auto}
+#lightbox figcaption{color:#e6e8ec;font-size:13px;margin-top:8px}
+#lightbox button{background:rgba(255,255,255,.12);color:#fff;border:0;border-radius:999px;
+width:44px;height:44px;font-size:24px;line-height:1;cursor:pointer;flex:0 0 auto}
+#lightbox button:hover,#lightbox button:focus-visible{background:rgba(255,255,255,.28);outline:none}
+#lightbox .lb-close{position:absolute;top:16px;right:16px;font-size:18px}
 """
 
 _LABEL = {
@@ -87,17 +135,30 @@ def _card(run_dir: Path, entry: dict) -> str:
         if (run_dir / folder / "fail.png").exists():
             src = escape(f"{folder}/fail.png")
             img = f'<img src="{src}" alt="Screen at the failure">'
-            out.append(f'<a class="failshot" href="{src}">{img}</a>')
+            cap = escape(f"{entry['name']} · at the failure", quote=True)
+            out.append(f'<a class="failshot" href="{src}" data-shot data-caption="{cap}">{img}</a>')
     for note in res.get("manual", []):
         out.append(f'<ul class="manual"><li>{escape(note)}</li></ul>')
+    phases = res.get("phases", [])
+    if phases:
+        out.append('<ul class="phases">')
+        for p in phases:
+            ok = p.get("status") == "PASS"
+            mark = '<span class="ok">✓</span>' if ok else '<span class="bad">✗</span>'
+            secs = f"{p.get('seconds', 0):.2f} s"
+            name = escape(p.get("name", ""))
+            out.append(f'<li>{mark}<span>{name}</span><span class="t">{secs}</span></li>')
+        out.append("</ul>")
     shots = res.get("screenshots", [])
     if shots:
         out.append('<div class="shots">')
+        names = [p.get("name") for p in res.get("phases", [])]
         for i, s in enumerate(shots, 1):
             src = escape(f"{folder}/{s}")
-            out.append(
-                f'<a href="{src}"><img src="{src}" alt="Phase {i}" loading="lazy">phase {i}</a>'
-            )
+            label = names[i - 1] if i - 1 < len(names) and names[i - 1] else f"phase {i}"
+            cap = escape(f"{entry['name']} · {label}", quote=True)
+            img = f'<img src="{src}" alt="{escape(label)}" loading="lazy">'
+            out.append(f'<a href="{src}" data-shot data-caption="{cap}">{img}{escape(label)}</a>')
         out.append("</div>")
     if res.get("video"):
         out.append(f'<p class="sub"><a href="{escape(folder)}/run.mp4">video</a></p>')
@@ -128,7 +189,8 @@ def write_report(run_dir: Path | str) -> Path:
         for x in (
             run.get("platform", "?"),
             f"commit {run.get('commit', '?')}",
-            run.get("started", ""),
+            run.get("started_at", ""),
+            f"{run.get('seconds', 0)} s",
         )
     )
     html = f"""<!doctype html>
@@ -140,7 +202,7 @@ def write_report(run_dir: Path | str) -> Path:
 <div class="meta">{meta}</div>
 <div class="tally">{tally}</div>
 {body}
-</main></body></html>
+</main>{_LIGHTBOX}</body></html>
 """
     path = run_dir / "report.html"
     path.write_text(html, encoding="utf-8")
