@@ -6,6 +6,7 @@ from __future__ import annotations
 # grant control over every application on the desktop.
 import json
 import platform
+import sys
 from collections import deque
 
 from mcp.server.fastmcp import FastMCP
@@ -486,6 +487,11 @@ def press_key(key: str, window_id: str | None = None) -> dict:
 
 
 def main():
+    # `bad-ass-mcp run ...` runs BAM scripts; anything else starts the server.
+    if len(sys.argv) > 1 and sys.argv[1] == "run":
+        from .bam.cli import main as run_main
+
+        sys.exit(run_main(sys.argv[2:]))
     mcp.run()
 
 
