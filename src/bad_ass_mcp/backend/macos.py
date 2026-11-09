@@ -10,7 +10,7 @@ from ..types import ActionResult, ElementHandle, StaleHandleError, WindowInfo
 from .base import DesktopBackend, prune_tree
 
 try:
-    from AppKit import NSWorkspace
+    from AppKit import NSRunningApplication, NSWorkspace
     from ApplicationServices import (
         AXUIElementCopyAttributeValue,
         AXUIElementCreateApplication,
@@ -651,24 +651,85 @@ class MacOSBackend(DesktopBackend):
 
     def type_text(self, handle_id: str, text: str) -> ActionResult:
         element = self._resolve(handle_id)
-        # Primary: direct AXValue set — foreground-independent, handles all Unicode
+        # Primary: direct AXValue set — foreground-independent, handles all
+        # Unicode. Some editors (CodeMirror, Monaco, other contenteditable
+        # widgets) report the set as successful but ignore it, since only
+        # real input events reach them; read the value back to tell.
+        before = _ax_get(element, "AXValue")
         if _ax_set(element, "AXValue", text):
-            return ActionResult(ok=True)
-        # Fallback: write to clipboard then Cmd+V — no AppleScript injection surface.
-        # Use the stored PID so Cmd+V lands in the right process without stealing focus.
+            if _ax_get(element, "AXValue") != before:
+                return ActionResult(ok=True)
+        return self._paste_text(element, handle_id, text)
+
+    def _paste_text(self, element: Any, handle_id: str, text: str) -> ActionResult:
+        """Type by pasting: focus, put `text` on the clipboard, Cmd+V to the
+        element's process (no focus stealing, no AppleScript), then put the
+        user's clipboard back."""
+        pid = self._handle_pids.get(handle_id)
+        previous = self._bring_to_front(pid) if pid else None
         try:
             _ax_set(element, "AXFocused", True)
             time.sleep(0.05)
+            saved = subprocess.run(["pbpaste"], capture_output=True, timeout=5)
             result = subprocess.run(
                 ["pbcopy"], input=text.encode("utf-8"), capture_output=True, timeout=5
             )
-            if result.returncode == 0:
-                pid = self._handle_pids.get(handle_id)
-                _quartz_key_press(0x09, kCGEventFlagMaskCommand, pid=pid)  # Cmd+V
-                return ActionResult(ok=True)
-            return ActionResult(ok=False, error="pbcopy failed")
+            if result.returncode != 0:
+                return ActionResult(ok=False, error="pbcopy failed")
+            _quartz_key_press(0x09, kCGEventFlagMaskCommand, pid=pid)  # Cmd+V
+            # The target reads the pasteboard while handling the event; give
+            # it a moment before restoring the user's clipboard.
+            time.sleep(0.3)
+            if saved.returncode == 0:
+                subprocess.run(["pbcopy"], input=saved.stdout, capture_output=True, timeout=5)
+            return ActionResult(ok=True)
         except Exception as e:
             return ActionResult(ok=False, error=f"Cannot set text: {e}")
+        finally:
+            if previous is not None:
+                self._set_frontmost(previous)
+
+    def _bring_to_front(self, pid: int) -> int | None:
+        """Make `pid` the frontmost app. macOS only routes Cmd+V (and other
+        menu key equivalents) to the active app, so a paste into a background
+        window is silently dropped. Returns the pid that was in front, to hand
+        focus back to, or None if `pid` already was."""
+        front = self._frontmost_pid()
+        if front == pid:
+            return None
+        self._set_frontmost(pid)
+        return front
+
+    @staticmethod
+    def _frontmost_pid() -> int | None:
+        app = NSWorkspace.sharedWorkspace().frontmostApplication()
+        return app.processIdentifier() if app is not None else None
+
+    def _set_frontmost(self, pid: int) -> bool:
+        """Activate `pid` and wait for it to be in front. Since macOS 14,
+        activateWithOptions_ from a background process (this server) returns
+        True and is ignored (cooperative activation), so fall back to System
+        Events, which the Automation permission lets us drive. `pid` is an
+        int we formatted ourselves; nothing user-supplied reaches the script."""
+
+        def landed() -> bool:
+            for _ in range(20):  # up to ~1 s
+                time.sleep(0.05)
+                if self._frontmost_pid() == pid:
+                    return True
+            return False
+
+        target = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+        if target is not None:
+            target.activateWithOptions_(0)
+            if landed():
+                return True
+        script = (
+            'tell application "System Events" to set frontmost of '
+            f"(first process whose unix id is {int(pid)}) to true"
+        )
+        subprocess.run(["osascript", "-e", script], capture_output=True, timeout=5)
+        return landed()
 
     def select_option(self, handle_id: str, value: str) -> ActionResult:
         element = self._resolve(handle_id)

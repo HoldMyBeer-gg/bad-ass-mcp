@@ -770,3 +770,160 @@ def test_start_recording_scales_window_crop_for_retina():
     assert cmd[cmd.index("-i") + 1] == "4:none"
     # 301 pt → 602 px, 400 pt → 800 px, origin doubled
     assert cmd[cmd.index("-vf") + 1] == "crop=602:800:20:40"
+
+
+# ── type_text: AXValue set that "succeeds" without changing anything ──
+
+
+def _type_text_harness(*, set_ok, before, after):
+    """Run MacOSBackend.type_text against a fake element.
+
+    set_ok: what _ax_set(AXValue) returns. before/after: AXValue as read
+    before and after the set. Returns (result, pbcopy inputs, Cmd+V count).
+    """
+    from bad_ass_mcp.backend import macos
+
+    backend = macos.MacOSBackend()
+    backend._handles["h"] = MagicMock()
+    backend._handle_pids["h"] = 4242
+    reads = iter([before, after])
+    copies: list[bytes] = []
+    pastes: list[tuple] = []
+
+    def fake_ax_get(_el, attr):
+        return next(reads) if attr == "AXValue" else None
+
+    def fake_ax_set(_el, attr, _value):
+        return set_ok if attr == "AXValue" else True
+
+    def fake_run(cmd, input=None, **_kw):  # noqa: A002
+        if cmd == ["pbpaste"]:
+            return MagicMock(returncode=0, stdout=b"user clipboard")
+        copies.append(input)
+        return MagicMock(returncode=0, stdout=b"")
+
+    with (
+        patch.object(backend, "_resolve", return_value=backend._handles["h"]),
+        patch.object(backend, "_bring_to_front", return_value=None),
+        patch.object(macos, "_ax_get", side_effect=fake_ax_get),
+        patch.object(macos, "_ax_set", side_effect=fake_ax_set),
+        patch.object(macos.subprocess, "run", side_effect=fake_run),
+        patch.object(macos, "_quartz_key_press", side_effect=lambda *a, **k: pastes.append((a, k))),
+        patch.object(macos.time, "sleep"),
+    ):
+        result = backend.type_text("h", "hello")
+    return result, copies, len(pastes)
+
+
+@_darwin
+def test_type_text_trusts_a_set_that_took():
+    result, copies, pastes = _type_text_harness(set_ok=True, before="", after="hello")
+    assert result.ok
+    assert pastes == 0 and copies == []
+
+
+@_darwin
+def test_type_text_pastes_when_the_set_changed_nothing():
+    # CodeMirror and other contenteditable editors accept the AXValue set
+    # but ignore it; only real input events reach them.
+    result, copies, pastes = _type_text_harness(set_ok=True, before="\n", after="\n")
+    assert result.ok
+    assert pastes == 1
+    assert copies[0] == b"hello"
+
+
+@_darwin
+def test_type_text_restores_the_users_clipboard_after_pasting():
+    _, copies, _ = _type_text_harness(set_ok=True, before="", after="")
+    assert copies == [b"hello", b"user clipboard"]
+
+
+@_darwin
+def test_type_text_accepts_a_normalised_value():
+    # The field changed, just not to exactly our text (e.g. trimmed or
+    # reformatted): pasting on top would type it twice.
+    result, _, pastes = _type_text_harness(set_ok=True, before="", after="hello ")
+    assert result.ok and pastes == 0
+
+
+@_darwin
+def test_type_text_pastes_when_the_set_fails():
+    result, copies, pastes = _type_text_harness(set_ok=False, before="", after="")
+    assert result.ok and pastes == 1 and copies[0] == b"hello"
+
+
+@_darwin
+def test_paste_brings_a_background_app_forward_then_gives_focus_back():
+    # macOS doesn't route Cmd+V to a background app; activate it for the
+    # paste and return the user to whatever they had in front.
+    from bad_ass_mcp.backend import macos
+
+    backend = macos.MacOSBackend()
+    backend._handle_pids["h"] = 4242
+    order: list[str] = []
+
+    with (
+        patch.object(
+            backend, "_bring_to_front", side_effect=lambda pid: order.append(f"front:{pid}") or 777
+        ),
+        patch.object(
+            backend,
+            "_set_frontmost",
+            side_effect=lambda pid: order.append(f"restore:{pid}") or True,
+        ),
+        patch.object(macos, "_ax_set", return_value=True),
+        patch.object(macos.subprocess, "run", return_value=MagicMock(returncode=0, stdout=b"")),
+        patch.object(macos, "_quartz_key_press", side_effect=lambda *a, **k: order.append("paste")),
+        patch.object(macos.time, "sleep"),
+    ):
+        result = backend._paste_text(MagicMock(), "h", "x")
+    assert result.ok
+    assert order == ["front:4242", "paste", "restore:777"]
+
+
+@_darwin
+def test_paste_leaves_focus_alone_when_the_app_is_already_in_front():
+    from bad_ass_mcp.backend import macos
+
+    backend = macos.MacOSBackend()
+    backend._handle_pids["h"] = 4242
+    restores: list = []
+    with (
+        patch.object(backend, "_bring_to_front", return_value=None),
+        patch.object(backend, "_set_frontmost", side_effect=lambda pid: restores.append(pid)),
+        patch.object(macos, "_ax_set", return_value=True),
+        patch.object(macos.subprocess, "run", return_value=MagicMock(returncode=0, stdout=b"")),
+        patch.object(macos, "_quartz_key_press"),
+        patch.object(macos.time, "sleep"),
+    ):
+        assert backend._paste_text(MagicMock(), "h", "x").ok
+    assert restores == []
+
+
+@_darwin
+def test_set_frontmost_falls_back_to_system_events_when_activation_is_ignored():
+    # macOS 14+ cooperative activation: activateWithOptions_ returns True
+    # from a background process and nothing happens.
+    from bad_ass_mcp.backend import macos
+
+    backend = macos.MacOSBackend()
+    target = MagicMock()
+    target.activateWithOptions_.return_value = True
+    calls: list = []
+    with (
+        patch.object(
+            macos,
+            "NSRunningApplication",
+            MagicMock(**{"runningApplicationWithProcessIdentifier_.return_value": target}),
+        ),
+        patch.object(backend, "_frontmost_pid", return_value=1),  # never changes
+        patch.object(
+            macos.subprocess,
+            "run",
+            side_effect=lambda cmd, **k: calls.append(cmd) or MagicMock(returncode=0),
+        ),
+        patch.object(macos.time, "sleep"),
+    ):
+        backend._set_frontmost(4242)
+    assert calls and calls[0][0] == "osascript"
+    assert "unix id is 4242" in calls[0][-1]
