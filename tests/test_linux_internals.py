@@ -49,33 +49,8 @@ def _make_backend():
         return backend, mod
 
 
-# ── press_key: xdotool --window path ─────────────────────────────────
-
-
-def test_press_key_with_window_id_uses_xdotool_window():
-    """press_key should call xdotool key --window XWID without windowactivate."""
-    backend, _mod = _make_backend()
-
-    fake_app = MagicMock()
-    fake_app.get_process_id.return_value = 1234
-
-    with patch.object(backend, "_find_app", return_value=fake_app):
-        with patch.object(backend, "_find_xwid", return_value="99999"):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(returncode=0)
-                result = backend.press_key("Return", window_id="1234")
-
-    assert result.ok is True
-    mock_run.assert_called_once()
-    args = mock_run.call_args[0][0]  # first positional arg is the command list
-    assert args[0] == "xdotool"
-    assert "key" in args
-    assert "--window" in args
-    assert "99999" in args
-    assert "--clearmodifiers" in args
-    assert "Return" in args
-    # Must NOT contain windowactivate (the old focus-stealing call)
-    assert "windowactivate" not in args
+# ── press_key ───────────────────────────────────────────────────────
+# (the XTEST key/type paths are covered in test_linux_xtest_input.py)
 
 
 def test_press_key_no_window_id_skips_xdotool():
@@ -142,40 +117,6 @@ def test_press_key_falls_back_to_atspi_when_xdotool_missing():
     # FileNotFoundError must not propagate; AT-SPI fallback is used instead
     assert result.ok is True
     mock_gen.assert_called_once()
-
-
-# ── type_text: xdotool type --window path ────────────────────────────
-
-
-def test_type_text_fallback_uses_xdotool_type_window():
-    """The AT-SPI keyboard injection fallback should prefer xdotool type --window."""
-    backend, _mod = _make_backend()
-
-    # Set up a node that rejects SetValue and EditableText so we reach the fallback
-    fake_node = MagicMock()
-    fake_node.query_value.side_effect = Exception("no value iface")
-    fake_node.query_editable_text.side_effect = Exception("no editable iface")
-    fake_node.get_process_id.return_value = 9999
-    backend._handles["h-text"] = fake_node
-    # Make _resolve succeed without live AT-SPI
-    fake_node.get_role.return_value = "text"
-
-    with patch.object(backend, "_find_xwid", return_value="77777"):
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            result = backend.type_text("h-text", "hello world")
-
-    assert result.ok is True
-    mock_run.assert_called_once()
-    args = mock_run.call_args[0][0]
-    assert args[0] == "xdotool"
-    assert "type" in args
-    assert "--window" in args
-    assert "77777" in args
-    assert "--clearmodifiers" in args
-    assert "hello world" in args
-    # Must not use shell=True
-    assert mock_run.call_args.kwargs.get("shell", False) is False
 
 
 # ── webview a11y wake-probe ──────────────────────────────────────────

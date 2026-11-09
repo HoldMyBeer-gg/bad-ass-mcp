@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import subprocess
 import time
 import uuid
@@ -12,6 +13,55 @@ from gi.repository import Atspi  # noqa: E402
 
 from ..types import ActionResult, ElementHandle, StaleHandleError, WindowInfo  # noqa: E402
 from .base import DesktopBackend, prune_tree  # noqa: E402
+
+_IFACE_CLASSES = {
+    "text": "Text",
+    "editable_text": "EditableText",
+    "value": "Value",
+    "component": "Component",
+    "selection": "Selection",
+    "action": "Action",
+}
+
+
+class _IfaceProxy:
+    """Call AT-SPI interface methods on an Accessible the way the gi bindings
+    want: ``Atspi.Text.get_text(node, 0, -1)``. The flat spelling
+    ``node.get_text(0, -1)`` is a trap there: ``Atspi.Accessible.get_text()``
+    is the deprecated interface *getter* and takes no arguments."""
+
+    def __init__(self, node: Any, iface_cls: Any):
+        self._node = node
+        self._cls = iface_cls
+
+    def __getattr__(self, name: str):
+        fn = getattr(self._cls, name)
+        return lambda *args, **kwargs: fn(self._node, *args, **kwargs)
+
+
+def _iface(node: Any, kind: str) -> Any:
+    """Return an object exposing the ``kind`` AT-SPI interface (text,
+    editable_text, value, component, selection, action) of an Accessible.
+
+    pyatspi named these ``query_<kind>()`` and returned interface objects; the
+    gi bindings for libatspi (the only ones on a current system: at-spi2-core
+    2.60 / PyGObject 3.56 on SteamOS 3.9) have no such methods, and their
+    ``get_<kind>_iface()`` just returns the Accessible, whose interface methods
+    must be called as ``Atspi.<Iface>.method(node, ...)``. The old spelling
+    raised AttributeError here and silently disabled every text, value and
+    editable-text path (reads fell back to the accessible name, typing to raw
+    keystrokes)."""
+    query = getattr(node, f"query_{kind}", None)
+    if query is not None:  # pyatspi
+        return query()
+    cls_name = _IFACE_CLASSES[kind]
+    try:
+        supported = [i.lower() for i in node.get_interfaces()]
+    except Exception:
+        supported = None
+    if supported is not None and cls_name.lower() not in supported:
+        raise AttributeError(f"node exposes no {cls_name} interface")
+    return _IfaceProxy(node, getattr(Atspi, cls_name))
 
 
 class LinuxBackend(DesktopBackend):
@@ -56,6 +106,54 @@ class LinuxBackend(DesktopBackend):
         # stay asleep; _atspi_list_windows detects those and stamps them
         # accessible=False.
         self._ensure_screen_reader_flag()
+        # XTEST input presses real modifier keys (ctrl+a, chords, shifted
+        # characters). If xdotool dies mid-call the user's keyboard is left with
+        # a modifier logically held, so every XTEST call releases them in a
+        # `finally`, and so does teardown.
+        atexit.register(self.release_modifiers)
+
+    # ── XTEST input ────────────────────────────────────────────────────
+
+    _MODIFIER_KEYS = (
+        "Control_L",
+        "Control_R",
+        "Shift_L",
+        "Shift_R",
+        "Alt_L",
+        "Alt_R",
+        "Super_L",
+        "Super_R",
+        "Meta_L",
+        "Meta_R",
+    )
+
+    def release_modifiers(self) -> None:
+        """Release every modifier key, left and right. Safe to call any time."""
+        try:
+            subprocess.run(
+                ["xdotool", "keyup", *self._MODIFIER_KEYS],
+                capture_output=True,
+                timeout=5,
+            )
+        except Exception:
+            pass
+
+    def _xtest(self, args: list[str], *, check: bool = True, timeout: float = 30) -> None:
+        """Run one xdotool key/type command through XTEST and release all
+        modifiers afterwards, whether it succeeded, failed or timed out."""
+        try:
+            subprocess.run(["xdotool", *args], capture_output=True, check=check, timeout=timeout)
+        finally:
+            self.release_modifiers()
+
+    def close(self) -> None:
+        self.release_modifiers()
+
+    def __del__(self):
+        try:
+            self.release_modifiers()
+        except Exception:
+            pass
 
     # ── Internal helpers ──────────────────────────────────────────────
 
@@ -83,7 +181,7 @@ class LinuxBackend(DesktopBackend):
         name = node.get_name() or ""
         value = None
         try:
-            text = node.query_text()
+            text = _iface(node, "text")
             value = text.get_text(0, -1)
         except Exception:
             pass
@@ -529,7 +627,7 @@ class LinuxBackend(DesktopBackend):
     def element_bounds(self, handle_id: str) -> tuple[float, float, float, float] | None:
         node = self._resolve(handle_id)
         try:
-            ext = node.query_component().get_extents(Atspi.CoordType.SCREEN)
+            ext = _iface(node, "component").get_extents(Atspi.CoordType.SCREEN)
         except Exception:
             return None
         if ext is None or ext.width <= 0 or ext.height <= 0:
@@ -562,18 +660,65 @@ class LinuxBackend(DesktopBackend):
         node = self._resolve(handle_id)
         try:
             # Try SetValue first (foreground-independent)
-            val_iface = node.query_value()
+            val_iface = _iface(node, "value")
             val_iface.set_current_value(float(text))
             return ActionResult(ok=True)
         except Exception:
             pass
+        # Who serves this node decides how to type into it. A native toolkit
+        # widget (GTK entry: same pid as its application) honours
+        # EditableText.set_text_contents atomically and emits its change
+        # signals, which also sidesteps GTK's inline path completion racing
+        # against char-by-char keystrokes (seen in the file chooser's location
+        # entry). Web content is different: WebKitGTK serves it from
+        # WebKitWebProcess (a different pid) and set_text_contents there
+        # rewrites the DOM value without firing input events, so app-side
+        # filtering, autocomplete and "Enter picks the top hit" never run
+        # (verified on SteamOS with a Tauri emoji search box). Web content
+        # gets real XTEST keystrokes after the window is given focus.
+        pid = node.get_process_id()
         try:
-            # EditableText interface (foreground-independent)
-            et = node.query_editable_text()
-            et.set_text_contents(text)
-            return ActionResult(ok=True)
+            app_pid = node.get_application().get_process_id()
+        except Exception:
+            app_pid = None
+        native = bool(pid) and bool(app_pid) and pid == app_pid
+        if native:
+            try:
+                et = _iface(node, "editable_text")
+                et.set_text_contents(text)
+                return ActionResult(ok=True)
+            except Exception:
+                pass
+        try:
+            xwid = self._find_xwid(pid) if pid else None
+            if not xwid and app_pid:
+                xwid = self._find_xwid(app_pid)  # web process owns no X window
+            if xwid:
+                self._activate_for_pid(xwid, app_pid or pid)
+                try:
+                    node.grab_focus()
+                    time.sleep(0.05)
+                except Exception:
+                    pass
+                # Replace the field's contents, matching set_text_contents
+                # semantics. GTK file choosers pre-select only the basename of
+                # "Untitled.md", so typing without select-all yields "name.md.md".
+                # No --clearmodifiers: _xtest releases every modifier afterwards.
+                self._xtest(["key", "ctrl+a"], check=False)
+                self._xtest(["type", "--delay", "10", text])
+                return ActionResult(ok=True)
+        except FileNotFoundError:
+            pass  # xdotool not available — fall through
         except Exception:
             pass
+        if not native:
+            try:
+                # EditableText interface (foreground-independent)
+                et = _iface(node, "editable_text")
+                et.set_text_contents(text)
+                return ActionResult(ok=True)
+            except Exception:
+                pass
         try:
             # Try xdotool type --window first: delivers text directly to the target
             # window without stealing focus (background-safe).
@@ -655,14 +800,31 @@ class LinuxBackend(DesktopBackend):
     def get_value(self, handle_id: str) -> str | None:
         node = self._resolve(handle_id)
         try:
-            return node.query_text().get_text(0, -1)
+            return _iface(node, "text").get_text(0, -1)
         except Exception:
             pass
         try:
-            return str(node.query_value().get_current_value())
+            return str(_iface(node, "value").get_current_value())
         except Exception:
             pass
         return node.get_name() or None
+
+    def _option_selected(self, handle_id: str, value: str) -> bool | None:
+        """WebKitGTK combo boxes expose neither Text nor Value, so get_value
+        falls back to the accessible *name* ("Preview font"), which is not the
+        selection. Treat that as unreadable (None) instead of "not selected",
+        otherwise a successful do_action is reported as a failure and the
+        keystroke fallback runs against a control with no screen bounds."""
+        try:
+            node = self._resolve(handle_id)
+            current = self.get_value(handle_id)
+        except Exception:
+            return None
+        if current is None or not str(current).strip():
+            return None
+        if current == (node.get_name() or None):
+            return None
+        return str(current).strip().lower() == value.strip().lower()
 
     def wait_for_window(self, title_pattern: str, timeout: float = 5.0) -> WindowInfo | None:
         deadline = time.monotonic() + timeout
@@ -879,12 +1041,37 @@ class LinuxBackend(DesktopBackend):
                 except OSError:
                     pass
 
+    def _activate_for_pid(self, xwid: str, pid: int | None) -> None:
+        """Give keyboard focus to the app before XTEST input, unless one of its
+        windows (e.g. a modal file chooser) already has it: re-activating would
+        move focus away from the dialog the user is looking at."""
+        try:
+            focused = (
+                subprocess.check_output(
+                    ["xdotool", "getwindowfocus", "getwindowpid"], stderr=subprocess.DEVNULL
+                )
+                .decode()
+                .strip()
+            )
+            if pid is not None and focused == str(pid):
+                return
+        except Exception:
+            pass
+        subprocess.run(
+            ["xdotool", "windowactivate", "--sync", xwid],
+            capture_output=True,
+            timeout=5,
+        )
+
     def _find_xwid(self, pid: int) -> str | None:
         """Return the X11 window ID of the largest visible window for a PID."""
         try:
+            # --onlyvisible: GTK keeps destroyed dialogs' X windows around
+            # unmapped (a closed Save dialog still reports 1231x902), and
+            # activating one of those swallows the keystrokes that follow.
             xwids = (
                 subprocess.check_output(
-                    ["xdotool", "search", "--pid", str(pid)],
+                    ["xdotool", "search", "--onlyvisible", "--pid", str(pid)],
                     stderr=subprocess.DEVNULL,
                 )
                 .decode()
@@ -1087,19 +1274,14 @@ class LinuxBackend(DesktopBackend):
                         # Pass the key name directly — xdotool speaks X11 keysym names
                         # natively (Return, F1, ctrl+a, etc.). The _KEY_SYMS filter is
                         # only for the AT-SPI fallback path below.
+                        #
+                        # `xdotool key --window` delivers via XSendEvent, which GTK and
+                        # WebKitGTK drop (verified on SteamOS/KWin: Escape never reached
+                        # a Tauri dialog). Activate the window and send through XTEST
+                        # instead; that is what a real keypress looks like to the app.
                         try:
-                            subprocess.run(
-                                [
-                                    "xdotool",
-                                    "key",
-                                    "--window",
-                                    xwid,
-                                    "--clearmodifiers",
-                                    key,
-                                ],
-                                capture_output=True,
-                                check=True,
-                            )
+                            self._activate_for_pid(xwid, app.get_process_id())
+                            self._xtest(["key", key])
                             return ActionResult(ok=True)
                         except FileNotFoundError:
                             pass  # xdotool not available — fall through to AT-SPI
