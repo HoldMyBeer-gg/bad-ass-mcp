@@ -29,6 +29,9 @@ Planned before scripts can be shared (BAM strings, `.bam` packages):
 
 ## Running
 
+From source: `uv sync --extra macos` (or `--extra windows`, `--extra linux`)
+first; each backend needs its platform's accessibility bindings.
+
 ```
 bad-ass-mcp run PATH... [--config bam.json] [--results DIR] [--platform P]
                 [--resume] [--fail-fast [first_script]] [--retries N]
@@ -73,8 +76,9 @@ Three layers, later wins: the suite file (`--config`), a script's own
 | `window` | (required) | title substring of the app's main window |
 | `app` | none | launch command, string or list, or per-platform object; the run then drives only that process's windows (or ones that appeared after launch) |
 | `pid` | none | attach mode: drive only this process's windows. Without `app` or `pid`, two windows matching `window` is a failure, never a guess (it could be the user's own copy) |
-| `launch_timeout` | 20 | seconds to wait for the window after launch |
-| `step_timeout` | 5 | seconds to wait for windows in phases |
+| `ready` | none | an element (`{"name": ..., "role": ...}`, per platform if needed) that exists only once the app is usable; waited for after the window appears, up to `launch_timeout`. Set it: windows often exist before their content (WebView2, WebKitGTK), and keys sent then are lost |
+| `launch_timeout` | 20 | seconds to wait for the window, then for `ready` |
+| `step_timeout` | 5 | seconds to wait for windows in phases, and to retry elements a phase learns that haven't rendered yet |
 | `screenshot_proof` | true | screenshot after every phase |
 | `record_video` | false | `true`, or `"on_failure"` to keep only failing runs |
 | `fail_fast` | false | `true`, or `"first_script"` (stop only if the first script fails) |

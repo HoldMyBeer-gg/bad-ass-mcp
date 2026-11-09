@@ -16,7 +16,9 @@ from bad_ass_mcp.bam.script import build_steps, learn_descriptors, pick
 from bad_ass_mcp.bam.suite import run_suite
 from tests.fake_backend import FakeBackend
 
-CONFIG = {"window": "Fake App", "screenshot_proof": True}
+# Short step_timeout: deliberate "missing element" tests shouldn't wait out
+# the real default while the runner retries.
+CONFIG = {"window": "Fake App", "screenshot_proof": True, "step_timeout": 0.2}
 
 
 def write(tmp_path, name, script):
@@ -308,7 +310,12 @@ def test_retries_mark_a_flaky_pass(tmp_path):
     backend.find_elements = flaky
     script = write(tmp_path, "flaky", {"phases": [{"learn": {"ok": {"name": "OK"}}, "steps": []}]})
     run_dir = run_suite(
-        backend, [script], "linux", {**CONFIG, "retries": 1}, tmp_path / "results", commit="abc"
+        backend,
+        [script],
+        "linux",
+        {**CONFIG, "retries": 1, "step_timeout": 0},
+        tmp_path / "results",
+        commit="abc",
     )
     s = json.loads((run_dir / "run.json").read_text())["scripts"][0]
     assert s["status"] == "PASS" and s["attempts"] == 2
@@ -680,3 +687,61 @@ def test_a_failing_shell_step_fails_at_that_step(tmp_path):
     r = run_script(backend, script, "linux", CONFIG, tmp_path / "out")
     assert r["status"] == "FAIL" and r["failure"]["step"] == 1
     assert backend.key_log == []  # nothing after the failed shell step ran
+
+
+# ── wait for the app to be ready, not just for its window ────────────
+
+
+class _SlowContent(FakeBackend):
+    """The window exists at once; its content shows up `delay` s later
+    (WebView2 paints after the window appears)."""
+
+    def __init__(self, delay=0.4):
+        super().__init__()
+        import time as _t
+
+        self._ready_at = _t.monotonic() + delay
+        self.keys_before_ready: list[str] = []
+
+    def _loaded(self):
+        import time as _t
+
+        return _t.monotonic() >= self._ready_at
+
+    def find_elements(self, window_id, *, role=None, name=None, index=0):
+        return super().find_elements(window_id, role=role, name=name) if self._loaded() else []
+
+    def press_key(self, key, window_id=None):
+        if not self._loaded():
+            self.keys_before_ready.append(key)
+        return super().press_key(key, window_id)
+
+
+def test_ready_element_is_awaited_before_the_first_step(tmp_path):
+    backend = _SlowContent()
+    script = write(
+        tmp_path,
+        "early-keys",
+        {
+            "phases": [{"learn": {}, "steps": [{"action": "key", "key": "x"}]}],
+        },
+    )
+    r = run_script(backend, script, "linux", {**CONFIG, "ready": {"name": "OK"}}, tmp_path / "out")
+    assert r["status"] == "PASS", r
+    assert backend.keys_before_ready == []  # nothing typed into a page that isn't there yet
+
+
+def test_an_app_that_never_gets_ready_fails_clearly(tmp_path):
+    script = write(tmp_path, "never", {"phases": []})
+    cfg = {**CONFIG, "ready": {"name": "No such thing"}, "launch_timeout": 0.3}
+    r = run_script(FakeBackend(), script, "linux", cfg, tmp_path / "out")
+    assert r["status"] == "FAIL"
+    assert "not ready" in r["failure"]["reason"] and "No such thing" in r["failure"]["reason"]
+
+
+def test_learn_retries_late_elements_until_step_timeout(tmp_path):
+    script = write(tmp_path, "late", {"phases": [{"learn": {"ok": {"name": "OK"}}, "steps": []}]})
+    r = run_script(
+        _SlowContent(0.4), script, "linux", {**CONFIG, "step_timeout": 2}, tmp_path / "out"
+    )
+    assert r["status"] == "PASS", r

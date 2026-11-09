@@ -159,6 +159,18 @@ class _Run:
         self.window = self.find_window(pattern, timeout, unique=True)
         if self.window is None:
             raise ScriptFailure(f"no window matching {pattern!r}")
+        # A window can exist before its content does (WebView2 paints after
+        # the window appears), and keys sent then are lost. Wait for an
+        # element that only exists once the app is usable.
+        ready = pick(self.config.get("ready"), self.platform)
+        if ready:
+            desc = learn_descriptors({"r": ready}, self.platform)["r"]
+            limit = float(self.config.get("launch_timeout", 20))
+            deadline = time.monotonic() + limit
+            while not self.find(self.window, desc):
+                if time.monotonic() >= deadline:
+                    raise ScriptFailure(f"app not ready: no {_describe(desc)} within {limit:g}s")
+                time.sleep(0.2)
 
     def teardown(self) -> None:
         if self.proc is not None and self.proc.poll() is None:
@@ -205,13 +217,20 @@ class _Run:
 
         try:
             descs = learn_descriptors(phase.get("learn", {}), self.platform)
-            plain = {k: v for k, v in descs.items() if "state" not in v}
-            handles = self.b.learn_layout(window, plain) if plain else {}
-            for k, d in descs.items():
-                if "state" in d:
-                    hits = self.find(window, d)
-                    handles[k] = hits[0].id if hits else None
-            missing = [f"{k} ({_describe(descs[k])})" for k, v in handles.items() if v is None]
+            # Elements can render a beat after the step that opened them:
+            # retry missing ones until step_timeout.
+            deadline = time.monotonic() + float(self.config.get("step_timeout", 5))
+            while True:
+                plain = {k: v for k, v in descs.items() if "state" not in v}
+                handles = self.b.learn_layout(window, plain) if plain else {}
+                for k, d in descs.items():
+                    if "state" in d:
+                        hits = self.find(window, d)
+                        handles[k] = hits[0].id if hits else None
+                missing = [f"{k} ({_describe(descs[k])})" for k, v in handles.items() if v is None]
+                if not missing or time.monotonic() >= deadline:
+                    break
+                time.sleep(0.2)
             if missing:
                 raise ScriptFailure("element not found: " + ", ".join(missing), phase=n)
 
