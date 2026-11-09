@@ -745,3 +745,30 @@ def test_learn_retries_late_elements_until_step_timeout(tmp_path):
         _SlowContent(0.4), script, "linux", {**CONFIG, "step_timeout": 2}, tmp_path / "out"
     )
     assert r["status"] == "PASS", r
+
+
+# ── window counting where the backend lists applications, not windows ─
+
+
+class _OneAppTwoFrames(FakeBackend):
+    """Linux/macOS backends list one entry per application; its windows are
+    top-level children of the app's tree."""
+
+    def get_tree(self, window_id, *, max_depth=None):
+        from bad_ass_mcp.types import ElementHandle
+
+        frame = lambda i: ElementHandle(id=f"f{i}", role="frame", name="Fake App")  # noqa: E731
+        return ElementHandle(
+            id="app", role="application", name="Fake App", children=[frame(1), frame(2)]
+        )
+
+
+def test_windows_check_counts_frames_on_linux(tmp_path):
+    script = write(tmp_path, "two", {"phases": [], "checks": [{"windows": 2}]})
+    r = run_script(_OneAppTwoFrames(), script, "linux", CONFIG, tmp_path / "out")
+    assert r["status"] == "PASS", r
+
+
+def test_an_app_without_frame_children_still_counts_as_one_window(tmp_path):
+    script = write(tmp_path, "one", {"phases": [], "checks": [{"windows": 1}]})
+    assert run_script(FakeBackend(), script, "linux", CONFIG, tmp_path / "out")["status"] == "PASS"

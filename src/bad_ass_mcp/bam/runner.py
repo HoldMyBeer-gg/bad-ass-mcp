@@ -100,7 +100,24 @@ class _Run:
             time.sleep(0.2)
 
     def count_windows(self, pattern: str) -> int:
-        return sum(1 for w in self.b.list_windows() if _matches(w.name, pattern) and self._ours(w))
+        """Windows matching `pattern` that this run may drive. The Linux and
+        macOS backends list one entry per application, so there the app's
+        top-level window children are counted (AT-SPI `frame`, AX `window`);
+        an app exposing none counts as one."""
+        n = 0
+        for w in self.b.list_windows():
+            if not (_matches(w.name, pattern) and self._ours(w)):
+                continue
+            if self.platform in ("linux", "macos"):
+                try:
+                    tree = self.b.get_tree(w.id, max_depth=1)
+                    frames = [c for c in tree.children if c.role in ("frame", "window")]
+                except Exception:
+                    frames = []
+                n += max(1, len(frames))
+            else:
+                n += 1
+        return n
 
     # ── evidence ──────────────────────────────────────────────────────
     def shot(self, name: str, window: str | None) -> str | None:
