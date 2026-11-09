@@ -131,6 +131,10 @@ class _Run:
     # ── flow ──────────────────────────────────────────────────────────
     def setup(self) -> None:
         self.files.mkdir(parents=True, exist_ok=True)
+        for key, value in self.script.get("variables", {}).items():
+            v = pick(value, self.platform)
+            if v is not None:
+                self.vars[key] = expand(v, self.vars)
         for entry in self.script.get("setup", []):
             if not applies(entry, self.platform) or "shell" not in entry:
                 continue
@@ -193,15 +197,20 @@ class _Run:
 
     def _run_phase(self, phase: dict, n: int) -> None:
         window = self.window
-        if "window" in phase:
-            pattern = pick(phase["window"], self.platform)
+        pattern = pick(phase.get("window"), self.platform)
+        if pattern is not None:
             window = self.find_window(pattern, float(self.config.get("step_timeout", 5)))
             if window is None:
                 raise ScriptFailure(f"no window matching {pattern!r}", phase=n)
 
         try:
             descs = learn_descriptors(phase.get("learn", {}), self.platform)
-            handles = self.b.learn_layout(window, descs) if descs else {}
+            plain = {k: v for k, v in descs.items() if "state" not in v}
+            handles = self.b.learn_layout(window, plain) if plain else {}
+            for k, d in descs.items():
+                if "state" in d:
+                    hits = self.find(window, d)
+                    handles[k] = hits[0].id if hits else None
             missing = [f"{k} ({_describe(descs[k])})" for k, v in handles.items() if v is None]
             if missing:
                 raise ScriptFailure("element not found: " + ", ".join(missing), phase=n)
@@ -221,13 +230,33 @@ class _Run:
             if name:
                 self.screenshots.append(name)
 
+    def find(self, window: str | None, desc: dict) -> list:
+        """find_elements by role/name, then keep those carrying `state`."""
+        found = self.b.find_elements(window, role=desc.get("role"), name=desc.get("name"))
+        if "state" in desc:
+            found = [e for e in found if desc["state"] in (getattr(e, "states", None) or ())]
+        return found
+
     def run_steps(self, sent: list[dict], meta: list[dict], phase: int) -> None:
         # Run server-side in chunks, ending each chunk at a step whose value
         # we need to check, so a wrong value stops the flow right there.
+        # `shell` steps aren't backend actions: the runner runs them itself.
         start = 0
         while start < len(sent):
+            if sent[start].get("action") == "shell":
+                r = _shell(sent[start].get("cmd", ""), self.vars)
+                if r.returncode != 0:
+                    raise ScriptFailure(
+                        f"shell step failed ({r.returncode}): {sent[start].get('cmd')!r} "
+                        f"{r.stderr.strip()}".strip(),
+                        phase=phase,
+                        step=start + 1,
+                        action="shell",
+                    )
+                start += 1
+                continue
             end = start
-            while end < len(sent) - 1 and not meta[end]:
+            while end < len(sent) - 1 and not meta[end] and sent[end + 1].get("action") != "shell":
                 end += 1
             chunk = sent[start : end + 1]
             results = self.b.run_sequence(chunk, stop_on_error=True)
@@ -268,8 +297,15 @@ class _Run:
                 desc = learn_descriptors(
                     {"x": c["present" if want_present else "absent"]}, self.platform
                 )["x"]
-                found = self.b.find_elements(window, role=desc.get("role"), name=desc.get("name"))
-                if want_present and not found:
+                spec = c["present" if want_present else "absent"]
+                found = self.find(window, desc)
+                if want_present and "count" in spec:
+                    if len(found) != int(spec["count"]):
+                        raise ScriptFailure(
+                            f"expected {spec['count']} of {_describe(desc)}, found {len(found)}",
+                            phase=phase,
+                        )
+                elif want_present and not found:
                     raise ScriptFailure(f"expected present: {_describe(desc)}", phase=phase)
                 if not want_present and found:
                     raise ScriptFailure(f"expected absent: {_describe(desc)}", phase=phase)
@@ -299,6 +335,8 @@ def _describe(desc: dict) -> str:
     parts = [f"name {desc['name']!r}"] if "name" in desc else []
     if "role" in desc:
         parts.append(f"role {desc['role']!r}")
+    if "state" in desc:
+        parts.append(f"state {desc['state']!r}")
     return ", ".join(parts) or "any element"
 
 

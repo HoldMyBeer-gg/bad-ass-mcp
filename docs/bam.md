@@ -119,7 +119,21 @@ Three layers, later wins: the suite file (`--config`), a script's own
 - **Checks:** `present`, `absent` (by name/role), `windows: n` (windows matching
   the config's `window`), `no_window: "<title>"`, `shell` (exit 0),
   `manual` (reported for a human; the script ends `MANUAL`).
-- **Runner-only keys** (`note`, `confirm`, `verified`, `covers`) are ignored
+- **Null windows:** a per-platform `window` (or a `wait_for_window` step's
+  `pattern`) that is `null` for this platform runs the phase in the main window
+  and skips the wait. GTK dialogs, for example, live inside the app's window.
+- **State:** a learn entry or a `present`/`absent` check may add `"state"`
+  (e.g. `"focused"`, `"selected"`, per platform if needed): the first match
+  carrying that state wins. For widgets with no accessible name.
+- **Count:** `"count": n` on `present` asserts exactly n matches.
+- **Variables:** `"variables": {"target": {"windows": "$SMOKE\\A.MD", "linux":
+  "$SMOKE/a.md"}}` sets per-platform literals (`$SMOKE` expands inside them);
+  `$target` then works in any step field and shell command.
+- **Shell steps:** `{"action": "shell", "cmd": "..."}` runs a command between
+  steps (for `only`-gated platform glue like xdotool); a non-zero exit fails
+  the script at that step.
+- **Runner-only keys** (`note`, `confirm`, `verified`, `covers`, `notes`,
+  `variables_note`) are ignored
   by the runner and kept for people.
 
 ## Platform notes

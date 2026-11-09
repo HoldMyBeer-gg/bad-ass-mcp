@@ -569,3 +569,114 @@ def test_report_screenshots_open_in_a_lightbox_with_prev_next_close(tmp_path):
     assert len(links) == len(imgs) > 0
     assert all('href="' in a and 'data-caption="' in a for a in links)
     assert "Escape" in html and "ArrowLeft" in html and "ArrowRight" in html
+
+
+# ── format extras from the Linux runs (deck-crab) ────────────────────
+
+
+def test_null_window_pattern_runs_the_phase_in_the_main_window(tmp_path):
+    script = write(
+        tmp_path,
+        "nullwin",
+        {
+            "phases": [
+                {
+                    "window": {"windows": "Save As", "linux": None},
+                    "learn": {"ok": {"name": "OK"}},
+                    "steps": [
+                        {
+                            "action": "wait_for_window",
+                            "pattern": {"windows": "Save As", "linux": None},
+                        },
+                        {"action": "click", "target": "ok"},
+                    ],
+                }
+            ],
+        },
+    )
+    r = run_script(FakeBackend(), script, "linux", CONFIG, tmp_path / "out")
+    assert r["status"] == "PASS", r
+
+
+def test_learn_and_checks_can_require_a_state(tmp_path):
+    # FakeBackend's "Name" field is editable; nothing there is "focused".
+    ok = write(
+        tmp_path,
+        "state-ok",
+        {
+            "phases": [{"learn": {"name": {"role": "text", "state": "editable"}}, "steps": []}],
+            "checks": [{"present": {"role": "text", "state": "editable"}}],
+        },
+    )
+    assert run_script(FakeBackend(), ok, "linux", CONFIG, tmp_path / "a")["status"] == "PASS"
+    missing = write(
+        tmp_path,
+        "state-missing",
+        {
+            "phases": [{"learn": {"name": {"role": "text", "state": "focused"}}, "steps": []}],
+        },
+    )
+    r = run_script(FakeBackend(), missing, "linux", CONFIG, tmp_path / "b")
+    assert r["status"] == "FAIL" and "focused" in r["failure"]["reason"]
+
+
+def test_present_count_is_exact(tmp_path):
+    two = write(
+        tmp_path, "count", {"phases": [], "checks": [{"present": {"role": "button", "count": 2}}]}
+    )
+    assert run_script(FakeBackend(), two, "linux", CONFIG, tmp_path / "a")["status"] == "PASS"
+    three = write(
+        tmp_path, "count3", {"phases": [], "checks": [{"present": {"role": "button", "count": 3}}]}
+    )
+    r = run_script(FakeBackend(), three, "linux", CONFIG, tmp_path / "b")
+    assert r["status"] == "FAIL" and "3" in r["failure"]["reason"] and "2" in r["failure"]["reason"]
+
+
+def test_per_platform_variables_expand_SMOKE_and_reach_steps_and_shell(tmp_path):
+    backend = FakeBackend()
+    script = write(
+        tmp_path,
+        "vars",
+        {
+            "variables": {"target": {"windows": "$SMOKE\\\\A.MD", "linux": "$SMOKE/sub/../a.md"}},
+            "variables_note": "for humans",
+            "phases": [
+                {
+                    "learn": {"name": {"name": "Name"}},
+                    "steps": [
+                        {"action": "type", "target": "name", "text": "$target"},
+                        {"action": "get_value", "target": "name", "save": "typed"},
+                        {"action": "shell", "cmd": 'printf \'%s\' "$target" > "$SMOKE/out.txt"'},
+                    ],
+                }
+            ],
+        },
+    )
+    out = tmp_path / "out"
+    r = run_script(backend, script, "linux", CONFIG, out)
+    assert r["status"] == "PASS", r
+    smoke = str(out / "files")
+    assert backend._values["txt-name"] == f"{smoke}/sub/../a.md"
+    assert (out / "files" / "out.txt").read_text() == f"{smoke}/sub/../a.md"
+
+
+def test_a_failing_shell_step_fails_at_that_step(tmp_path):
+    script = write(
+        tmp_path,
+        "shellfail",
+        {
+            "phases": [
+                {
+                    "learn": {},
+                    "steps": [
+                        {"action": "shell", "cmd": "exit 3"},
+                        {"action": "key", "key": "a"},
+                    ],
+                }
+            ],
+        },
+    )
+    backend = FakeBackend()
+    r = run_script(backend, script, "linux", CONFIG, tmp_path / "out")
+    assert r["status"] == "FAIL" and r["failure"]["step"] == 1
+    assert backend.key_log == []  # nothing after the failed shell step ran

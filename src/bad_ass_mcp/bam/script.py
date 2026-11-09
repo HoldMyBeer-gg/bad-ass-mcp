@@ -41,7 +41,7 @@ def learn_descriptors(learn: dict, platform: str) -> dict[str, dict]:
         if not applies(desc, platform):
             continue
         d = {}
-        for key in ("name", "role"):
+        for key in ("name", "role", "state"):
             v = pick(desc.get(key), platform)
             if v is not None:
                 d[key] = v
@@ -63,6 +63,10 @@ def build_steps(
     env = {**variables, "WINDOW": window_id}
     for step in steps:
         if not applies(step, platform):
+            continue
+        # A per-platform wait_for_window pattern that's null for this
+        # platform means "no separate window here": skip the wait.
+        if step.get("action") == "wait_for_window" and pick(step.get("pattern"), platform) is None:
             continue
         s = {}
         for k, v in step.items():
