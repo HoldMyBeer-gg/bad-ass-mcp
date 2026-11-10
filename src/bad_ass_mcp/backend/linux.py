@@ -197,6 +197,7 @@ class LinuxBackend(DesktopBackend):
                 "selected",
                 "expanded",
                 "active",
+                "pressed",
             ):
                 attr = getattr(Atspi.StateType, state_name.upper(), None)
                 if attr is not None and ss.contains(attr):

@@ -463,6 +463,10 @@ def run_sequence(steps: list, stop_on_error: bool = True) -> list:
       {"action": "key",              "key": "Return"}
       {"action": "select",           "handle": "...", "value": "..."}
       {"action": "get_value",        "handle": "..."}
+      {"action": "get_bounds",       "handle": "..."}   → value [x, y, w, h] or null
+      {"action": "drag",             "from_handle": "...", "to_handle": "..."}
+                                     (or from_x/from_y, to_x/to_y; or dx/dy from
+                                     the start: drags a splitter a known distance)
       {"action": "sleep",            "seconds": 0.15}
       {"action": "wait_for_element", "window_id": "...", "role": "...",
                                      "name": "...", "state": "...", "timeout": 5.0}

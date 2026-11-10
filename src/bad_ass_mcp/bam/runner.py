@@ -331,10 +331,20 @@ class _Run:
                     got = r.get("value")
                     if str(got) != str(want):
                         raise ScriptFailure(
-                            f"get_value: expected {want!r}, got {got!r}",
+                            f"{r.get('action')}: expected {want!r}, got {got!r}",
                             phase=phase,
                             step=i + 1,
-                            action="get_value",
+                            action=r.get("action"),
+                        )
+                if "expect_not" in m:
+                    avoid = expand(m["expect_not"], self.vars)
+                    got = r.get("value")
+                    if str(got) == str(avoid):
+                        raise ScriptFailure(
+                            f"{r.get('action')}: value unchanged, still {got!r}",
+                            phase=phase,
+                            step=i + 1,
+                            action=r.get("action"),
                         )
             if len(results) < len(chunk):
                 raise ScriptFailure(

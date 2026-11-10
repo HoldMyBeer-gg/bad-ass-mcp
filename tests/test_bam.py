@@ -852,3 +852,66 @@ def test_timeout_scale_defaults_to_one_and_reaches_the_runner(tmp_path):
     )
     run_script(backend, script, "linux", {**CONFIG, "timeout_scale": 2}, tmp_path / "a")
     assert seen[-1]["seconds"] == 0.02
+
+
+def test_drag_steps_take_targets_and_offsets(tmp_path):
+    """`from_target`/`to_target` become handles; `dx`/`dy` pass through."""
+    sent, meta = build_steps(
+        [
+            {"action": "drag", "from_target": "ok", "to_target": "size"},
+            {"action": "drag", "from_target": "ok", "dx": 120, "dy": 0, "note": "splitter"},
+        ],
+        "linux",
+        {"ok": "btn-ok", "size": "combo-size"},
+        "w1",
+        {},
+    )
+    assert sent == [
+        {"action": "drag", "from_handle": "btn-ok", "to_handle": "combo-size"},
+        {"action": "drag", "from_handle": "btn-ok", "dx": 120, "dy": 0},
+    ]
+    assert meta == [{}, {}]
+
+
+def test_get_bounds_with_expect_not_proves_a_drag_moved_something(tmp_path):
+    """The splitter flow: remember where the handle is, drag it, and require
+    that its bounds changed. A drag that did nothing fails at that step."""
+    script = write(
+        tmp_path,
+        "resize",
+        {
+            "phases": [
+                {
+                    "learn": {"ok": {"name": "OK"}},
+                    "steps": [
+                        {"action": "get_bounds", "target": "ok", "save": "before"},
+                        {"action": "drag", "from_target": "ok", "dx": 120, "dy": 0},
+                        {"action": "get_bounds", "target": "ok", "expect_not": "$before"},
+                    ],
+                }
+            ],
+        },
+    )
+    r = run_script(FakeBackend(), script, "linux", CONFIG, tmp_path / "out")
+    assert r["status"] == "PASS", r.get("failure")
+
+    stuck = write(
+        tmp_path,
+        "stuck",
+        {
+            "phases": [
+                {
+                    "learn": {"ok": {"name": "OK"}},
+                    "steps": [
+                        {"action": "get_bounds", "target": "ok", "save": "before"},
+                        {"action": "drag", "from_target": "ok", "dx": 0, "dy": 0},
+                        {"action": "get_bounds", "target": "ok", "expect_not": "$before"},
+                    ],
+                }
+            ],
+        },
+    )
+    r = run_script(FakeBackend(), stuck, "linux", CONFIG, tmp_path / "out2")
+    assert r["status"] == "FAIL"
+    assert r["failure"]["step"] == 3
+    assert "unchanged" in r["failure"]["reason"]

@@ -125,6 +125,36 @@ class DesktopBackend(ABC):
             return None
         return (b[0] + b[2] / 2.0, b[1] + b[3] / 2.0)
 
+    def _drag_ends(self, step: dict) -> tuple[float, float, float, float] | str:
+        """Resolve a run_sequence drag step's endpoints: either end may be an
+        element (`from_handle` / `to_handle`, its center) or coordinates; the
+        end point may instead be `dx` / `dy` from the start, which is how a
+        splitter is dragged a known distance. Returns an error string if the
+        step can't be resolved."""
+        if step.get("from_handle"):
+            c = self._element_center(step["from_handle"])
+            if c is None:
+                return "from_handle reports no screen bounds"
+            fx, fy = c
+        elif step.get("from_x") is not None and step.get("from_y") is not None:
+            fx, fy = float(step["from_x"]), float(step["from_y"])
+        else:
+            return "Need from_handle or from_x/from_y"
+        if step.get("to_handle"):
+            c = self._element_center(step["to_handle"])
+            if c is None:
+                return "to_handle reports no screen bounds"
+            tx, ty = c
+        elif step.get("to_x") is not None and step.get("to_y") is not None:
+            tx, ty = float(step["to_x"]), float(step["to_y"])
+        elif step.get("dx") is not None or step.get("dy") is not None:
+            tx, ty = fx, fy
+        else:
+            return "Need to_handle, to_x/to_y, or dx/dy"
+        tx += float(step.get("dx") or 0)
+        ty += float(step.get("dy") or 0)
+        return fx, fy, tx, ty
+
     def _click_element_at(
         self, handle_id: str, button: str = "left", clicks: int = 1
     ) -> ActionResult:
@@ -441,6 +471,9 @@ class DesktopBackend(ABC):
                                          "button": "left", "clicks": 1}
           {"action": "drag",             "from_x": 0, "from_y": 0, "to_x": 0, "to_y": 0,
                                          "button": "left", "duration": 0.3}
+                                         — or "from_handle"/"to_handle" (element
+                                         centers), or "dx"/"dy" from the start
+          {"action": "get_bounds",       "handle": "..."}   → value [x, y, w, h] or null
           {"action": "type",             "handle": "...", "text": "..."}
           {"action": "key",              "key": "Return", "window_id": null}
           {"action": "select",           "handle": "...", "value": "..."}
@@ -495,15 +528,19 @@ class DesktopBackend(ABC):
                     )
                     entry.update(ok=r.ok, error=r.error)
                 elif action == "drag":
-                    r = self.drag(
-                        float(step["from_x"]),
-                        float(step["from_y"]),
-                        float(step["to_x"]),
-                        float(step["to_y"]),
-                        button=step.get("button", "left"),
-                        duration=float(step.get("duration", 0.3)),
-                    )
-                    entry.update(ok=r.ok, error=r.error)
+                    ends = self._drag_ends(step)
+                    if isinstance(ends, str):
+                        entry.update(ok=False, error=ends)
+                    else:
+                        r = self.drag(
+                            *ends,
+                            button=step.get("button", "left"),
+                            duration=float(step.get("duration", 0.3)),
+                        )
+                        entry.update(ok=r.ok, error=r.error)
+                elif action == "get_bounds":
+                    b = self.element_bounds(step["handle"])
+                    entry.update(ok=True, value=list(b) if b else None)
                 elif action == "type":
                     r = self.type_text(step["handle"], step["text"])
                     entry.update(ok=r.ok, error=r.error)

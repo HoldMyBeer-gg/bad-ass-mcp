@@ -464,3 +464,49 @@ def test_finish_recorder_raises_when_no_capture_file(backend, tmp_path):
     proc = subprocess.Popen(["cat"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL)
     with pytest.raises(RuntimeError, match="Input/output error"):
         backend._finish_recorder((proc, str(video), str(log)))
+
+
+def test_run_sequence_drag_between_handles(backend):
+    """A drag step can name elements instead of coordinates: each end is the
+    element's on-screen center."""
+    results = backend.run_sequence(
+        [{"action": "drag", "from_handle": "btn-ok", "to_handle": "combo-size"}]
+    )
+    assert results[0]["ok"] is True
+    assert backend.pointer_log[-1] == ("drag", 50.0, 25.0, 70.0, 62.0, "left")
+
+
+def test_run_sequence_drag_by_offset(backend):
+    """to_handle/to_x omitted: the drop point is the start plus dx/dy, which
+    is how a splitter gets dragged a known distance."""
+    results = backend.run_sequence(
+        [{"action": "drag", "from_handle": "btn-ok", "dx": 200, "dy": -5}]
+    )
+    assert results[0]["ok"] is True
+    assert backend.pointer_log[-1] == ("drag", 50.0, 25.0, 250.0, 20.0, "left")
+
+
+def test_run_sequence_drag_needs_an_end(backend):
+    results = backend.run_sequence([{"action": "drag", "from_handle": "btn-ok"}])
+    assert results[0]["ok"] is False
+    assert "to_handle" in results[0]["error"]
+
+
+def test_run_sequence_drag_handle_without_bounds(backend):
+    results = backend.run_sequence(
+        [{"action": "drag", "from_handle": "txt-name", "to_handle": "btn-ok"}]
+    )
+    assert results[0]["ok"] is False
+    assert "bounds" in results[0]["error"]
+
+
+def test_run_sequence_get_bounds(backend):
+    results = backend.run_sequence([{"action": "get_bounds", "handle": "btn-ok"}])
+    assert results[0]["ok"] is True
+    assert results[0]["value"] == [10.0, 10.0, 80.0, 30.0]
+
+
+def test_run_sequence_get_bounds_without_bounds_is_none(backend):
+    results = backend.run_sequence([{"action": "get_bounds", "handle": "txt-name"}])
+    assert results[0]["ok"] is True
+    assert results[0]["value"] is None

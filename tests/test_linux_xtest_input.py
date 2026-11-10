@@ -322,3 +322,25 @@ def test_release_modifiers_never_raises():
     backend, _ = _make_backend()
     with patch("subprocess.run", side_effect=FileNotFoundError("no xdotool")):
         backend.release_modifiers()  # must not raise
+
+
+# ── states: aria-pressed ─────────────────────────────────────────────
+
+
+def test_to_handle_reports_pressed_state():
+    """WebKitGTK maps aria-pressed="true" to AT-SPI's PRESSED state (not
+    CHECKED), so a toolbar toggle's on/off is invisible unless it's collected."""
+    backend, _ = _make_backend()
+    atspi = backend._atspi_mod
+    atspi.StateType.PRESSED = "PRESSED"
+    atspi.StateType.VISIBLE = "VISIBLE"
+    node = MagicMock()
+    node.get_role_name.return_value = "toggle button"
+    node.get_name.return_value = "Toggle layout"
+    node.get_interfaces.return_value = ["Accessible", "Action"]
+    node.get_state_set.return_value.contains.side_effect = lambda s: s in ("PRESSED", "VISIBLE")
+
+    el = backend._to_handle(node)
+
+    assert "pressed" in el.states
+    assert "visible" in el.states

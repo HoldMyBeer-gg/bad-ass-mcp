@@ -157,6 +157,11 @@ class FakeBackend(DesktopBackend):
 
     def drag(self, from_x, from_y, to_x, to_y, button="left", duration=0.3) -> ActionResult:
         self.pointer_log.append(("drag", from_x, from_y, to_x, to_y, button))
+        # Whatever sits under the press point moves with the pointer, like a
+        # splitter or a draggable row.
+        for hid, (x, y, w, h) in list(self._bounds.items()):
+            if (x + w / 2.0, y + h / 2.0) == (from_x, from_y):
+                self._bounds[hid] = (x + to_x - from_x, y + to_y - from_y, w, h)
         return ActionResult(ok=True)
 
     def start_recording(self, window_id=None, fps=15) -> str:

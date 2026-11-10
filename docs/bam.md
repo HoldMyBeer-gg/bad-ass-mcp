@@ -115,7 +115,13 @@ Three layers, later wins: the suite file (`--config`), a script's own
 - **Steps** are `run_sequence` actions; `"target": "<label>"` becomes the
   learned handle, `$WINDOW` the current window id, `$SMOKE` the working folder.
 - **Values:** a `get_value` step may `"save": "x"`; a later `"expect": "$x"` (or a
-  literal) must match, or the script fails at that step.
+  literal) must match, or the script fails at that step. `"expect_not": "$x"`
+  is the opposite: the value must have changed.
+- **Drags:** `{"action": "drag", "from_target": "a", "to_target": "b"}` drags
+  between two learned elements (their centers); `"dx"` / `"dy"` instead of
+  `to_target` drags from the element by that many pixels (a splitter).
+  `{"action": "get_bounds", "target": "a"}` reads `[x, y, w, h]`, so
+  `save` + `expect_not` around a drag proves something moved.
 - **Per-platform values:** any `name`, `role`, step field or window pattern may
   be `{"macos": ..., "windows": ..., "linux": ...}`. `only: [...]` limits a
   step, learn entry, phase or check to platforms.

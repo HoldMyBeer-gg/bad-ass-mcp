@@ -9,7 +9,17 @@ from typing import Any
 PLATFORMS = ("macos", "windows", "linux")
 
 # Keys the runner reads and run_sequence must never see.
-_RUNNER_KEYS = {"target", "only", "expect", "save", "confirm", "note"}
+_RUNNER_KEYS = {
+    "target",
+    "from_target",
+    "to_target",
+    "only",
+    "expect",
+    "expect_not",
+    "save",
+    "confirm",
+    "note",
+}
 _VAR = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
 
 
@@ -77,13 +87,18 @@ def build_steps(
                 continue
             v = pick(v, platform)
             s[k] = expand(v, env)
-        if "target" in step:
-            s["handle"] = handles[step["target"]]
+        for key, field in (
+            ("target", "handle"),
+            ("from_target", "from_handle"),
+            ("to_target", "to_handle"),
+        ):
+            if key in step:
+                s[field] = handles[step[key]]
         if timeout_scale != 1:
             if s.get("action") in ("wait_for_element", "wait_for_window") and "timeout" in s:
                 s["timeout"] = s["timeout"] * timeout_scale
             if s.get("action") == "sleep" and "seconds" in s:
                 s["seconds"] = s["seconds"] * timeout_scale
         sent.append(s)
-        meta.append({k: step[k] for k in ("expect", "save") if k in step})
+        meta.append({k: step[k] for k in ("expect", "expect_not", "save") if k in step})
     return sent, meta
