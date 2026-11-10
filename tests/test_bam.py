@@ -1608,3 +1608,26 @@ def test_vm_detection_matches_known_input_grabbers(monkeypatch):
     assert cli.vm_running() is False
     monkeypatch.setattr(cli, "_process_names", lambda: [])
     assert cli.vm_running() is False
+
+
+def test_focus_goes_back_to_where_the_run_started_not_where_the_user_clicked(tmp_path):
+    class _ClickedAway(_Desk):
+        """The terminal (1111) is in front at launch; the user then clicks
+        another app (4242) before the first real key."""
+
+        def __init__(self):
+            super().__init__(front=1111)
+            self.calls = 0
+
+        def foreground_pid(self):
+            self.calls += 1
+            if self.calls == 1:
+                return 1111
+            if self.front == 1111:
+                self.front = 4242
+            return self.front
+
+    desk = _ClickedAway()
+    script = _real_input_script(tmp_path, [{"action": "key", "key": "F10"}])
+    run_script(desk, script, "linux", CONFIG, tmp_path / "out")
+    assert desk.raised == [9999, 1111]

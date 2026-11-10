@@ -184,6 +184,12 @@ class _Run:
                 raise ScriptFailure(f"setup failed: {entry['shell']!r}: {r.stderr.strip()}")
 
     def launch(self) -> None:
+        # Where the user's focus was when the run began: it goes back there
+        # at the end if the run had to raise the app.
+        try:
+            self.start_front = self.b.foreground_pid()
+        except Exception:
+            self.start_front = None
         pattern = self.config.get("window")
         if not pattern:
             raise ScriptFailure("config has no 'window' title pattern")
@@ -433,7 +439,8 @@ class _Run:
         if owner is None or owner == pid:
             return
         if self.prev_front is None:
-            front = self.b.foreground_pid()
+            start = getattr(self, "start_front", None)
+            front = start if start is not None else self.b.foreground_pid()
             if front is not None and front != pid:
                 self.prev_front = front
         landed = self.b.bring_to_front(pid)

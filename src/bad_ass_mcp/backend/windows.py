@@ -1108,11 +1108,22 @@ class WindowsBackend(DesktopBackend):
             self.last_raise.append({"method": method, "ok": ok, "error": err})
             return ok
 
+        def unlock_key():
+            # Any injected input makes us the "last input" process, which
+            # lifts the foreground lock. 0xE8 is an unassigned virtual key:
+            # no app gives it a meaning (a lone Alt opens the menu bar).
+            _user32.keybd_event(0xE8, 0, 0, 0)
+            _user32.keybd_event(0xE8, 0, 0x0002, 0)
+            _user32.SetForegroundWindow(hwnd)
+            _user32.BringWindowToTop(hwnd)
+
         def alt_tap():
             _user32.keybd_event(0x12, 0, 0, 0)  # VK_MENU down
             _user32.keybd_event(0x12, 0, 0x0002, 0)  # up
             _user32.SetForegroundWindow(hwnd)
             _user32.BringWindowToTop(hwnd)
+            time.sleep(0.05)
+            self._leave_menu_mode(hwnd)
 
         def attached():
             fg_thread = _user32.GetWindowThreadProcessId(_user32.GetForegroundWindow(), None)
@@ -1138,9 +1149,38 @@ class WindowsBackend(DesktopBackend):
             ("switch_to_this_window", lambda: _user32.SwitchToThisWindow(hwnd, True)),
         ]
         if not gentle:
-            ladder += [("alt_tap", alt_tap), ("attach_thread_input", attached)]
-            ladder += [("minimize_restore", min_restore)]
+            ladder += [("unlock_key", unlock_key), ("attach_thread_input", attached)]
+            ladder += [("alt_tap", alt_tap), ("minimize_restore", min_restore)]
         return any(attempt(m, fn) for m, fn in ladder)
+
+    @staticmethod
+    def _leave_menu_mode(hwnd) -> None:
+        """A lone Alt can leave the app's menu bar in menu mode, where the
+        next F10 turns it off again and arrow keys go to the document. If the
+        app's GUI thread is in menu mode, Escape leaves it."""
+
+        class _GUITHREADINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", ctypes.wintypes.DWORD),
+                ("flags", ctypes.wintypes.DWORD),
+                ("hwndActive", ctypes.wintypes.HWND),
+                ("hwndFocus", ctypes.wintypes.HWND),
+                ("hwndCapture", ctypes.wintypes.HWND),
+                ("hwndMenuOwner", ctypes.wintypes.HWND),
+                ("hwndMoveSize", ctypes.wintypes.HWND),
+                ("hwndCaret", ctypes.wintypes.HWND),
+                ("rcCaret", ctypes.wintypes.RECT),
+            ]
+
+        try:
+            info = _GUITHREADINFO()
+            info.cbSize = ctypes.sizeof(_GUITHREADINFO)
+            thread = _user32.GetWindowThreadProcessId(hwnd, None)
+            if _user32.GetGUIThreadInfo(thread, ctypes.byref(info)) and info.flags & 0x4:
+                _user32.keybd_event(0x1B, 0, 0, 0)  # VK_ESCAPE: GUI_INMENUMODE was set
+                _user32.keybd_event(0x1B, 0, 0x0002, 0)
+        except Exception:
+            pass
 
     def _activate_window_at(self, x: float, y: float) -> None:
         """Bring the top-level window under (x, y) to the foreground if it
