@@ -55,8 +55,10 @@ bam-results/<time>_<commit>_<platform>/
   run.json              order, status + seconds of each script, totals, started_at,
                         finished_at, seconds, commit, platform, config
   01_<script>/
-    result.json         status, started_at/finished_at, seconds, window,
-                        phases [{name, status, seconds}], failure {phase, step, action, reason}
+    result.json         status, started_at/finished_at, seconds, window, covers,
+                        phases [{name, status, seconds, steps [{text, expect?}], checks}],
+                        checks (final), failure {phase, step, action, reason}
+                        (action "learn"/"window": failed before the phase's steps)
     phase-N.png         proof screenshot after each phase (screenshot_proof)
     fail.png, tree.json screen and pruned accessibility tree at a failure
     timeline.json       timestamped phases (and, in demo mode, every step with its
@@ -67,7 +69,8 @@ bam-results/<time>_<commit>_<platform>/
 ```
 
 Statuses: `PASS`, `FAIL`, `SKIP` (not for this platform), `MANUAL` (has
-checks a human must do), `NOT_RUN` (fail-fast stopped first).
+checks a human must do), `NOT_RUN` (fail-fast stopped first; for a phase, an
+earlier phase failed).
 
 ### Configuration
 
@@ -113,7 +116,11 @@ Three layers, later wins: the suite file (`--config`), a script's own
 ```
 
 - **Phases** run in order; an optional `"name"` labels one in results and the
-  report (default: its `id`, else "phase N"). Each learns its elements (`learn_layout`) right
+  report (default: its `id`, else its first action, e.g. `Click “Settings”`).
+  Results and the report list every phase in plain language: each step
+  (`Type "crab" into “Search emoji”`), each expectation (`“Search emoji”
+  appears`, `“Name” reads "crab"`, phase and final checks), marked done,
+  failed or not reached. A script's `covers` text heads its card. Each learns its elements (`learn_layout`) right
   before its steps, since handles go stale when the UI changes. A missing
   element fails the phase.
 - **Steps** are `run_sequence` actions; `"target": "<label>"` becomes the

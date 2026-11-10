@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .describe import describe_checks, describe_phase, phase_title
 from .script import applies, build_steps, expand, learn_descriptors, pick
 
 
@@ -208,6 +209,7 @@ class _Run:
                 self.proc.kill()
 
     def run_phases(self) -> None:
+        planned = []
         for phase in self.script.get("phases", []):
             if "id" in phase:
                 self.phases_by_id[phase["id"]] = phase
@@ -216,14 +218,25 @@ class _Run:
                 if target is None:
                     raise ScriptFailure(f"repeat of unknown phase {phase['repeat']!r}")
                 phase = target
-            if not applies(phase, self.platform):
-                continue
-            self.run_phase(phase)
+            if applies(phase, self.platform):
+                planned.append(phase)
+        for i, phase in enumerate(planned):
+            try:
+                self.run_phase(phase)
+            except BaseException:
+                # List the rest as not reached, so the report shows the whole plan.
+                for j, rest in enumerate(planned[i + 1 :], self.phase_no + 1):
+                    self.phase_log.append({**self._plan(rest, j), "status": "NOT_RUN"})
+                raise
+
+    def _plan(self, phase: dict, n: int) -> dict:
+        described = describe_phase(phase, self.platform)
+        return {"name": phase_title(phase, described, n), **described}
 
     def run_phase(self, phase: dict) -> None:
         self.phase_no += 1
         n = self.phase_no
-        entry = {"name": phase.get("name") or phase.get("id") or f"phase {n}", "status": "FAIL"}
+        entry = {**self._plan(phase, n), "status": "FAIL"}
         self.phase_log.append(entry)
         self.phase_name = entry["name"]
         self.log("phase", name=entry["name"], number=n)
@@ -248,11 +261,11 @@ class _Run:
                 other, float(self.config.get("step_timeout", 5)), exclude=self.window
             )
             if window is None:
-                raise ScriptFailure(f"no other window matching {other!r}", phase=n)
+                raise ScriptFailure(f"no other window matching {other!r}", phase=n, action="window")
         elif pattern is not None:
             window = self.find_window(pattern, float(self.config.get("step_timeout", 5)))
             if window is None:
-                raise ScriptFailure(f"no window matching {pattern!r}", phase=n)
+                raise ScriptFailure(f"no window matching {pattern!r}", phase=n, action="window")
 
         try:
             descs = learn_descriptors(phase.get("learn", {}), self.platform)
@@ -271,7 +284,9 @@ class _Run:
                     break
                 time.sleep(0.2)
             if missing:
-                raise ScriptFailure("element not found: " + ", ".join(missing), phase=n)
+                raise ScriptFailure(
+                    "element not found: " + ", ".join(missing), phase=n, action="learn"
+                )
             self.targets.update({h: label for label, h in handles.items() if h})
 
             sent, meta = build_steps(
@@ -492,6 +507,8 @@ def run_script(
         "platform": platform,
         "started_at": _now(),
     }
+    if script.get("covers"):
+        result["covers"] = script["covers"]
     started = time.monotonic()
 
     if platform not in script.get("platforms", [platform]):
@@ -539,6 +556,9 @@ def run_script(
                     pass
             run.teardown()
         result["phases"] = run.phase_log
+        final = describe_checks(script.get("checks", []), platform)
+        if final:
+            result["checks"] = final
         (out_dir / "timeline.json").write_text(json.dumps(run.timeline, indent=1))
         if run.window is not None:
             result["window"] = run.window

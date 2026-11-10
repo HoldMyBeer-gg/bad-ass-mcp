@@ -988,3 +988,221 @@ def test_demo_mode_clicks_with_the_real_pointer_at_the_element_centre(tmp_path):
     )
     run_script(backend, script, "linux", {**CONFIG, "demo": True, "demo_pace": 0}, tmp_path / "out")
     assert ("click", 50.0, 25.0, "left", 1) in backend.pointer_log
+
+
+# ── plain-language phases: what each one does and expects ────────────
+
+
+def test_describe_phase_turns_steps_and_checks_into_plain_language():
+    from bad_ass_mcp.bam.describe import describe_phase
+
+    phase = {
+        "learn": {
+            "emoji": {"name": "Insert emoji"},
+            "search": {"name": "Search emoji"},
+            "split": {"role": "separator"},
+            "mac_only": {"name": "Palette", "only": ["macos"]},
+        },
+        "steps": [
+            {"action": "click", "target": "emoji"},
+            {"action": "click", "target": "emoji", "button": "right"},
+            {"action": "click", "target": "emoji", "clicks": 2},
+            {"action": "wait_for_element", "name": "Search emoji", "timeout": 5},
+            {"action": "type", "target": "search", "text": "crab"},
+            {"action": "sleep", "seconds": 0.3},
+            {"action": "key", "key": "Return", "only": ["windows"]},
+            {"action": "key", "key": "Escape"},
+            {"action": "select", "target": "search", "value": "Arial"},
+            {"action": "get_value", "target": "search", "expect": "crab"},
+            {"action": "get_bounds", "target": "split", "save": "before"},
+            {"action": "drag", "from_target": "split", "dx": 120, "dy": 0},
+            {"action": "get_bounds", "target": "split", "expect_not": "$before"},
+            {"action": "wait_for_window", "pattern": {"linux": None, "macos": "Save"}},
+            {"action": "shell", "cmd": "test -f a.md"},
+            {"action": "click_at", "x": 10, "y": 20},
+        ],
+        "checks": [
+            {"present": {"name": "Done"}},
+            {"present": {"name": "Tab", "count": 2}},
+            {"absent": {"name": "Search emoji"}},
+            {"windows": 1},
+            {"no_window": "Save As"},
+            {"shell": "grep -q crab a.md"},
+            {"manual": "The crab looks happy"},
+            {"present": {"name": "Mac thing"}, "only": ["macos"]},
+        ],
+    }
+    d = describe_phase(phase, "linux")
+    assert d["steps"] == [
+        {"text": "Click “Insert emoji”"},
+        {"text": "Right-click “Insert emoji”"},
+        {"text": "Double-click “Insert emoji”"},
+        {"text": "“Search emoji” appears", "expect": True},
+        {"text": 'Type "crab" into “Search emoji”'},
+        {"text": "Pause 0.3 s", "pause": True},
+        {"text": "Press Escape"},
+        {"text": 'Choose "Arial" in “Search emoji”'},
+        {"text": '“Search emoji” reads "crab"', "expect": True},
+        {"text": "Note where the separator is"},
+        {"text": "Drag the separator by (120, 0)"},
+        {"text": "The separator moved", "expect": True},
+        {"text": "Run `test -f a.md`"},
+        {"text": "Click at (10, 20)"},
+    ]
+    assert d["checks"] == [
+        "“Done” is present",
+        "Exactly 2 × “Tab”",
+        "“Search emoji” is gone",
+        "1 window open",
+        "No “Save As” window",
+        "`grep -q crab a.md` succeeds",
+        "A human checks: The crab looks happy",
+    ]
+
+
+def test_drag_between_two_elements_and_window_waits_read_naturally():
+    from bad_ass_mcp.bam.describe import describe_phase
+
+    phase = {
+        "learn": {"a": {"name": "Tab A"}, "b": {"name": "Tab B"}},
+        "steps": [
+            {"action": "drag", "from_target": "a", "to_target": "b"},
+            {"action": "wait_for_window", "pattern": "Save As"},
+            {"action": "get_value", "target": "a", "expect_not": "x"},
+            {"action": "get_value", "target": "a", "save": "v"},
+        ],
+    }
+    assert describe_phase(phase, "macos")["steps"] == [
+        {"text": "Drag “Tab A” onto “Tab B”"},
+        {"text": "A “Save As” window appears", "expect": True},
+        {"text": "“Tab A” changed", "expect": True},
+        {"text": "Read “Tab A” (saved as v)"},
+    ]
+
+
+def test_results_say_what_each_phase_does_and_expects(tmp_path):
+    script = write(
+        tmp_path,
+        "described",
+        {
+            "covers": "OK and Cancel work",
+            "phases": [
+                {
+                    "learn": {"ok": {"name": "OK"}},
+                    "steps": [{"action": "click", "target": "ok"}],
+                    "checks": [{"present": {"name": "Cancel"}}],
+                },
+                {"name": "named", "learn": {}, "steps": []},
+            ],
+            "checks": [{"absent": {"name": "Nope"}}],
+        },
+    )
+    res = run_script(FakeBackend(), script, "linux", CONFIG, tmp_path / "out")
+    assert res["status"] == "PASS"
+    assert res["covers"] == "OK and Cancel work"
+    first, second = res["phases"]
+    # An unnamed phase is named after its first action, not "phase 1".
+    assert first["name"] == "Click “OK”"
+    assert first["steps"] == [{"text": "Click “OK”"}]
+    assert first["checks"] == ["“Cancel” is present"]
+    assert second["name"] == "named"
+    assert res["checks"] == ["“Nope” is gone"]
+
+
+def test_phases_after_a_failure_are_listed_as_not_reached(tmp_path):
+    script = write(
+        tmp_path,
+        "stops",
+        {
+            "phases": [
+                {
+                    "learn": {"x": {"name": "Missing"}},
+                    "steps": [{"action": "click", "target": "x"}],
+                },
+                {"name": "later", "learn": {"ok": {"name": "OK"}}, "steps": []},
+            ]
+        },
+    )
+    res = run_script(FakeBackend(), script, "linux", CONFIG, tmp_path / "out")
+    assert [p["status"] for p in res["phases"]] == ["FAIL", "NOT_RUN"]
+    assert res["phases"][1]["name"] == "later"
+
+
+def test_report_lists_steps_and_expectations_and_marks_the_failing_step(tmp_path):
+    script = write(
+        tmp_path,
+        "reported",
+        {
+            "covers": "Typing a name and reading it back",
+            "phases": [
+                {
+                    "name": "type a name",
+                    "learn": {"name": {"name": "Name"}},
+                    "steps": [
+                        {"action": "type", "target": "name", "text": "crab"},
+                        {"action": "get_value", "target": "name", "expect": "lobster"},
+                    ],
+                },
+                {"name": "never runs", "learn": {}, "steps": []},
+            ],
+        },
+    )
+    run_dir = run_suite(FakeBackend(), [script], "linux", CONFIG, tmp_path / "res", commit="c")
+    html = write_report(run_dir).read_text()
+    assert "Typing a name and reading it back" in html
+    assert "Type &quot;crab&quot; into “Name”" in html
+    assert "“Name” reads &quot;lobster&quot;" in html
+    # The step that failed is marked, and the phase after it shows as not reached.
+    assert 'class="step expect bad"' in html
+    assert "not reached" in html
+
+
+def test_a_learn_failure_marks_the_phase_steps_not_run(tmp_path):
+    script = write(
+        tmp_path,
+        "nolearn",
+        {
+            "phases": [
+                {
+                    "name": "find it",
+                    "learn": {"x": {"name": "Missing"}},
+                    "steps": [{"action": "click", "target": "x"}],
+                }
+            ]
+        },
+    )
+    res = run_script(FakeBackend(), script, "linux", CONFIG, tmp_path / "out")
+    assert res["failure"]["action"] == "learn"
+    run_dir = run_suite(FakeBackend(), [script], "linux", CONFIG, tmp_path / "res", commit="c")
+    html = write_report(run_dir).read_text()
+    assert '<li class="step">Click “Missing”</li>' in html
+    assert "step ok" not in html
+
+
+def test_saved_values_read_as_names_not_raw_variables():
+    from bad_ass_mcp.bam.describe import describe_phase
+
+    phase = {
+        "learn": {"f": {"name": "Preview font"}},
+        "steps": [
+            {"action": "get_value", "target": "f", "save": "before"},
+            {"action": "get_value", "target": "f", "expect": "$before"},
+        ],
+    }
+    assert describe_phase(phase, "macos")["steps"] == [
+        {"text": "Read “Preview font” (saved as before)"},
+        {"text": "“Preview font” still reads the saved before", "expect": True},
+    ]
+
+
+def test_a_learn_failure_says_what_was_missing_inside_the_phase(tmp_path):
+    script = write(
+        tmp_path,
+        "missing",
+        {"phases": [{"name": "p", "learn": {"x": {"name": "Gone"}}, "steps": []}]},
+    )
+    run_dir = run_suite(FakeBackend(), [script], "linux", CONFIG, tmp_path / "res", commit="c")
+    html = write_report(run_dir).read_text()
+    assert "Couldn’t find x (name &#x27;Gone&#x27;)" in html
+    # Only the mark is coloured, not the phase name.
+    assert '<span class="m bad">✗</span>' in html

@@ -18,6 +18,15 @@ _LIGHTBOX = """
 </div>
 <script>
 (() => {
+  const btn = document.getElementById("expand");
+  if (btn) btn.onclick = () => {
+    const all = [...document.querySelectorAll(".phase details")];
+    const open = !all.every((d) => d.open);
+    all.forEach((d) => (d.open = open));
+    btn.textContent = open ? "Collapse all phases" : "Expand all phases";
+  };
+})();
+(() => {
   const links = [...document.querySelectorAll("a[data-shot]")];
   const box = document.getElementById("lightbox");
   if (!links.length || !box) return;
@@ -72,9 +81,32 @@ text-decoration:none}
 .shots img{height:120px;border:1px solid var(--border);border-radius:4px;display:block;
 margin-bottom:2px}
 .manual{margin:8px 0 0;padding-left:18px;color:var(--warn)}
-.phases{margin:8px 0 0;padding:0;list-style:none;font-size:12.5px;color:var(--muted)}
-.phases li{display:flex;gap:8px}.phases .ok{color:var(--pass)}.phases .bad{color:var(--fail)}
-.phases .t{margin-left:auto;font-variant-numeric:tabular-nums}
+.covers{margin:8px 0 0;color:var(--text)}.covers b{color:var(--muted);font-weight:600}
+.phases{margin:10px 0 0;padding:0;list-style:none;font-size:13px}
+.phase{border-top:1px solid var(--border)}.phase:first-child{border-top:0}
+.phase summary,.phase .nodetail{display:flex;gap:8px;align-items:baseline;padding:5px 0;
+cursor:pointer}
+.phase .nodetail{cursor:default;padding-left:14px}
+.phase summary::marker{color:var(--muted)}
+.phase .pn{color:var(--muted);font-variant-numeric:tabular-nums;min-width:1.4em;text-align:right}
+.phase .pname{font-weight:600}.phase.skip .pname{color:var(--muted);font-weight:400}
+.m.ok{color:var(--pass)}.m.bad{color:var(--fail)}.m.skip{color:var(--muted)}
+.phase .t{margin-left:auto;color:var(--muted);font-variant-numeric:tabular-nums}
+.steps{margin:0 0 8px;padding:0 0 0 46px;list-style:none;font-size:12.5px}
+.final .steps{padding-left:0}
+.final h3{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);
+margin:12px 0 4px}
+.step{padding:1px 0 1px 20px;position:relative;color:var(--muted)}
+.step::before{content:"·";position:absolute;left:4px}
+.step.ok,.step.bad{color:var(--text)}.step.ok::before{content:"✓";color:var(--pass)}
+.step.bad{color:var(--fail);font-weight:600}.step.bad::before{content:"✗";color:var(--fail)}
+.step.expect::after{content:"expect";margin-left:8px;font-size:10px;text-transform:uppercase;
+letter-spacing:.05em;padding:0 5px;border-radius:4px;border:1px solid var(--border);
+color:var(--muted);font-weight:400}
+.step.pause{font-style:italic;opacity:.7}
+.toolbar{margin:-8px 0 14px}.toolbar button{font:inherit;font-size:12px;color:var(--muted);
+background:var(--card);border:1px solid var(--border);border-radius:6px;padding:3px 10px;
+cursor:pointer}
 #lightbox{position:fixed;inset:0;background:rgba(0,0,0,.85);display:flex;align-items:center;
 justify-content:center;gap:12px;padding:16px;z-index:10}#lightbox[hidden]{display:none}
 #lightbox figure{margin:0;max-width:min(1200px,100%);text-align:center}
@@ -139,16 +171,16 @@ def _card(run_dir: Path, entry: dict) -> str:
             out.append(f'<a class="failshot" href="{src}" data-shot data-caption="{cap}">{img}</a>')
     for note in res.get("manual", []):
         out.append(f'<ul class="manual"><li>{escape(note)}</li></ul>')
+    if res.get("covers"):
+        out.append(f'<p class="covers"><b>Tests:</b> {escape(res["covers"])}</p>')
     phases = res.get("phases", [])
     if phases:
-        out.append('<ul class="phases">')
-        for p in phases:
-            ok = p.get("status") == "PASS"
-            mark = '<span class="ok">✓</span>' if ok else '<span class="bad">✗</span>'
-            secs = f"{p.get('seconds', 0):.2f} s"
-            name = escape(p.get("name", ""))
-            out.append(f'<li>{mark}<span>{name}</span><span class="t">{secs}</span></li>')
-        out.append("</ul>")
+        out.append(_phases(phases, failure if status == "FAIL" else None, status == "FAIL"))
+    if res.get("checks"):
+        final_failed = status == "FAIL" and failure and "phase" not in failure
+        k = " bad" if final_failed else " ok" if status in ("PASS", "MANUAL") else ""
+        items = "".join(f'<li class="step expect{k}">{escape(c)}</li>' for c in res["checks"])
+        out.append(f'<div class="final"><h3>Final checks</h3><ol class="steps">{items}</ol></div>')
     shots = res.get("screenshots", [])
     if shots:
         out.append('<div class="shots">')
@@ -163,6 +195,64 @@ def _card(run_dir: Path, entry: dict) -> str:
     if res.get("video"):
         out.append(f'<p class="sub"><a href="{escape(folder)}/run.mp4">video</a></p>')
     out.append("</section>")
+    return "\n".join(out)
+
+
+def _phases(phases: list[dict], failure: dict | None, open_all: bool) -> str:
+    """One collapsible block per phase: what it does, step by step, and what it
+    expects, each marked done, failed or not reached."""
+    out = ['<ol class="phases">']
+    for n, p in enumerate(phases, 1):
+        st = p.get("status", "NOT_RUN")
+        cls = {"PASS": "ok", "FAIL": "bad"}.get(st, "skip")
+        mark = {"PASS": "✓", "FAIL": "✗"}.get(st, "·")
+        here = failure is not None and failure.get("phase") == n
+        bad_step = failure.get("step") if here else None
+        # Learning elements or finding the window happens before any step.
+        before_steps = here and failure.get("action") in ("learn", "window")
+        time_ = (
+            "not reached" if st == "NOT_RUN" else f"{p['seconds']:.2f} s" if "seconds" in p else ""
+        )
+        steps, checks = p.get("steps"), p.get("checks")
+        is_open = " open" if open_all or st == "FAIL" else ""
+        head = (
+            f'<span class="m {cls}">{mark}</span><span class="pn">{n}</span>'
+            f'<span class="pname">{escape(p.get("name", ""))}</span>'
+            f'<span class="t">{time_}</span>'
+        )
+        if not steps and not checks and not before_steps:
+            out.append(f'<li class="phase {cls}"><div class="nodetail">{head}</div></li>')
+            continue
+        summary = f"<summary>{head}</summary>"
+        body = ['<ol class="steps">']
+        if before_steps:
+            reason = failure.get("reason", "")
+            missing = reason.removeprefix("element not found: ")
+            line = f"Couldn’t find {missing}" if missing != reason else reason
+            body.append(f'<li class="step bad">{escape(line)}</li>')
+        for i, s in enumerate(steps or [], 1):
+            kinds = ["step"]
+            if s.get("expect"):
+                kinds.append("expect")
+            if s.get("pause"):
+                kinds.append("pause")
+            if before_steps:
+                pass
+            elif st == "PASS" or (st == "FAIL" and bad_step and i < bad_step):
+                kinds.append("ok")
+            elif st == "FAIL" and bad_step == i:
+                kinds.append("bad")
+            elif st == "FAIL" and not bad_step:
+                kinds.append("ok")  # the steps ran; learn or a check failed
+            body.append(f'<li class="{" ".join(kinds)}">{escape(s["text"])}</li>')
+        for c in checks or []:
+            failed_check = here and not bad_step and not before_steps
+            k = " ok" if st == "PASS" else " bad" if failed_check else ""
+            body.append(f'<li class="step expect{k}">{escape(c)}</li>')
+        body.append("</ol>")
+        details = f"<details{is_open}>{summary}{''.join(body)}</details>"
+        out.append(f'<li class="phase {cls}">{details}</li>')
+    out.append("</ol>")
     return "\n".join(out)
 
 
@@ -201,6 +291,7 @@ def write_report(run_dir: Path | str) -> Path:
 <h1>BAM run report</h1>
 <div class="meta">{meta}</div>
 <div class="tally">{tally}</div>
+<div class="toolbar"><button type="button" id="expand">Expand all phases</button></div>
 {body}
 </main>{_LIGHTBOX}</body></html>
 """
