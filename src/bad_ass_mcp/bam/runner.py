@@ -17,8 +17,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .describe import describe_checks, describe_phase, is_real_input, phase_title
+from .describe import (
+    describe_checks,
+    describe_phase,
+    is_real_input,
+    needs_foreground,
+    phase_title,
+)
 from .script import applies, build_steps, expand, learn_descriptors, pick
+
+# Steps that never send keyboard or mouse input of any kind.
+_NO_INPUT = {"sleep", "wait_for_element", "wait_for_window", "get_value", "get_bounds", "shell"}
 
 
 class ScriptFailure(Exception):
@@ -81,6 +90,12 @@ class _Run:
         self.pid: int | None = config.get("pid")
         self.app_pid: int | None = None  # the main window's process, once found
         self.prev_front: int | None = None  # the user's foreground app, to hand back
+        self.hung_after: float | None = None
+        # Yield to a person: in scripts that send real input, any keyboard or
+        # mouse input that isn't ours stops the run (and the suite).
+        self.yields = bool(config.get("yield_to_user", True)) and needs_foreground(script, platform)
+        self.own_until = time.monotonic() + 1.0  # grace: the Enter that started us
+        self.user_stopped = False
         self.before: set[str] | None = None
         self.progress = None  # callable(phase_number) after each phase
 
@@ -112,7 +127,9 @@ class _Run:
                 )
             if hits:
                 return hits[0].id
-            if time.monotonic() >= deadline:
+            # The watchdog killed a hung app: nothing will appear. (Not "the
+            # process exited": wrapper launchers such as `open -a` exit at once.)
+            if time.monotonic() >= deadline or self.hung_after is not None:
                 return None
             time.sleep(0.2)
 
@@ -201,6 +218,7 @@ class _Run:
             self.before = {w.id for w in self.b.list_windows()}
             self.proc = subprocess.Popen([*cmd, *args])
             self.pid = self.proc.pid
+            self.start_watchdog()
             timeout = float(self.config.get("launch_timeout", 20))
         else:
             timeout = float(self.config.get("step_timeout", 5))
@@ -217,7 +235,7 @@ class _Run:
             limit = float(self.config.get("launch_timeout", 20))
             deadline = time.monotonic() + limit
             while not self.find(self.window, desc):
-                if time.monotonic() >= deadline:
+                if time.monotonic() >= deadline or self.hung_after is not None:
                     raise ScriptFailure(f"app not ready: no {_describe(desc)} within {limit:g}s")
                 time.sleep(0.2)
 
@@ -228,22 +246,29 @@ class _Run:
             self._hand_focus_back()
 
     def start_watchdog(self) -> None:
-        """A call into a hung app's window blocks forever. Poll is_hung from a
-        side thread; once the window has been hung for `hang_timeout`
-        seconds, kill the launched app, which makes the blocked call return,
-        and the script fails as "app not responding". (Attach mode can't
-        kill the user's app; the hang is still reported.)"""
+        """A call into a hung app blocks forever, even the window lookup at
+        launch. Poll app_hung(pid) from a side thread (pure OS calls, never
+        the a11y API); once the app has been hung for `hang_timeout` seconds,
+        kill the launched app, which makes the blocked call return, and the
+        script fails as "app not responding". Started right after the
+        launch, keyed on the process, not the window. (Attach mode can't kill
+        the user's app; the hang is still reported.)"""
+        if getattr(self, "_stop_watch", None) is not None:
+            return
         limit = float(self.config.get("hang_timeout", 30))
-        self.hung_after: float | None = None
+        self.hung_after = None
         self._stop_watch = threading.Event()
-        if limit <= 0 or self.window is None:
+        if limit <= 0:
             return
 
         def watch() -> None:
             since = None
             while not self._stop_watch.wait(min(1.0, limit / 3)):
+                pid = self.app_pid or self.pid
+                if pid is None:
+                    continue
                 try:
-                    hung = self.b.is_hung(self.window)
+                    hung = self.b.app_hung(pid)
                 except Exception:
                     hung = None
                 if not hung:
@@ -271,8 +296,8 @@ class _Run:
         """After the app is gone (closing it would otherwise pass the focus to
         whatever window is next), give the user's app its focus back, gently:
         no synthetic keys that could land in another app."""
-        if self.prev_front is None:
-            return
+        if self.prev_front is None or self.user_stopped:
+            return  # after a person took over, focus stays where they put it
         try:
             ok = self.b.bring_to_front(self.prev_front, gentle=True)
         except Exception:
@@ -439,6 +464,7 @@ class _Run:
                 target=self.targets.get(step.get("handle")),
                 bounds=bounds,
             )
+            self.check_user(phase, i + 1)
             plain_click = (
                 step.get("action") == "click"
                 and bounds
@@ -456,10 +482,28 @@ class _Run:
                         step=i + 1,
                         action="click",
                     )
+                self.own_until = time.monotonic()
             else:
                 self._run_chunked([step], [meta[i]], phase, base=i)
             if pace:
                 time.sleep(pace)
+
+    def check_user(self, phase: int, number: int) -> None:
+        """Stop if a person used the keyboard or mouse since our own last
+        input: BAM must never fight a user for the machine."""
+        if not self.yields:
+            return
+        try:
+            idle = self.b.idle_seconds()
+        except Exception:
+            idle = None
+        if idle is None:
+            return
+        if time.monotonic() - idle > self.own_until + 0.25:
+            self.user_stopped = True
+            raise ScriptFailure(
+                "Run stopped: user input detected.", phase=phase, step=number, action="user"
+            )
 
     def guard(self, step: dict, phase: int, number: int) -> None:
         """Before real input: the app must be the one receiving it. Raise it
@@ -521,6 +565,7 @@ class _Run:
                     )
                 start += 1
                 continue
+            self.check_user(phase, base + start + 1)
             end = start
             if is_real_input(sent[start]):
                 # Its own chunk, checked right before it runs.
@@ -535,6 +580,8 @@ class _Run:
                     end += 1
             chunk = sent[start : end + 1]
             results = self.b.run_sequence(chunk, stop_on_error=True)
+            if any(s.get("action") not in _NO_INPUT for s in chunk):
+                self.own_until = time.monotonic()  # input from here on may be ours
             for offset, r in enumerate(results):
                 i = start + offset
                 if not r.get("ok"):

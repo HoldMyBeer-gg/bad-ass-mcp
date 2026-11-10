@@ -146,7 +146,8 @@ def run_suite(
                     shutil.rmtree(out)
                 cfg = effective_config(config, loaded[idx], overrides)
                 result = run_script(backend, scripts[idx], platform, cfg, out, progress=on_phase)
-                if result["status"] != "FAIL" or attempts > retries:
+                user = (result.get("failure") or {}).get("action") == "user"
+                if result["status"] != "FAIL" or attempts > retries or user:
                     break
             entry["status"] = result["status"]
             entry["attempts"] = attempts
@@ -160,6 +161,8 @@ def run_suite(
                 fail_fast is True or (fail_fast == "first_script" and idx == 0)
             ):
                 stop = True
+            if (result.get("failure") or {}).get("action") == "user":
+                stop = True  # someone is using the machine: never carry on
         base += units[idx]
         emit({"kind": "phase", "done": base, "script": entry["name"], "phase": None})
         emit({"kind": "script", "done": base, "name": entry["name"], "status": entry["status"]})

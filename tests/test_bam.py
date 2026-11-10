@@ -1659,8 +1659,8 @@ def test_a_hung_app_is_killed_and_the_script_fails_as_not_responding(tmp_path, m
             return 0
 
     class _Hangs(FakeBackend):
-        def is_hung(self, window_id):
-            return True
+        def app_hung(self, pid):
+            return pid == 9999
 
         def click(self, handle_id, button="left", clicks=1):
             unblock.wait(10)  # blocks until the app is killed
@@ -1683,9 +1683,160 @@ def test_a_hung_app_is_killed_and_the_script_fails_as_not_responding(tmp_path, m
 
 def test_a_responsive_app_is_left_alone_by_the_watchdog(tmp_path):
     class _Fine(FakeBackend):
-        def is_hung(self, window_id):
+        def app_hung(self, pid):
             return False
 
     script = _real_input_script(tmp_path, [{"action": "click", "target": "ok"}], name="fine")
     res = run_script(_Fine(), script, "linux", {**CONFIG, "hang_timeout": 0.2}, tmp_path / "out")
     assert res["status"] == "PASS"
+
+
+def test_a_hang_during_launch_is_caught_too(tmp_path, monkeypatch):
+    """The app hangs before its window is found: the window lookup blocks,
+    so the watchdog must start from the launched pid, not the window."""
+    import threading
+
+    from bad_ass_mcp.bam import runner as runner_mod
+
+    killed = threading.Event()
+
+    class _Proc:
+        pid = 9999
+
+        def poll(self):
+            return 0 if killed.is_set() else None
+
+        def terminate(self):
+            killed.set()
+
+        def kill(self):
+            killed.set()
+
+        def wait(self, timeout=None):
+            return 0
+
+    class _HangsAtStart(FakeBackend):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def app_hung(self, pid):
+            return pid == 9999
+
+        def list_windows(self):
+            self.calls += 1
+            if self.calls > 1:
+                killed.wait(10)  # a UIA query against the hung app blocks
+                return []
+            return []
+
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", lambda *a, **k: _Proc())
+    script = _real_input_script(tmp_path, [{"action": "click", "target": "ok"}], name="hs")
+    cfg = {**CONFIG, "app": "x", "hang_timeout": 0.3, "launch_timeout": 30}
+    import time as _t
+
+    t0 = _t.monotonic()
+    res = run_script(_HangsAtStart(), script, "linux", cfg, tmp_path / "out")
+    assert _t.monotonic() - t0 < 5
+    assert res["failure"]["reason"] == "app not responding (killed after 0.3 s)"
+
+
+# ── yield to a real user ─────────────────────────────────────────────
+
+
+class _Human(_Desk):
+    """Tracks the last input time like GetLastInputInfo: our own injected
+    input counts too. `touch_after_key` simulates the user grabbing the
+    mouse 0.3 s after the first key the run sends."""
+
+    def __init__(self, touch_after_key=None, **kw):
+        super().__init__(**kw)
+        import time as _t
+
+        self._t = _t
+        self.last_input = _t.monotonic() - 100
+        self.touch_after_key = touch_after_key
+
+    def idle_seconds(self):
+        now = self._t.monotonic()
+        last = self.last_input
+        if self.touch_at is not None and now >= self.touch_at:
+            last = max(last, self.touch_at)
+        return now - last
+
+    touch_at = None
+
+    def press_key(self, key, window_id=None):
+        self.last_input = self._t.monotonic()
+        if self.touch_after_key is not None and self.touch_at is None:
+            self.touch_at = self.last_input + self.touch_after_key
+        return super().press_key(key, window_id)
+
+
+def test_a_user_touching_the_machine_stops_a_foreground_run(tmp_path):
+    desk = _Human(touch_after_key=0.3)
+    script = _real_input_script(
+        tmp_path,
+        [
+            {"action": "key", "key": "F1"},
+            {"action": "sleep", "seconds": 0.7},
+            {"action": "key", "key": "F2"},
+        ],
+    )
+    res = run_script(desk, script, "linux", CONFIG, tmp_path / "out")
+    assert res["status"] == "FAIL"
+    assert res["failure"]["reason"] == "Run stopped: user input detected."
+    assert res["failure"]["action"] == "user"
+    assert desk.key_log == ["F1"]  # F2 never sent
+
+
+def test_our_own_input_is_not_mistaken_for_the_user(tmp_path):
+    desk = _Human()
+    script = _real_input_script(
+        tmp_path,
+        [
+            {"action": "key", "key": "F1"},
+            {"action": "sleep", "seconds": 0.4},
+            {"action": "key", "key": "F2"},
+        ],
+    )
+    res = run_script(desk, script, "linux", CONFIG, tmp_path / "out")
+    assert res["status"] == "PASS"
+    assert desk.key_log == ["F1", "F2"]
+
+
+def test_background_scripts_dont_care_if_the_user_works(tmp_path):
+    """No real input in the script: it runs behind the user's back by design."""
+    desk = _Human()
+    desk.touch_at = 0  # the user is busy the whole time
+    script = _real_input_script(
+        tmp_path,
+        [{"action": "click", "target": "ok"}, {"action": "sleep", "seconds": 0.2}],
+    )
+    res = run_script(desk, script, "linux", CONFIG, tmp_path / "out")
+    assert res["status"] == "PASS"
+
+
+def test_user_input_stops_the_whole_suite(tmp_path):
+    a = write(
+        tmp_path,
+        "a",
+        {
+            "phases": [
+                {
+                    "learn": {"ok": {"name": "OK"}},
+                    "steps": [
+                        {"action": "key", "key": "F1"},
+                        {"action": "sleep", "seconds": 0.7},
+                        {"action": "key", "key": "F2"},
+                    ],
+                }
+            ]
+        },
+    )
+    b = write(tmp_path, "b", {"phases": []})
+    run_dir = run_suite(
+        _Human(touch_after_key=0.3), [a, b], "linux", CONFIG, tmp_path / "res", commit="c"
+    )
+    run = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    assert [s["status"] for s in run["scripts"]] == ["FAIL", "NOT_RUN"]

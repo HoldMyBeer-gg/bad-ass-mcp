@@ -1064,11 +1064,39 @@ class WindowsBackend(DesktopBackend):
     def foreground_pid(self) -> int | None:
         return self._root_pid(_user32.GetForegroundWindow())
 
-    def is_hung(self, window_id: str) -> bool | None:
-        # IsHungAppWindow: no messages processed for 5 s. Pure user32, safe
-        # to call while a UIA call into that window is blocked elsewhere.
+    def app_hung(self, pid: int) -> bool | None:
+        # IsHungAppWindow: a top-level window that hasn't processed messages
+        # for 5 s. Pure user32, safe while a UIA call into that app blocks.
+        hung = False
+
+        @ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+        def _cb(hwnd, _lparam):
+            nonlocal hung
+            owner = ctypes.wintypes.DWORD()
+            _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+            if owner.value == pid and _user32.IsWindowVisible(hwnd):
+                if _user32.IsHungAppWindow(hwnd):
+                    hung = True
+                    return False
+            return True
+
         try:
-            return bool(_user32.IsHungAppWindow(int(window_id)))
+            _user32.EnumWindows(_cb, 0)
+        except Exception:
+            return None
+        return hung
+
+    def idle_seconds(self) -> float | None:
+        class _LASTINPUTINFO(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.wintypes.UINT), ("dwTime", ctypes.wintypes.DWORD)]
+
+        try:
+            info = _LASTINPUTINFO()
+            info.cbSize = ctypes.sizeof(_LASTINPUTINFO)
+            if not _user32.GetLastInputInfo(ctypes.byref(info)):
+                return None
+            now = _kernel32.GetTickCount() & 0xFFFFFFFF
+            return ((now - info.dwTime) & 0xFFFFFFFF) / 1000.0
         except Exception:
             return None
 

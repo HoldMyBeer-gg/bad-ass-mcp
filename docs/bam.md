@@ -110,6 +110,7 @@ Three layers, later wins: the suite file (`--config`), a script's own
 | `launch_timeout` | 20 | seconds to wait for the window, then for `ready` |
 | `step_timeout` | 5 | seconds to wait for windows in phases, and to retry elements a phase learns that haven't rendered yet |
 | `hang_timeout` | 30 | seconds a window may stay unresponsive (Windows: IsHungAppWindow) before the launched app is killed and the script fails "app not responding"; 0 turns it off. A call into a hung window otherwise blocks forever |
+| `yield_to_user` | true | in a script that sends real input, any keyboard or mouse input that isn't the runner's stops the script and the rest of the suite with `Run stopped: user input detected.`; focus stays where the person put it. Background-only scripts never stop for this |
 | `timeout_scale` | 1 | multiplies every `wait_for_*` timeout and `sleep` in the scripts; 2–3 for slow machines and small VMs, without editing scripts |
 | `screenshot_proof` | true | screenshot after every phase |
 | `demo` | false | demo mode (first pieces): steps run one at a time with a pause, clicks go through the real pointer at the element's centre so they show on video, and each step is logged with its target's bounds in `timeline.json` |

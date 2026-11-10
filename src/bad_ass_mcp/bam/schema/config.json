@@ -310,6 +310,10 @@
       "type": "number",
       "minimum": 0,
       "description": "Seconds a window may stay unresponsive before the launched app is killed and the script fails (0 = off). Default 30."
+    },
+    "yield_to_user": {
+      "type": "boolean",
+      "description": "Stop the run (and the suite) when someone uses the keyboard or mouse during a script that sends real input. Default true."
     }
   },
   "$defs": {

@@ -703,6 +703,22 @@ class MacOSBackend(DesktopBackend):
     def foreground_pid(self) -> int | None:
         return self._frontmost_pid()
 
+    def idle_seconds(self) -> float | None:
+        try:
+            from Quartz import (
+                CGEventSourceSecondsSinceLastEventType,
+                kCGAnyInputEventType,
+                kCGEventSourceStateCombinedSessionState,
+            )
+
+            return float(
+                CGEventSourceSecondsSinceLastEventType(
+                    kCGEventSourceStateCombinedSessionState, kCGAnyInputEventType
+                )
+            )
+        except Exception:
+            return None
+
     def pid_at(self, x: float, y: float) -> int | None:
         """Owner of the frontmost normal window containing (x, y), from the
         on-screen window list (front to back)."""

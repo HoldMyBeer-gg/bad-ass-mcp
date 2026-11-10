@@ -432,10 +432,15 @@ class DesktopBackend(ABC):
         """Process owning the top-level window under screen point (x, y)."""
         return None
 
-    def is_hung(self, window_id: str) -> bool | None:
-        """Whether the window's app has stopped processing input (None: can't
+    def app_hung(self, pid: int) -> bool | None:
+        """Whether `pid`'s windows have stopped processing input (None: can't
         tell). Called from a watchdog thread while another call may be
-        blocked on that very window, so it must not go through the a11y API."""
+        blocked on that app, so it must not go through the a11y API."""
+        return None
+
+    def idle_seconds(self) -> float | None:
+        """Seconds since the last keyboard/mouse input of any kind (ours
+        included). None: can't tell. Used to notice a person at the machine."""
         return None
 
     def bring_to_front(self, pid: int, *, gentle: bool = False) -> bool:
