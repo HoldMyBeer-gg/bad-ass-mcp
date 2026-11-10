@@ -915,3 +915,76 @@ def test_get_bounds_with_expect_not_proves_a_drag_moved_something(tmp_path):
     assert r["status"] == "FAIL"
     assert r["failure"]["step"] == 3
     assert "unchanged" in r["failure"]["reason"]
+
+
+# ── demo mode: timeline, pacing, visible pointer ──────────────────────
+
+
+def test_every_run_writes_a_timeline_of_phases(tmp_path):
+    script = write(
+        tmp_path,
+        "tl",
+        {
+            "phases": [
+                {
+                    "name": "first",
+                    "learn": {"ok": {"name": "OK"}},
+                    "steps": [{"action": "click", "target": "ok"}],
+                },
+                {"name": "second", "learn": {}, "steps": []},
+            ]
+        },
+    )
+    out = tmp_path / "out"
+    run_script(FakeBackend(), script, "linux", CONFIG, out)
+    events = json.loads((out / "timeline.json").read_text())
+    phases = [e for e in events if e["event"] == "phase"]
+    assert [p["name"] for p in phases] == ["first", "second"]
+    assert phases[0]["t"] <= phases[1]["t"]
+
+
+def test_demo_mode_logs_each_step_with_bounds_and_paces_it(tmp_path):
+    script = write(
+        tmp_path,
+        "demo",
+        {
+            "phases": [
+                {
+                    "name": "press ok",
+                    "learn": {"ok": {"name": "OK"}},
+                    "steps": [
+                        {"action": "click", "target": "ok"},
+                        {"action": "key", "key": "a"},
+                    ],
+                }
+            ]
+        },
+    )
+    out = tmp_path / "out"
+    r = run_script(FakeBackend(), script, "linux", {**CONFIG, "demo": True, "demo_pace": 0.05}, out)
+    assert r["status"] == "PASS", r
+    steps = [e for e in json.loads((out / "timeline.json").read_text()) if e["event"] == "step"]
+    assert [s["action"] for s in steps] == ["click", "key"]
+    assert steps[0]["phase"] == "press ok" and steps[0]["target"] == "ok"
+    assert steps[0]["bounds"] == [10.0, 10.0, 80.0, 30.0]  # FakeBackend's OK button
+    assert steps[1]["t"] - steps[0]["t"] >= 0.05  # paced
+
+
+def test_demo_mode_clicks_with_the_real_pointer_at_the_element_centre(tmp_path):
+    backend = FakeBackend()
+    script = write(
+        tmp_path,
+        "pointer",
+        {
+            "phases": [
+                {
+                    "learn": {"ok": {"name": "OK"}},
+                    "steps": [
+                        {"action": "click", "target": "ok"},
+                    ],
+                }
+            ]
+        },
+    )
+    run_script(backend, script, "linux", {**CONFIG, "demo": True, "demo_pace": 0}, tmp_path / "out")
+    assert ("click", 50.0, 25.0, "left", 1) in backend.pointer_log

@@ -59,6 +59,8 @@ bam-results/<time>_<commit>_<platform>/
                         phases [{name, status, seconds}], failure {phase, step, action, reason}
     phase-N.png         proof screenshot after each phase (screenshot_proof)
     fail.png, tree.json screen and pruned accessibility tree at a failure
+    timeline.json       timestamped phases (and, in demo mode, every step with its
+                        target's bounds): the input for captions and highlights
     run.mp4             with --video
     files/              the script's $SMOKE working folder
   report.html
@@ -82,6 +84,8 @@ Three layers, later wins: the suite file (`--config`), a script's own
 | `step_timeout` | 5 | seconds to wait for windows in phases, and to retry elements a phase learns that haven't rendered yet |
 | `timeout_scale` | 1 | multiplies every `wait_for_*` timeout and `sleep` in the scripts; 2–3 for slow machines and small VMs, without editing scripts |
 | `screenshot_proof` | true | screenshot after every phase |
+| `demo` | false | demo mode (first pieces): steps run one at a time with a pause, clicks go through the real pointer at the element's centre so they show on video, and each step is logged with its target's bounds in `timeline.json` |
+| `demo_pace` | 0.8 | seconds to pause after each step in demo mode |
 | `record_video` | false | `true`, or `"on_failure"` to keep only failing runs |
 | `fail_fast` | false | `true`, or `"first_script"` (stop only if the first script fails) |
 | `retries` | 0 | rerun a failing script; a later pass is marked "passed on attempt N" |

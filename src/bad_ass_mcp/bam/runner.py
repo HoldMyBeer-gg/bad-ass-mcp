@@ -70,6 +70,10 @@ class _Run:
         self.manual: list[str] = []
         self.phases_by_id: dict[str, dict] = {}
         self.phase_log: list[dict] = []
+        self.timeline: list[dict] = []
+        self.t0 = time.monotonic()
+        self.phase_name = ""
+        self.targets: dict[str, str] = {}  # handle -> learn label, for the timeline
         self.pid: int | None = config.get("pid")
         self.before: set[str] | None = None
         self.progress = None  # callable(phase_number) after each phase
@@ -121,6 +125,9 @@ class _Run:
             else:
                 n += 1
         return n
+
+    def log(self, event: str, **fields) -> None:
+        self.timeline.append({"t": round(time.monotonic() - self.t0, 3), "event": event, **fields})
 
     # ── evidence ──────────────────────────────────────────────────────
     def shot(self, name: str, window: str | None) -> str | None:
@@ -218,6 +225,8 @@ class _Run:
         n = self.phase_no
         entry = {"name": phase.get("name") or phase.get("id") or f"phase {n}", "status": "FAIL"}
         self.phase_log.append(entry)
+        self.phase_name = entry["name"]
+        self.log("phase", name=entry["name"], number=n)
         started = time.monotonic()
         try:
             self._run_phase(phase, n)
@@ -263,6 +272,7 @@ class _Run:
                 time.sleep(0.2)
             if missing:
                 raise ScriptFailure("element not found: " + ", ".join(missing), phase=n)
+            self.targets.update({h: label for label, h in handles.items() if h})
 
             sent, meta = build_steps(
                 phase.get("steps", []),
@@ -292,6 +302,50 @@ class _Run:
         return found
 
     def run_steps(self, sent: list[dict], meta: list[dict], phase: int) -> None:
+        if not self.config.get("demo"):
+            self._run_chunked(sent, meta, phase)
+            return
+        # Demo mode: one step at a time, logged with its target's bounds, with
+        # a pause after each, and clicks through the real pointer so they
+        # show up on video.
+        pace = float(self.config.get("demo_pace", 0.8))
+        for i, step in enumerate(sent):
+            bounds = None
+            if "handle" in step:
+                try:
+                    b = self.b.element_bounds(step["handle"])
+                    bounds = [float(v) for v in b] if b else None
+                except Exception:
+                    bounds = None
+            self.log(
+                "step",
+                phase=self.phase_name,
+                action=step.get("action"),
+                target=self.targets.get(step.get("handle")),
+                bounds=bounds,
+            )
+            plain_click = (
+                step.get("action") == "click"
+                and bounds
+                and step.get("button", "left") == "left"
+                and int(step.get("clicks", 1)) == 1
+            )
+            if plain_click:
+                x, y, w, h = bounds
+                r = self.b.click_at(x + w / 2, y + h / 2, self.window)
+                if not r.ok:
+                    raise ScriptFailure(
+                        f"click failed: {r.error or 'not ok'}",
+                        phase=phase,
+                        step=i + 1,
+                        action="click",
+                    )
+            else:
+                self._run_chunked([step], [meta[i]], phase, base=i)
+            if pace:
+                time.sleep(pace)
+
+    def _run_chunked(self, sent: list[dict], meta: list[dict], phase: int, base: int = 0) -> None:
         # Run server-side in chunks, ending each chunk at a step whose value
         # we need to check, so a wrong value stops the flow right there.
         # `shell` steps aren't backend actions: the runner runs them itself.
@@ -304,7 +358,7 @@ class _Run:
                         f"shell step failed ({r.returncode}): {sent[start].get('cmd')!r} "
                         f"{r.stderr.strip()}".strip(),
                         phase=phase,
-                        step=start + 1,
+                        step=base + start + 1,
                         action="shell",
                     )
                 start += 1
@@ -320,7 +374,7 @@ class _Run:
                     raise ScriptFailure(
                         f"{r.get('action')} failed: {r.get('error') or 'not ok'}",
                         phase=phase,
-                        step=i + 1,
+                        step=base + i + 1,
                         action=r.get("action"),
                     )
                 m = meta[i]
@@ -333,7 +387,7 @@ class _Run:
                         raise ScriptFailure(
                             f"{r.get('action')}: expected {want!r}, got {got!r}",
                             phase=phase,
-                            step=i + 1,
+                            step=base + i + 1,
                             action=r.get("action"),
                         )
                 if "expect_not" in m:
@@ -343,12 +397,12 @@ class _Run:
                         raise ScriptFailure(
                             f"{r.get('action')}: value unchanged, still {got!r}",
                             phase=phase,
-                            step=i + 1,
+                            step=base + i + 1,
                             action=r.get("action"),
                         )
             if len(results) < len(chunk):
                 raise ScriptFailure(
-                    "sequence stopped early", phase=phase, step=start + len(results) + 1
+                    "sequence stopped early", phase=phase, step=base + start + len(results) + 1
                 )
             start = end + 1
 
@@ -485,6 +539,7 @@ def run_script(
                     pass
             run.teardown()
         result["phases"] = run.phase_log
+        (out_dir / "timeline.json").write_text(json.dumps(run.timeline, indent=1))
         if run.window is not None:
             result["window"] = run.window
         result["screenshots"] = run.screenshots
