@@ -80,6 +80,7 @@ Three layers, later wins: the suite file (`--config`), a script's own
 | `ready` | none | an element (`{"name": ..., "role": ...}`, per platform if needed) that exists only once the app is usable; waited for after the window appears, up to `launch_timeout`. Set it: windows often exist before their content (WebView2, WebKitGTK), and keys sent then are lost |
 | `launch_timeout` | 20 | seconds to wait for the window, then for `ready` |
 | `step_timeout` | 5 | seconds to wait for windows in phases, and to retry elements a phase learns that haven't rendered yet |
+| `timeout_scale` | 1 | multiplies every `wait_for_*` timeout and `sleep` in the scripts; 2–3 for slow machines and small VMs, without editing scripts |
 | `screenshot_proof` | true | screenshot after every phase |
 | `record_video` | false | `true`, or `"on_failure"` to keep only failing runs |
 | `fail_fast` | false | `true`, or `"first_script"` (stop only if the first script fails) |

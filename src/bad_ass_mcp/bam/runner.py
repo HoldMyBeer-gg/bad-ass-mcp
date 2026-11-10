@@ -265,7 +265,12 @@ class _Run:
                 raise ScriptFailure("element not found: " + ", ".join(missing), phase=n)
 
             sent, meta = build_steps(
-                phase.get("steps", []), self.platform, handles, window, self.vars
+                phase.get("steps", []),
+                self.platform,
+                handles,
+                window,
+                self.vars,
+                timeout_scale=float(self.config.get("timeout_scale", 1)),
             )
             self.run_steps(sent, meta, n)
             if "checks" in phase:

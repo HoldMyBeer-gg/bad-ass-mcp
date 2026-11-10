@@ -55,9 +55,12 @@ def build_steps(
     handles: dict[str, str],
     window_id: str,
     variables: dict[str, str],
+    *,
+    timeout_scale: float = 1.0,
 ) -> tuple[list[dict], list[dict]]:
     """run_sequence steps for this platform, plus per-step runner metadata
-    ({"expect", "save"}) aligned by index."""
+    ({"expect", "save"}) aligned by index. `timeout_scale` stretches every
+    wait timeout and sleep, for slow machines."""
     sent: list[dict] = []
     meta: list[dict] = []
     env = {**variables, "WINDOW": window_id}
@@ -76,6 +79,11 @@ def build_steps(
             s[k] = expand(v, env)
         if "target" in step:
             s["handle"] = handles[step["target"]]
+        if timeout_scale != 1:
+            if s.get("action") in ("wait_for_element", "wait_for_window") and "timeout" in s:
+                s["timeout"] = s["timeout"] * timeout_scale
+            if s.get("action") == "sleep" and "seconds" in s:
+                s["seconds"] = s["seconds"] * timeout_scale
         sent.append(s)
         meta.append({k: step[k] for k in ("expect", "save") if k in step})
     return sent, meta

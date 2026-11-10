@@ -817,3 +817,38 @@ def test_other_window_fails_when_there_is_no_second_window(tmp_path):
     )
     r = run_script(FakeBackend(), script, "linux", CONFIG, tmp_path / "out")
     assert r["status"] == "FAIL" and "other window" in r["failure"]["reason"]
+
+
+# ── slow machines: one knob stretches every wait ─────────────────────
+
+
+def test_timeout_scale_stretches_waits_and_sleeps(tmp_path):
+    from bad_ass_mcp.bam.script import build_steps
+
+    steps = [
+        {"action": "wait_for_element", "window_id": "$WINDOW", "name": "X", "timeout": 3},
+        {"action": "wait_for_window", "pattern": "Save", "timeout": 5},
+        {"action": "sleep", "seconds": 0.5},
+        {"action": "click", "target": "ok"},
+    ]
+    sent, _ = build_steps(steps, "linux", {"ok": "h"}, "W", {}, timeout_scale=3)
+    assert sent[0]["timeout"] == 9
+    assert sent[1]["timeout"] == 15
+    assert sent[2]["seconds"] == 1.5
+    assert sent[3] == {"action": "click", "handle": "h"}
+
+
+def test_timeout_scale_defaults_to_one_and_reaches_the_runner(tmp_path):
+    backend = FakeBackend()
+    seen = []
+    real = backend.run_sequence
+    backend.run_sequence = lambda steps, stop_on_error=True: (
+        seen.extend(steps) or real(steps, stop_on_error)
+    )
+    script = write(
+        tmp_path,
+        "scaled",
+        {"phases": [{"learn": {}, "steps": [{"action": "sleep", "seconds": 0.01}]}]},
+    )
+    run_script(backend, script, "linux", {**CONFIG, "timeout_scale": 2}, tmp_path / "a")
+    assert seen[-1]["seconds"] == 0.02
