@@ -1067,13 +1067,19 @@ class WindowsBackend(DesktopBackend):
     def pid_at(self, x: float, y: float) -> int | None:
         return self._root_pid(_user32.WindowFromPoint(_POINT(int(round(x)), int(round(y)))))
 
-    def bring_to_front(self, pid: int) -> bool:
-        """Windows' foreground lock refuses SetForegroundWindow from a
-        process that doesn't own the foreground. Try it plainly, then after
-        an Alt tap (which unlocks it), then with our input attached to the
-        foreground thread's."""
+    def bring_to_front(self, pid: int, *, gentle: bool = False) -> bool:
+        """Windows' foreground lock refuses SetForegroundWindow from a process
+        that doesn't own the foreground. Try, in order, and stop at the first
+        that lands: plain SetForegroundWindow; SwitchToThisWindow (what
+        Alt+Tab uses); then, unless `gentle`: an Alt tap first (synthetic
+        input unlocks the lock, unless an input-grabbing app such as a VM
+        swallows it), our input attached to the foreground thread, and a
+        minimize/restore (a restored window is activated by the system).
+        Each attempt goes into self.last_raise with GetLastError's number."""
+        self.last_raise: list[dict] = []
         candidates = [w for w in self.list_windows() if w.pid == pid]
         if not candidates:
+            self.last_raise.append({"method": "find", "ok": False, "error": "no window"})
             return False
 
         def area(w):
@@ -1091,25 +1097,50 @@ class WindowsBackend(DesktopBackend):
                 time.sleep(0.03)
             return False
 
-        _user32.SetForegroundWindow(hwnd)
-        if landed():
-            return True
-        _user32.keybd_event(0x12, 0, 0, 0)  # VK_MENU down
-        _user32.keybd_event(0x12, 0, 0x0002, 0)  # up
-        _user32.SetForegroundWindow(hwnd)
-        _user32.BringWindowToTop(hwnd)
-        if landed():
-            return True
-        fg_thread = _user32.GetWindowThreadProcessId(_user32.GetForegroundWindow(), None)
-        me = _kernel32.GetCurrentThreadId()
-        if fg_thread and fg_thread != me:
+        def attempt(method: str, fn) -> bool:
+            err = 0
+            try:
+                fn()
+                err = _kernel32.GetLastError()
+            except Exception as e:  # noqa: BLE001
+                err = type(e).__name__
+            ok = landed()
+            self.last_raise.append({"method": method, "ok": ok, "error": err})
+            return ok
+
+        def alt_tap():
+            _user32.keybd_event(0x12, 0, 0, 0)  # VK_MENU down
+            _user32.keybd_event(0x12, 0, 0x0002, 0)  # up
+            _user32.SetForegroundWindow(hwnd)
+            _user32.BringWindowToTop(hwnd)
+
+        def attached():
+            fg_thread = _user32.GetWindowThreadProcessId(_user32.GetForegroundWindow(), None)
+            me = _kernel32.GetCurrentThreadId()
+            if not fg_thread or fg_thread == me:
+                _user32.SetForegroundWindow(hwnd)
+                return
             _user32.AttachThreadInput(me, fg_thread, True)
             try:
                 _user32.SetForegroundWindow(hwnd)
                 _user32.BringWindowToTop(hwnd)
             finally:
                 _user32.AttachThreadInput(me, fg_thread, False)
-        return landed()
+
+        def min_restore():
+            _user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE
+            time.sleep(0.1)
+            _user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            _user32.SetForegroundWindow(hwnd)
+
+        ladder = [
+            ("plain", lambda: _user32.SetForegroundWindow(hwnd)),
+            ("switch_to_this_window", lambda: _user32.SwitchToThisWindow(hwnd, True)),
+        ]
+        if not gentle:
+            ladder += [("alt_tap", alt_tap), ("attach_thread_input", attached)]
+            ladder += [("minimize_restore", min_restore)]
+        return any(attempt(m, fn) for m, fn in ladder)
 
     def _activate_window_at(self, x: float, y: float) -> None:
         """Bring the top-level window under (x, y) to the foreground if it

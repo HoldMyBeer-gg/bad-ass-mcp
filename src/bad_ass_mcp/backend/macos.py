@@ -726,8 +726,13 @@ class MacOSBackend(DesktopBackend):
             return None
         return None
 
-    def bring_to_front(self, pid: int) -> bool:
-        return self._frontmost_pid() == pid or self._set_frontmost(pid)
+    def bring_to_front(self, pid: int, *, gentle: bool = False) -> bool:
+        if self._frontmost_pid() == pid:
+            self.last_raise = []
+            return True
+        ok = self._set_frontmost(pid)
+        self.last_raise = [{"method": "activate", "ok": ok, "error": 0}]
+        return ok
 
     @staticmethod
     def _frontmost_pid() -> int | None:

@@ -215,11 +215,24 @@ class _Run:
                 time.sleep(0.2)
 
     def teardown(self) -> None:
-        if self.prev_front is not None:
-            try:
-                self.b.bring_to_front(self.prev_front)  # hand the user's app its focus back
-            except Exception:
-                pass
+        try:
+            self._close_app()
+        finally:
+            self._hand_focus_back()
+
+    def _hand_focus_back(self) -> None:
+        """After the app is gone (closing it would otherwise pass the focus to
+        whatever window is next), give the user's app its focus back, gently:
+        no synthetic keys that could land in another app."""
+        if self.prev_front is None:
+            return
+        try:
+            ok = self.b.bring_to_front(self.prev_front, gentle=True)
+        except Exception:
+            ok = False
+        self.log("restore", ok=bool(ok))
+
+    def _close_app(self) -> None:
         if self.proc is not None and self.proc.poll() is None:
             self.proc.terminate()
             try:
@@ -423,7 +436,8 @@ class _Run:
             front = self.b.foreground_pid()
             if front is not None and front != pid:
                 self.prev_front = front
-        self.b.bring_to_front(pid)
+        landed = self.b.bring_to_front(pid)
+        self.log("raise", ok=bool(landed), attempts=list(getattr(self.b, "last_raise", None) or []))
         if probe() != pid:
             raise ScriptFailure(
                 "Unexpected app in foreground.", phase=phase, step=number, action="foreground"

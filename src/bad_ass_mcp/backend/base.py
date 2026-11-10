@@ -432,8 +432,12 @@ class DesktopBackend(ABC):
         """Process owning the top-level window under screen point (x, y)."""
         return None
 
-    def bring_to_front(self, pid: int) -> bool:
-        """Raise one of `pid`'s windows and give it focus; True if it landed."""
+    def bring_to_front(self, pid: int, *, gentle: bool = False) -> bool:
+        """Raise one of `pid`'s windows and give it focus; True if it landed.
+        `gentle`: no synthetic input (used to hand focus back to the user).
+        Implementations record what they tried in `self.last_raise` as
+        [{"method", "ok", "error"}] (no window names) for the run timeline."""
+        self.last_raise = []
         return False
 
     @abstractmethod

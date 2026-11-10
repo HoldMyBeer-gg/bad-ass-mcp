@@ -1372,9 +1372,11 @@ class _Desk(FakeBackend):
     def pid_at(self, x, y):
         return self.under if self.known else None
 
-    def bring_to_front(self, pid):
+    def bring_to_front(self, pid, *, gentle=False):
         self.raised.append(pid)
-        if self.raisable or pid != 9999:
+        ok = self.raisable or pid != 9999
+        self.last_raise = [{"method": "plain", "ok": ok, "error": 0 if ok else 5}]
+        if ok:
             self.front = pid
             if pid == 9999:
                 self.under = 9999
@@ -1525,3 +1527,62 @@ def test_hands_off_notice_names_the_scripts():
         "Hands off the keyboard and mouse until the run finishes; go grab a coffee."
     )
     assert hands_off_notice([], 6) is None
+
+
+def test_raise_attempts_and_the_restore_are_in_the_timeline_without_names(tmp_path):
+    desk = _Desk(front=4242)
+    script = _real_input_script(tmp_path, [{"action": "key", "key": "F10"}])
+    out = tmp_path / "out"
+    run_script(desk, script, "linux", CONFIG, out)
+    events = json.loads((out / "timeline.json").read_text(encoding="utf-8"))
+    raises = [e for e in events if e["event"] == "raise"]
+    restores = [e for e in events if e["event"] == "restore"]
+    assert raises and raises[0]["ok"] is True
+    assert raises[0]["attempts"] == [{"method": "plain", "ok": True, "error": 0}]
+    assert restores and restores[0]["ok"] is True
+    assert "4242" not in json.dumps(events)
+
+
+def test_a_failed_raise_logs_its_attempts(tmp_path):
+    desk = _Desk(front=4242, raisable=False)
+    script = _real_input_script(tmp_path, [{"action": "key", "key": "F10"}])
+    out = tmp_path / "out"
+    run_script(desk, script, "linux", CONFIG, out)
+    events = json.loads((out / "timeline.json").read_text(encoding="utf-8"))
+    raise_ = next(e for e in events if e["event"] == "raise")
+    assert raise_["ok"] is False
+    assert raise_["attempts"] == [{"method": "plain", "ok": False, "error": 5}]
+
+
+def test_focus_is_handed_back_gently_after_the_app_is_closed(tmp_path):
+    order = []
+
+    class _Watch(_Desk):
+        def bring_to_front(self, pid, *, gentle=False):
+            order.append(("raise", pid, gentle))
+            return super().bring_to_front(pid, gentle=gentle)
+
+    from bad_ass_mcp.bam import runner as runner_mod
+
+    class _Proc:
+        pid = 9999
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            order.append(("terminate",))
+
+        def wait(self, timeout=None):
+            return 0
+
+    import pytest as _pt
+
+    mp = _pt.MonkeyPatch()
+    mp.setattr(runner_mod.subprocess, "Popen", lambda *a, **k: _Proc())
+    try:
+        script = _real_input_script(tmp_path, [{"action": "key", "key": "F10"}])
+        run_script(_Watch(front=4242), script, "linux", {**CONFIG, "app": "x"}, tmp_path / "o")
+    finally:
+        mp.undo()
+    assert order == [("raise", 9999, False), ("terminate",), ("raise", 4242, True)]

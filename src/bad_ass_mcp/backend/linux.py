@@ -1055,14 +1055,17 @@ class LinuxBackend(DesktopBackend):
         except Exception:
             return None  # no X focus info (pure Wayland, gamescope): can't tell
 
-    def bring_to_front(self, pid: int) -> bool:
+    def bring_to_front(self, pid: int, *, gentle: bool = False) -> bool:
         xwid = self._find_xwid(pid)
         if not xwid:
+            self.last_raise = [{"method": "windowactivate", "ok": False, "error": "no window"}]
             return False
-        subprocess.run(
+        r = subprocess.run(
             ["xdotool", "windowactivate", "--sync", xwid], capture_output=True, timeout=5
         )
-        return self.foreground_pid() == pid
+        ok = self.foreground_pid() == pid
+        self.last_raise = [{"method": "windowactivate", "ok": ok, "error": r.returncode}]
+        return ok
 
     def _activate_for_pid(self, xwid: str, pid: int | None) -> None:
         """Give keyboard focus to the app before XTEST input, unless one of its
