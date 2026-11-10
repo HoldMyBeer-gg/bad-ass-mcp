@@ -29,8 +29,9 @@ Planned before scripts can be shared (BAM strings, `.bam` packages):
 
 ## Running
 
-From source: `uv sync --extra macos` (or `--extra windows`, `--extra linux`)
-first; each backend needs its platform's accessibility bindings.
+From source: `uv sync --extra macos` or `uv sync --extra windows` first. Linux
+has no extra: the backend uses the system's `gi` (PyGObject) and AT-SPI, so
+create the venv with `--system-site-packages`.
 
 ```
 bad-ass-mcp run PATH... [--config bam.json] [--results DIR] [--platform P]
