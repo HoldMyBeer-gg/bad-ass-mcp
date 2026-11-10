@@ -173,6 +173,26 @@ def _print_problems(problems: list[dict]) -> None:
         print(where + p["message"])
 
 
+def hands_off_notice(names: list[str], total: int) -> str | None:
+    if not names:
+        return None
+    return (
+        f"{len(names)} of {total} scripts use real keyboard/mouse input ({', '.join(names)}). "
+        "Hands off the keyboard and mouse until the run finishes; go grab a coffee."
+    )
+
+
+def _real_input_names(scripts: list[Path], platform: str) -> list[str]:
+    from .describe import needs_foreground
+
+    names = []
+    for p in scripts:
+        s = json.loads(Path(p).read_text(encoding="utf-8"))
+        if platform in s.get("platforms", [platform]) and needs_foreground(s, platform):
+            names.append(s.get("name") or Path(p).stem)
+    return names
+
+
 def check_main(argv: list[str]) -> int:
     """`bad-ass-mcp check PATH... [--config bam.json] [--json]`: validate
     scripts without running them. Exit 1 if anything is wrong."""
@@ -187,7 +207,12 @@ def check_main(argv: list[str]) -> int:
     elif problems:
         _print_problems(problems)
     else:
-        print(f"ok: {len(_collect(args.paths))} script(s) valid")
+        scripts = _collect(args.paths)
+        print(f"ok: {len(scripts)} script(s) valid")
+        here = _PLATFORMS.get(_platform.system(), "linux")
+        real = _real_input_names(scripts, here)
+        if real:
+            print(f"needs foreground on {here}: {', '.join(real)}")
     return 1 if problems else 0
 
 
@@ -203,6 +228,9 @@ def main(argv: list[str]) -> int:
         print(f"{len(problems)} problem(s); nothing was run. `bad-ass-mcp check` to re-check.")
         return 2
     run_suite = suite.run_suite
+    notice = hands_off_notice(_real_input_names(args.scripts, args.platform), len(args.scripts))
+    if notice:
+        print(notice, file=sys.stderr)
     color = use_color(sys.stdout)
     live = sys.stderr.isatty()
 

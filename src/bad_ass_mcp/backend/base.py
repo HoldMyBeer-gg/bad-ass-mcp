@@ -418,6 +418,24 @@ class DesktopBackend(ABC):
             pass
         return canonical
 
+    # ── foreground: who would receive real input ────────────────────
+    # Real keys (no window_id), click_at and drag go to whatever is in front
+    # or under the pointer, not to an element. The BAM runner checks these
+    # before each such step. None means "can't tell on this platform", and
+    # the runner then proceeds as before.
+
+    def foreground_pid(self) -> int | None:
+        """Process owning the foreground window (its top-level owner)."""
+        return None
+
+    def pid_at(self, x: float, y: float) -> int | None:
+        """Process owning the top-level window under screen point (x, y)."""
+        return None
+
+    def bring_to_front(self, pid: int) -> bool:
+        """Raise one of `pid`'s windows and give it focus; True if it landed."""
+        return False
+
     @abstractmethod
     def start_recording(self, window_id: str | None = None, fps: int = 15) -> str:
         """Start screen recording. Returns a recording handle."""

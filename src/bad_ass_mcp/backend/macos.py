@@ -700,6 +700,35 @@ class MacOSBackend(DesktopBackend):
         self._set_frontmost(pid)
         return front
 
+    def foreground_pid(self) -> int | None:
+        return self._frontmost_pid()
+
+    def pid_at(self, x: float, y: float) -> int | None:
+        """Owner of the frontmost normal window containing (x, y), from the
+        on-screen window list (front to back)."""
+        try:
+            from Quartz import (
+                CGWindowListCopyWindowInfo,
+                kCGNullWindowID,
+                kCGWindowListExcludeDesktopElements,
+                kCGWindowListOptionOnScreenOnly,
+            )
+
+            opts = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements
+            for info in CGWindowListCopyWindowInfo(opts, kCGNullWindowID) or []:
+                if info.get("kCGWindowLayer", 0) != 0:
+                    continue
+                b = info.get("kCGWindowBounds") or {}
+                bx, by = b.get("X", 0), b.get("Y", 0)
+                if bx <= x < bx + b.get("Width", 0) and by <= y < by + b.get("Height", 0):
+                    return int(info.get("kCGWindowOwnerPID"))
+        except Exception:
+            return None
+        return None
+
+    def bring_to_front(self, pid: int) -> bool:
+        return self._frontmost_pid() == pid or self._set_frontmost(pid)
+
     @staticmethod
     def _frontmost_pid() -> int | None:
         app = NSWorkspace.sharedWorkspace().frontmostApplication()

@@ -1047,6 +1047,70 @@ class WindowsBackend(DesktopBackend):
             return ActionResult(ok=False, error=f"SendInput returned {sent}, expected {n}")
         return ActionResult(ok=True)
 
+    # ── foreground ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _root_pid(hwnd) -> int | None:
+        """Pid of hwnd's top-level owner. WebView2 content lives in
+        msedgewebview2.exe, but its windows are children of the app's, so
+        the root owner is the app."""
+        if not hwnd:
+            return None
+        root = _user32.GetAncestor(hwnd, _GA_ROOTOWNER) or hwnd
+        pid = ctypes.wintypes.DWORD()
+        _user32.GetWindowThreadProcessId(root, ctypes.byref(pid))
+        return pid.value or None
+
+    def foreground_pid(self) -> int | None:
+        return self._root_pid(_user32.GetForegroundWindow())
+
+    def pid_at(self, x: float, y: float) -> int | None:
+        return self._root_pid(_user32.WindowFromPoint(_POINT(int(round(x)), int(round(y)))))
+
+    def bring_to_front(self, pid: int) -> bool:
+        """Windows' foreground lock refuses SetForegroundWindow from a
+        process that doesn't own the foreground. Try it plainly, then after
+        an Alt tap (which unlocks it), then with our input attached to the
+        foreground thread's."""
+        candidates = [w for w in self.list_windows() if w.pid == pid]
+        if not candidates:
+            return False
+
+        def area(w):
+            b = w.bounds or (0, 0, 0, 0)
+            return b[2] * b[3]
+
+        hwnd = int(max(candidates, key=area).id)
+        if _user32.IsIconic(hwnd):
+            _user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+
+        def landed() -> bool:
+            for _ in range(10):
+                if self.foreground_pid() == pid:
+                    return True
+                time.sleep(0.03)
+            return False
+
+        _user32.SetForegroundWindow(hwnd)
+        if landed():
+            return True
+        _user32.keybd_event(0x12, 0, 0, 0)  # VK_MENU down
+        _user32.keybd_event(0x12, 0, 0x0002, 0)  # up
+        _user32.SetForegroundWindow(hwnd)
+        _user32.BringWindowToTop(hwnd)
+        if landed():
+            return True
+        fg_thread = _user32.GetWindowThreadProcessId(_user32.GetForegroundWindow(), None)
+        me = _kernel32.GetCurrentThreadId()
+        if fg_thread and fg_thread != me:
+            _user32.AttachThreadInput(me, fg_thread, True)
+            try:
+                _user32.SetForegroundWindow(hwnd)
+                _user32.BringWindowToTop(hwnd)
+            finally:
+                _user32.AttachThreadInput(me, fg_thread, False)
+        return landed()
+
     def _activate_window_at(self, x: float, y: float) -> None:
         """Bring the top-level window under (x, y) to the foreground if it
         isn't already. MDI-style child windows (the Creation Kit's form

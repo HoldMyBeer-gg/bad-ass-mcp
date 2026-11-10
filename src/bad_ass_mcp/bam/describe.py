@@ -158,3 +158,22 @@ def phase_title(phase: dict, described: dict, n: int) -> str:
     if described["steps"]:
         return described["steps"][0]["text"]
     return f"phase {n}"
+
+
+def is_real_input(step: dict) -> bool:
+    """Steps that go to whatever is in front or under the pointer rather than
+    to an element: keys without a window, click_at, drag."""
+    a = step.get("action")
+    return a in ("click_at", "drag") or (a == "key" and "window_id" not in step)
+
+
+def needs_foreground(script: dict, platform: str) -> bool:
+    """Whether a run of this script on `platform` sends real input, so the
+    user has to keep hands off the keyboard and mouse."""
+    for phase in script.get("phases", []):
+        if not applies(phase, platform):
+            continue
+        for step in phase.get("steps", []):
+            if applies(step, platform) and is_real_input(step):
+                return True
+    return False

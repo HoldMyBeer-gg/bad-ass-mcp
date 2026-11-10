@@ -185,6 +185,30 @@ Three layers, later wins: the suite file (`--config`), a script's own
   `variables_note`) are ignored
   by the runner and kept for people.
 
+## Real input and the foreground
+
+Most steps act on elements through the accessibility tree and work with the
+app buried under other windows. Three kinds don't: `key` without `window_id`
+(a real key to the front window), `click_at` and `drag` (real pointer
+events at screen points). Before each of those the runner checks which
+process would receive it: the foreground window's top-level owner for keys,
+the window under the point for clicks and drags. If it isn't the app, the
+runner raises the app (on Windows through the foreground lock: plain, after
+an Alt tap, then with attached input) and checks again; if something else
+still holds it, the script fails at that step with exactly
+`Unexpected app in foreground.` and nothing is sent. The other app is never
+named in errors, results or the timeline. At the end the user's previous
+foreground app gets its focus back.
+
+Windows are matched by process too: once the app's main window is found,
+only that process's windows are driven, so another app's "Save As" (or the
+user's own copy of the app) is never touched.
+
+`run` prints a hands-off notice first when any selected script sends real
+input on this platform; `check` lists those scripts. Platforms that can't
+tell who is in front (Linux without X focus info, e.g. gamescope) proceed
+as before. On Linux the point check isn't implemented yet; keys are checked.
+
 ## Platform notes
 
 Element names come from `aria-label` / visible text and are usually the same

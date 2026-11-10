@@ -1042,6 +1042,28 @@ class LinuxBackend(DesktopBackend):
                 except OSError:
                     pass
 
+    # ── foreground ────────────────────────────────────────────────────
+
+    def foreground_pid(self) -> int | None:
+        try:
+            out = subprocess.check_output(
+                ["xdotool", "getwindowfocus", "getwindowpid"],
+                stderr=subprocess.DEVNULL,
+                timeout=3,
+            )
+            return int(out.decode().strip())
+        except Exception:
+            return None  # no X focus info (pure Wayland, gamescope): can't tell
+
+    def bring_to_front(self, pid: int) -> bool:
+        xwid = self._find_xwid(pid)
+        if not xwid:
+            return False
+        subprocess.run(
+            ["xdotool", "windowactivate", "--sync", xwid], capture_output=True, timeout=5
+        )
+        return self.foreground_pid() == pid
+
     def _activate_for_pid(self, xwid: str, pid: int | None) -> None:
         """Give keyboard focus to the app before XTEST input, unless one of its
         windows (e.g. a modal file chooser) already has it: re-activating would

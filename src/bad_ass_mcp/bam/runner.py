@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .describe import describe_checks, describe_phase, phase_title
+from .describe import describe_checks, describe_phase, is_real_input, phase_title
 from .script import applies, build_steps, expand, learn_descriptors, pick
 
 
@@ -78,6 +78,8 @@ class _Run:
         self.phase_name = ""
         self.targets: dict[str, str] = {}  # handle -> learn label, for the timeline
         self.pid: int | None = config.get("pid")
+        self.app_pid: int | None = None  # the main window's process, once found
+        self.prev_front: int | None = None  # the user's foreground app, to hand back
         self.before: set[str] | None = None
         self.progress = None  # callable(phase_number) after each phase
 
@@ -86,6 +88,10 @@ class _Run:
         """Windows the run may drive: the launched process (or a window that
         appeared after the launch, for apps started through a wrapper), the
         configured pid, or anything when neither is known."""
+        if self.app_pid is not None:
+            # Once the app's window is known, only its process counts: a
+            # window another app opens mid-run is never driven.
+            return w.pid in (self.app_pid, self.pid)
         if self.pid is None:
             return True
         return w.pid == self.pid or (self.before is not None and w.id not in self.before)
@@ -194,6 +200,7 @@ class _Run:
         self.window = self.find_window(pattern, timeout, unique=True)
         if self.window is None:
             raise ScriptFailure(f"no window matching {pattern!r}")
+        self.app_pid = next((w.pid for w in self.b.list_windows() if w.id == self.window), self.pid)
         # A window can exist before its content does (WebView2 paints after
         # the window appears), and keys sent then are lost. Wait for an
         # element that only exists once the app is usable.
@@ -208,6 +215,11 @@ class _Run:
                 time.sleep(0.2)
 
     def teardown(self) -> None:
+        if self.prev_front is not None:
+            try:
+                self.b.bring_to_front(self.prev_front)  # hand the user's app its focus back
+            except Exception:
+                pass
         if self.proc is not None and self.proc.poll() is None:
             self.proc.terminate()
             try:
@@ -375,6 +387,7 @@ class _Run:
             )
             if plain_click:
                 x, y, w, h = bounds
+                self.guard({"action": "click_at", "x": x + w / 2, "y": y + h / 2}, phase, i + 1)
                 r = self.b.click_at(x + w / 2, y + h / 2, self.window)
                 if not r.ok:
                     raise ScriptFailure(
@@ -387,6 +400,46 @@ class _Run:
                 self._run_chunked([step], [meta[i]], phase, base=i)
             if pace:
                 time.sleep(pace)
+
+    def guard(self, step: dict, phase: int, number: int) -> None:
+        """Before real input: the app must be the one receiving it. Raise it
+        if needed; if something else still holds the foreground (or covers the
+        target point), fail without sending anything. The message never names
+        the other app: that would leak what else the user is running."""
+        pid = self.app_pid
+        if pid is None:
+            return
+        if step.get("action") == "key":
+            probe = self.b.foreground_pid
+        else:
+            point = self._point_of(step)
+            if point is None:
+                return
+            probe = lambda: self.b.pid_at(*point)  # noqa: E731
+        owner = probe()
+        if owner is None or owner == pid:
+            return
+        if self.prev_front is None:
+            front = self.b.foreground_pid()
+            if front is not None and front != pid:
+                self.prev_front = front
+        self.b.bring_to_front(pid)
+        if probe() != pid:
+            raise ScriptFailure(
+                "Unexpected app in foreground.", phase=phase, step=number, action="foreground"
+            )
+
+    def _point_of(self, step: dict) -> tuple[float, float] | None:
+        if step.get("action") == "click_at":
+            return float(step["x"]), float(step["y"])
+        if "from_x" in step and "from_y" in step:
+            return float(step["from_x"]), float(step["from_y"])
+        if "from_handle" in step:
+            b = self.b.element_bounds(step["from_handle"])
+            if b:
+                x, y, w, h = b
+                return x + w / 2, y + h / 2
+        return None
 
     def _run_chunked(self, sent: list[dict], meta: list[dict], phase: int, base: int = 0) -> None:
         # Run server-side in chunks, ending each chunk at a step whose value
@@ -407,8 +460,17 @@ class _Run:
                 start += 1
                 continue
             end = start
-            while end < len(sent) - 1 and not meta[end] and sent[end + 1].get("action") != "shell":
-                end += 1
+            if is_real_input(sent[start]):
+                # Its own chunk, checked right before it runs.
+                self.guard(sent[start], phase, base + start + 1)
+            else:
+                while (
+                    end < len(sent) - 1
+                    and not meta[end]
+                    and sent[end + 1].get("action") != "shell"
+                    and not is_real_input(sent[end + 1])
+                ):
+                    end += 1
             chunk = sent[start : end + 1]
             results = self.b.run_sequence(chunk, stop_on_error=True)
             for offset, r in enumerate(results):

@@ -1352,3 +1352,176 @@ def test_report_collapses_repeated_steps(tmp_path):
     html = write_report(run_dir).read_text()
     assert "Press Down ×7" in html
     assert html.count("Press Down") == 1
+
+
+# ── foreground guard: real input only ever reaches the app ───────────
+
+
+class _Desk(FakeBackend):
+    """A desktop where another app (pid 4242) can hold the foreground or sit
+    under the pointer. The app under test is pid 9999."""
+
+    def __init__(self, front=9999, raisable=True, under=9999, known=True):
+        super().__init__()
+        self.front, self.raisable, self.under, self.known = front, raisable, under, known
+        self.raised: list[int] = []
+
+    def foreground_pid(self):
+        return self.front if self.known else None
+
+    def pid_at(self, x, y):
+        return self.under if self.known else None
+
+    def bring_to_front(self, pid):
+        self.raised.append(pid)
+        if self.raisable or pid != 9999:
+            self.front = pid
+            if pid == 9999:
+                self.under = 9999
+            return True
+        return False
+
+
+def _real_input_script(tmp_path, steps, name="real"):
+    return write(
+        tmp_path,
+        name,
+        {"phases": [{"name": "p", "learn": {"ok": {"name": "OK"}}, "steps": steps}]},
+    )
+
+
+def test_a_real_key_brings_the_app_forward_first_and_hands_focus_back_after(tmp_path):
+    desk = _Desk(front=4242)
+    script = _real_input_script(tmp_path, [{"action": "key", "key": "F10"}])
+    res = run_script(desk, script, "linux", CONFIG, tmp_path / "out")
+    assert res["status"] == "PASS"
+    assert desk.key_log == ["F10"]
+    # Raised for the key, then the user's window gets the focus back.
+    assert desk.raised == [9999, 4242]
+
+
+def test_a_key_aimed_at_the_window_needs_no_foreground(tmp_path):
+    desk = _Desk(front=4242)
+    script = _real_input_script(
+        tmp_path, [{"action": "key", "key": "Escape", "window_id": "$WINDOW"}]
+    )
+    res = run_script(desk, script, "linux", CONFIG, tmp_path / "out")
+    assert res["status"] == "PASS"
+    assert desk.raised == []
+
+
+def test_when_the_app_cannot_come_forward_no_key_is_sent_and_nothing_leaks(tmp_path):
+    desk = _Desk(front=4242, raisable=False)
+    script = _real_input_script(tmp_path, [{"action": "key", "key": "F10"}])
+    out = tmp_path / "out"
+    res = run_script(desk, script, "linux", CONFIG, out)
+    assert res["status"] == "FAIL"
+    assert res["failure"] == {
+        "phase": 1,
+        "step": 1,
+        "action": "foreground",
+        "reason": "Unexpected app in foreground.",
+    }
+    assert desk.key_log == []
+    for f in ("result.json", "timeline.json"):
+        assert "4242" not in (out / f).read_text(encoding="utf-8")
+
+
+def test_a_click_at_a_point_another_app_covers_is_refused(tmp_path):
+    desk = _Desk(under=4242, raisable=False)
+    desk.under = 4242
+    script = _real_input_script(tmp_path, [{"action": "click_at", "x": 50, "y": 60}])
+    res = run_script(desk, script, "linux", CONFIG, tmp_path / "out")
+    assert res["failure"]["reason"] == "Unexpected app in foreground."
+    assert desk.pointer_log == []
+
+
+def test_a_drag_checks_the_point_it_starts_from(tmp_path):
+    desk = _Desk()
+    script = _real_input_script(
+        tmp_path, [{"action": "drag", "from_target": "ok", "dx": 40, "dy": 0}]
+    )
+    res = run_script(desk, script, "linux", CONFIG, tmp_path / "out")
+    assert res["status"] == "PASS"
+    assert desk.pointer_log and desk.pointer_log[0][0] == "drag"
+
+
+def test_a_backend_that_cannot_tell_who_is_in_front_does_not_block(tmp_path):
+    desk = _Desk(front=4242, known=False)
+    script = _real_input_script(tmp_path, [{"action": "key", "key": "F10"}])
+    res = run_script(desk, script, "linux", CONFIG, tmp_path / "out")
+    assert res["status"] == "PASS"
+    assert desk.key_log == ["F10"]
+
+
+class _LateStranger(FakeBackend):
+    """Nothing is open at launch; then the app's window appears (pid 9999,
+    started through a wrapper), and another process opens a 'Save As'."""
+
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    def list_windows(self):
+        from bad_ass_mcp.types import WindowInfo
+
+        self.calls += 1
+        if self.calls == 1:
+            return []
+        stranger = WindowInfo(id="stranger", name="Save As", pid=4242, focused=False)
+        return super().list_windows() + [stranger]
+
+
+def test_windows_from_other_processes_are_never_driven(tmp_path, monkeypatch):
+    from bad_ass_mcp.bam import runner as runner_mod
+
+    class _Wrapper:
+        pid = 5555  # e.g. a launcher script; the app itself is pid 9999
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", lambda *a, **k: _Wrapper())
+    script = write(
+        tmp_path,
+        "stranger",
+        {"phases": [{"name": "dialog", "window": "Save As", "learn": {}, "steps": []}]},
+    )
+    cfg = {**CONFIG, "app": "fake-app"}
+    res = run_script(_LateStranger(), script, "linux", cfg, tmp_path / "out")
+    assert res["window"] == "fake-window-1"
+    assert res["status"] == "FAIL"
+    assert res["failure"]["action"] == "window"
+
+
+def test_scripts_that_need_hands_off_are_found_per_platform(tmp_path):
+    from bad_ass_mcp.bam.describe import needs_foreground
+
+    assert needs_foreground({"phases": [{"steps": [{"action": "key", "key": "F10"}]}]}, "linux")
+    assert not needs_foreground(
+        {"phases": [{"steps": [{"action": "key", "key": "F10", "only": ["windows"]}]}]}, "linux"
+    )
+    assert not needs_foreground(
+        {"phases": [{"steps": [{"action": "key", "key": "F10", "window_id": "$WINDOW"}]}]},
+        "linux",
+    )
+    assert needs_foreground({"phases": [{"steps": [{"action": "drag", "dx": 1}]}]}, "linux")
+    assert not needs_foreground(
+        {"phases": [{"steps": [{"action": "click", "target": "x"}]}]}, "linux"
+    )
+
+
+def test_hands_off_notice_names_the_scripts():
+    from bad_ass_mcp.bam.cli import hands_off_notice
+
+    assert hands_off_notice(["new-window", "resize-split"], 6) == (
+        "2 of 6 scripts use real keyboard/mouse input (new-window, resize-split). "
+        "Hands off the keyboard and mouse until the run finishes; go grab a coffee."
+    )
+    assert hands_off_notice([], 6) is None
