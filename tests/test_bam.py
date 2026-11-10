@@ -1586,3 +1586,25 @@ def test_focus_is_handed_back_gently_after_the_app_is_closed(tmp_path):
     finally:
         mp.undo()
     assert order == [("raise", 9999, False), ("terminate",), ("raise", 4242, True)]
+
+
+def test_hands_off_notice_warns_about_input_grabbing_vms_generically():
+    from bad_ass_mcp.bam.cli import hands_off_notice
+
+    msg = hands_off_notice(["new-window"], 6, vm_running=True)
+    assert msg.endswith(
+        "A virtual machine window is open: VMs grab the keyboard and mouse and can swallow "
+        "this input. Release its grab (Ctrl+Alt) or minimize it first."
+    )
+    assert "vmware" not in msg.lower()
+
+
+def test_vm_detection_matches_known_input_grabbers(monkeypatch):
+    from bad_ass_mcp.bam import cli
+
+    monkeypatch.setattr(cli, "_process_names", lambda: ["explorer.exe", "vmware-vmx.exe"])
+    assert cli.vm_running() is True
+    monkeypatch.setattr(cli, "_process_names", lambda: ["explorer.exe", "python.exe"])
+    assert cli.vm_running() is False
+    monkeypatch.setattr(cli, "_process_names", lambda: [])
+    assert cli.vm_running() is False

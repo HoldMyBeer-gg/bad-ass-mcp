@@ -205,7 +205,11 @@ only that process's windows are driven, so another app's "Save As" (or the
 user's own copy of the app) is never touched.
 
 `run` prints a hands-off notice first when any selected script sends real
-input on this platform; `check` lists those scripts. Platforms that can't
+input on this platform; `check` lists those scripts. If a VM app is open
+(VMware, VirtualBox, Hyper-V, Parallels) the notice says so: a VM window
+that holds input grabs the keyboard and mouse with a low-level hook and
+swallows synthetic input even while the app under test is in front, which
+no foreground check can see. Release the grab (Ctrl+Alt) or minimize it. Platforms that can't
 tell who is in front (Linux without X focus info, e.g. gamescope) proceed
 as before. On Linux the point check isn't implemented yet; keys are checked.
 

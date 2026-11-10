@@ -173,13 +173,45 @@ def _print_problems(problems: list[dict]) -> None:
         print(where + p["message"])
 
 
-def hands_off_notice(names: list[str], total: int) -> str | None:
+_INPUT_GRABBERS = ("vmware", "virtualboxvm", "vmconnect", "prl_client_app")
+
+
+def _process_names() -> list[str]:
+    """Running process names, best effort, for the VM warning only. Printed
+    nowhere and stored nowhere."""
+    try:
+        if os.name == "nt":
+            cmd = ["tasklist", "/fo", "csv", "/nh"]
+        else:
+            cmd = ["ps", "-A", "-o", "comm="]
+        r = subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5
+        )
+        return [line.split(",")[0].strip('"') for line in r.stdout.splitlines() if line]
+    except Exception:
+        return []
+
+
+def vm_running() -> bool:
+    """A VM app is open. VMs grab the keyboard and mouse with a low-level hook
+    and swallow synthetic input even when our app is in front."""
+    names = [n.lower().rsplit("/", 1)[-1] for n in _process_names()]
+    return any(g in n for n in names for g in _INPUT_GRABBERS)
+
+
+def hands_off_notice(names: list[str], total: int, *, vm_running: bool = False) -> str | None:
     if not names:
         return None
-    return (
+    msg = (
         f"{len(names)} of {total} scripts use real keyboard/mouse input ({', '.join(names)}). "
         "Hands off the keyboard and mouse until the run finishes; go grab a coffee."
     )
+    if vm_running:
+        msg += (
+            " A virtual machine window is open: VMs grab the keyboard and mouse and can "
+            "swallow this input. Release its grab (Ctrl+Alt) or minimize it first."
+        )
+    return msg
 
 
 def _real_input_names(scripts: list[Path], platform: str) -> list[str]:
@@ -228,7 +260,8 @@ def main(argv: list[str]) -> int:
         print(f"{len(problems)} problem(s); nothing was run. `bad-ass-mcp check` to re-check.")
         return 2
     run_suite = suite.run_suite
-    notice = hands_off_notice(_real_input_names(args.scripts, args.platform), len(args.scripts))
+    real = _real_input_names(args.scripts, args.platform)
+    notice = hands_off_notice(real, len(args.scripts), vm_running=bool(real) and vm_running())
     if notice:
         print(notice, file=sys.stderr)
     color = use_color(sys.stdout)
