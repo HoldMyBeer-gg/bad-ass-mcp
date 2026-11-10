@@ -772,3 +772,48 @@ def test_windows_check_counts_frames_on_linux(tmp_path):
 def test_an_app_without_frame_children_still_counts_as_one_window(tmp_path):
     script = write(tmp_path, "one", {"phases": [], "checks": [{"windows": 1}]})
     assert run_script(FakeBackend(), script, "linux", CONFIG, tmp_path / "out")["status"] == "PASS"
+
+
+# ── phases in "the other window" (Windows lists each window separately) ─
+
+
+class _TwoWindowsOneApp(FakeBackend):
+    def list_windows(self):
+        from bad_ass_mcp.types import WindowInfo
+
+        return [
+            WindowInfo(id="main", name="Fake App", pid=9999, focused=False),
+            WindowInfo(id="second", name="Fake App", pid=9999, focused=True),
+        ]
+
+
+def test_a_phase_can_target_the_other_matching_window(tmp_path):
+    backend = _TwoWindowsOneApp()
+    seen = []
+    real_learn = backend.learn_layout
+    backend.learn_layout = lambda win, d: seen.append(win) or real_learn(win, d)
+    script = write(
+        tmp_path,
+        "other",
+        {
+            "phases": [
+                {"learn": {"ok": {"name": "OK"}}, "steps": []},
+                {"window": {"other": "Fake App"}, "learn": {"ok": {"name": "OK"}}, "steps": []},
+            ],
+        },
+    )
+    r = run_script(backend, script, "linux", {**CONFIG, "pid": 9999}, tmp_path / "out")
+    assert r["status"] == "PASS", r
+    assert seen == ["main", "second"]
+
+
+def test_other_window_fails_when_there_is_no_second_window(tmp_path):
+    script = write(
+        tmp_path,
+        "nosecond",
+        {
+            "phases": [{"window": {"other": "Fake App"}, "learn": {}, "steps": []}],
+        },
+    )
+    r = run_script(FakeBackend(), script, "linux", CONFIG, tmp_path / "out")
+    assert r["status"] == "FAIL" and "other window" in r["failure"]["reason"]

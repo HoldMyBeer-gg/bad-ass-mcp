@@ -83,10 +83,13 @@ class _Run:
             return True
         return w.pid == self.pid or (self.before is not None and w.id not in self.before)
 
-    def find_window(self, pattern: str, timeout: float, *, unique: bool = False) -> str | None:
+    def find_window(
+        self, pattern: str, timeout: float, *, unique: bool = False, exclude: str | None = None
+    ) -> str | None:
         deadline = time.monotonic() + timeout
         while True:
             hits = [w for w in self.b.list_windows() if _matches(w.name, pattern) and self._ours(w)]
+            hits = [w for w in hits if w.id != exclude]
             if len(hits) > 1 and unique and self.pid is None:
                 raise ScriptFailure(
                     f"{len(hits)} windows match {pattern!r} "
@@ -227,7 +230,17 @@ class _Run:
     def _run_phase(self, phase: dict, n: int) -> None:
         window = self.window
         pattern = pick(phase.get("window"), self.platform)
-        if pattern is not None:
+        if isinstance(pattern, dict) and "other" in pattern:
+            # Another window matching the pattern, not the main one (e.g. the
+            # second editor window after New Window, on Windows where each
+            # window is listed separately).
+            other = pick(pattern["other"], self.platform)
+            window = self.find_window(
+                other, float(self.config.get("step_timeout", 5)), exclude=self.window
+            )
+            if window is None:
+                raise ScriptFailure(f"no other window matching {other!r}", phase=n)
+        elif pattern is not None:
             window = self.find_window(pattern, float(self.config.get("step_timeout", 5)))
             if window is None:
                 raise ScriptFailure(f"no window matching {pattern!r}", phase=n)

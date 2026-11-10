@@ -118,7 +118,9 @@ Three layers, later wins: the suite file (`--config`), a script's own
   be `{"macos": ..., "windows": ..., "linux": ...}`. `only: [...]` limits a
   step, learn entry, phase or check to platforms.
 - **Phase extras:** `"window": "<title>"` runs the phase in another window
-  (dialogs); `"id"` + `{"repeat": "<id>"}` reruns a phase with fresh handles;
+  (dialogs); `"window": {"other": "<title>"}` picks a matching window that
+  isn't the main one (a second editor window; on Windows each window is
+  listed separately); `"id"` + `{"repeat": "<id>"}` reruns a phase with fresh handles;
   a phase may carry its own `checks`.
 - **Checks:** `present`, `absent` (by name/role), `windows: n` (windows matching
   the config's `window`), `no_window: "<title>"`, `shell` (exit 0),
