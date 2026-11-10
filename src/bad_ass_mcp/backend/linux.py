@@ -12,7 +12,7 @@ gi.require_version("Atspi", "2.0")
 from gi.repository import Atspi  # noqa: E402
 
 from ..types import ActionResult, ElementHandle, StaleHandleError, WindowInfo  # noqa: E402
-from .base import DesktopBackend, prune_tree  # noqa: E402
+from .base import DesktopBackend, mark_injected, prune_tree  # noqa: E402
 
 _IFACE_CLASSES = {
     "text": "Text",
@@ -142,7 +142,9 @@ class LinuxBackend(DesktopBackend):
         """Run one xdotool key/type command through XTEST and release all
         modifiers afterwards, whether it succeeded, failed or timed out."""
         try:
+            mark_injected()
             subprocess.run(["xdotool", *args], capture_output=True, check=check, timeout=timeout)
+            mark_injected()
         finally:
             self.release_modifiers()
 
@@ -551,7 +553,9 @@ class LinuxBackend(DesktopBackend):
     @staticmethod
     def _xdotool(*args: str) -> ActionResult:
         try:
+            mark_injected()
             subprocess.run(["xdotool", *args], capture_output=True, check=True)
+            mark_injected()
             return ActionResult(ok=True)
         except FileNotFoundError:
             return ActionResult(
@@ -726,6 +730,7 @@ class LinuxBackend(DesktopBackend):
             pid = node.get_process_id()
             xwid = self._find_xwid(pid) if pid else None
             if xwid:
+                mark_injected()
                 subprocess.run(
                     [
                         "xdotool",

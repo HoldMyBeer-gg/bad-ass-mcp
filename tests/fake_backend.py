@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import time
 
-from bad_ass_mcp.backend.base import DesktopBackend
+from bad_ass_mcp.backend.base import DesktopBackend, mark_injected
 from bad_ass_mcp.types import ActionResult, ElementHandle, StaleHandleError, WindowInfo
 
 FAKE_WINDOW_ID = "fake-window-1"
@@ -152,10 +152,12 @@ class FakeBackend(DesktopBackend):
         return png
 
     def click_at(self, x, y, window_id=None, button="left", clicks=1) -> ActionResult:
+        mark_injected()
         self.pointer_log.append(("click", x, y, button, clicks))
         return ActionResult(ok=True)
 
     def drag(self, from_x, from_y, to_x, to_y, button="left", duration=0.3) -> ActionResult:
+        mark_injected()
         self.pointer_log.append(("drag", from_x, from_y, to_x, to_y, button))
         # Whatever sits under the press point moves with the pointer, like a
         # splitter or a draggable row.
@@ -172,5 +174,6 @@ class FakeBackend(DesktopBackend):
         return canonical
 
     def press_key(self, key: str, window_id: str | None = None) -> ActionResult:
+        mark_injected()
         self.key_log.append(key)
         return ActionResult(ok=True)

@@ -7,7 +7,7 @@ import uuid
 from typing import Any
 
 from ..types import ActionResult, ElementHandle, StaleHandleError, WindowInfo
-from .base import DesktopBackend, prune_tree
+from .base import DesktopBackend, mark_injected, prune_tree
 
 try:
     from AppKit import NSRunningApplication, NSWorkspace
@@ -50,6 +50,24 @@ try:
     _HAS_PYOBJC = True
 except ImportError:
     _HAS_PYOBJC = False
+
+
+def _marked(post):
+    """Every synthetic event we post marks the time, so the BAM runner can
+    tell our input from a person's."""
+
+    def wrapper(*args, **kwargs):
+        mark_injected()
+        return post(*args, **kwargs)
+
+    return wrapper
+
+
+try:
+    CGEventPost = _marked(CGEventPost)  # noqa: F821
+    CGEventPostToPid = _marked(CGEventPostToPid)  # noqa: F821
+except NameError:  # Quartz missing (not macOS)
+    pass
 
 # AX error codes (from AXError.h)
 _kAXErrorSuccess = 0

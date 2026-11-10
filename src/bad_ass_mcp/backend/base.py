@@ -76,6 +76,21 @@ def prune_tree(root: "ElementHandle") -> "ElementHandle":
     return root
 
 
+# When this process last injected real keyboard/mouse input (monotonic
+# seconds). Backends call mark_injected() right where they send it (SendInput,
+# keybd_event, CGEventPost, XTEST), so the BAM runner can tell its own input
+# from a person's: anything newer than this didn't come from us.
+_LAST_INJECTED = [0.0]
+
+
+def mark_injected() -> None:
+    _LAST_INJECTED[0] = time.monotonic()
+
+
+def last_injected_at() -> float:
+    return _LAST_INJECTED[0]
+
+
 class DesktopBackend(ABC):
     @abstractmethod
     def list_windows(self) -> list[WindowInfo]:

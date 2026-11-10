@@ -18,7 +18,30 @@ import zlib
 from typing import Any
 
 from ..types import ActionResult, ElementHandle, StaleHandleError, WindowInfo
-from .base import DesktopBackend, prune_tree
+from .base import DesktopBackend, mark_injected, prune_tree
+
+
+class _MarkInput:
+    """user32, with every real-input call (SendInput, keybd_event,
+    mouse_event) marking the time first, so the BAM runner can tell our input
+    from a person's. Everything else passes straight through."""
+
+    _INPUT = frozenset({"SendInput", "keybd_event", "mouse_event"})
+
+    def __init__(self, dll):
+        self._dll = dll
+
+    def __getattr__(self, name):
+        fn = getattr(self._dll, name)
+        if name not in self._INPUT:
+            return fn
+
+        def marked(*args):
+            mark_injected()
+            return fn(*args)
+
+        return marked
+
 
 _HAS_UIA = False
 
@@ -50,7 +73,7 @@ try:
         IUIAutomationValuePattern,
     )
 
-    _user32 = ctypes.windll.user32
+    _user32 = _MarkInput(ctypes.windll.user32)
     _gdi32 = ctypes.windll.gdi32
     _kernel32 = ctypes.windll.kernel32
     _HAS_UIA = True

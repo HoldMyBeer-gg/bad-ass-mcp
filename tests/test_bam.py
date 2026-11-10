@@ -1774,12 +1774,12 @@ class _Human(_Desk):
 
 
 def test_a_user_touching_the_machine_stops_a_foreground_run(tmp_path):
-    desk = _Human(touch_after_key=0.3)
+    desk = _Human(touch_after_key=1.0)
     script = _real_input_script(
         tmp_path,
         [
             {"action": "key", "key": "F1"},
-            {"action": "sleep", "seconds": 0.7},
+            {"action": "sleep", "seconds": 1.5},
             {"action": "key", "key": "F2"},
         ],
     )
@@ -1827,7 +1827,7 @@ def test_user_input_stops_the_whole_suite(tmp_path):
                     "learn": {"ok": {"name": "OK"}},
                     "steps": [
                         {"action": "key", "key": "F1"},
-                        {"action": "sleep", "seconds": 0.7},
+                        {"action": "sleep", "seconds": 1.5},
                         {"action": "key", "key": "F2"},
                     ],
                 }
@@ -1836,7 +1836,7 @@ def test_user_input_stops_the_whole_suite(tmp_path):
     )
     b = write(tmp_path, "b", {"phases": []})
     run_dir = run_suite(
-        _Human(touch_after_key=0.3), [a, b], "linux", CONFIG, tmp_path / "res", commit="c"
+        _Human(touch_after_key=1.0), [a, b], "linux", CONFIG, tmp_path / "res", commit="c"
     )
     run = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
     assert [s["status"] for s in run["scripts"]] == ["FAIL", "NOT_RUN"]
@@ -1857,3 +1857,35 @@ def test_progress_bar_shows_failures_not_just_how_far_along():
     # A script still running shows in cyan after the finished ones.
     mid = render_bar(3, 4, width=20, color=False, results=[(2, "PASS")])
     assert mid.count("█") == 15 and "1 passed" in mid and "failed" not in mid
+
+
+def test_a_touch_during_a_long_background_step_is_caught(tmp_path):
+    """ck-crab's case: the user nudged the mouse during a ~5 s UIA-only step
+    and the run carried on. Only input the backend really injected counts as
+    ours, and the check also runs after every step."""
+    from bad_ass_mcp.backend.base import mark_injected
+
+    class _SlowClick(_Human):
+        def press_key(self, key, window_id=None):
+            mark_injected()
+            return super().press_key(key, window_id)
+
+        def click(self, handle_id, button="left", clicks=1):
+            # A UIA invoke that takes a while; the user touches the mouse
+            # halfway through. No input injected by us.
+            self.touch_at = self._t.monotonic() + 1.0
+            self._t.sleep(1.3)
+            return super().click(handle_id, button, clicks)
+
+    desk = _SlowClick()
+    script = _real_input_script(
+        tmp_path,
+        [
+            {"action": "key", "key": "F1"},
+            {"action": "click", "target": "ok"},
+            {"action": "key", "key": "F2"},
+        ],
+    )
+    res = run_script(desk, script, "linux", CONFIG, tmp_path / "out")
+    assert res["failure"]["reason"] == "Run stopped: user input detected."
+    assert desk.key_log == ["F1"]

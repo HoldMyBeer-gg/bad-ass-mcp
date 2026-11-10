@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ..backend.base import last_injected_at
 from .describe import (
     describe_checks,
     describe_phase,
@@ -25,9 +26,6 @@ from .describe import (
     phase_title,
 )
 from .script import applies, build_steps, expand, learn_descriptors, pick
-
-# Steps that never send keyboard or mouse input of any kind.
-_NO_INPUT = {"sleep", "wait_for_element", "wait_for_window", "get_value", "get_bounds", "shell"}
 
 
 class ScriptFailure(Exception):
@@ -94,7 +92,7 @@ class _Run:
         # Yield to a person: in scripts that send real input, any keyboard or
         # mouse input that isn't ours stops the run (and the suite).
         self.yields = bool(config.get("yield_to_user", True)) and needs_foreground(script, platform)
-        self.own_until = time.monotonic() + 1.0  # grace: the Enter that started us
+        self.own_until = time.monotonic() + 0.5  # grace: the Enter key-up that started us
         self.user_stopped = False
         self.before: set[str] | None = None
         self.progress = None  # callable(phase_number) after each phase
@@ -482,7 +480,6 @@ class _Run:
                         step=i + 1,
                         action="click",
                     )
-                self.own_until = time.monotonic()
             else:
                 self._run_chunked([step], [meta[i]], phase, base=i)
             if pace:
@@ -499,7 +496,8 @@ class _Run:
             idle = None
         if idle is None:
             return
-        if time.monotonic() - idle > self.own_until + 0.25:
+        ours = max(self.own_until, last_injected_at())
+        if time.monotonic() - idle > ours + 0.25:
             self.user_stopped = True
             raise ScriptFailure(
                 "Run stopped: user input detected.", phase=phase, step=number, action="user"
@@ -580,8 +578,9 @@ class _Run:
                     end += 1
             chunk = sent[start : end + 1]
             results = self.b.run_sequence(chunk, stop_on_error=True)
-            if any(s.get("action") not in _NO_INPUT for s in chunk):
-                self.own_until = time.monotonic()  # input from here on may be ours
+            # Then check again: a person may have touched the machine while
+            # that chunk ran, even if it sent no input itself.
+            self.check_user(phase, base + start + 1)
             for offset, r in enumerate(results):
                 i = start + offset
                 if not r.get("ok"):
