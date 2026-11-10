@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -225,6 +226,46 @@ class _Run:
             self._close_app()
         finally:
             self._hand_focus_back()
+
+    def start_watchdog(self) -> None:
+        """A call into a hung app's window blocks forever. Poll is_hung from a
+        side thread; once the window has been hung for `hang_timeout`
+        seconds, kill the launched app, which makes the blocked call return,
+        and the script fails as "app not responding". (Attach mode can't
+        kill the user's app; the hang is still reported.)"""
+        limit = float(self.config.get("hang_timeout", 30))
+        self.hung_after: float | None = None
+        self._stop_watch = threading.Event()
+        if limit <= 0 or self.window is None:
+            return
+
+        def watch() -> None:
+            since = None
+            while not self._stop_watch.wait(min(1.0, limit / 3)):
+                try:
+                    hung = self.b.is_hung(self.window)
+                except Exception:
+                    hung = None
+                if not hung:
+                    since = None
+                    continue
+                since = since or time.monotonic()
+                if time.monotonic() - since >= limit:
+                    self.hung_after = limit
+                    self.log("hang", seconds=limit)
+                    if self.proc is not None:
+                        try:
+                            self.proc.kill()
+                        except Exception:
+                            pass
+                    return
+
+        threading.Thread(target=watch, name="bam-watchdog", daemon=True).start()
+
+    def stop_watchdog(self) -> None:
+        stop = getattr(self, "_stop_watch", None)
+        if stop is not None:
+            stop.set()
 
     def _hand_focus_back(self) -> None:
         """After the app is gone (closing it would otherwise pass the focus to
@@ -631,6 +672,7 @@ def run_script(
         try:
             run.setup()
             run.launch()
+            run.start_watchdog()
             if config.get("record_video"):
                 recording = backend.start_recording(run.window)
             run.run_phases()
@@ -655,6 +697,16 @@ def run_script(
             result["status"] = "FAIL"
             result["failure"] = {"reason": f"{type(e).__name__}: {e}"}
         finally:
+            run.stop_watchdog()
+            if getattr(run, "hung_after", None) is not None:
+                # Whatever the unblocked call said, the cause is the hang.
+                result["status"] = "FAIL"
+                where = {k: v for k, v in (result.get("failure") or {}).items() if k == "phase"}
+                result["failure"] = {
+                    **where,
+                    "action": "hang",
+                    "reason": f"app not responding (killed after {run.hung_after:g} s)",
+                }
             if recording is not None:
                 keep = config.get("record_video") is True or result.get("status") == "FAIL"
                 try:

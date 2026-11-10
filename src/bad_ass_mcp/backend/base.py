@@ -432,6 +432,12 @@ class DesktopBackend(ABC):
         """Process owning the top-level window under screen point (x, y)."""
         return None
 
+    def is_hung(self, window_id: str) -> bool | None:
+        """Whether the window's app has stopped processing input (None: can't
+        tell). Called from a watchdog thread while another call may be
+        blocked on that very window, so it must not go through the a11y API."""
+        return None
+
     def bring_to_front(self, pid: int, *, gentle: bool = False) -> bool:
         """Raise one of `pid`'s windows and give it focus; True if it landed.
         `gentle`: no synthetic input (used to hand focus back to the user).

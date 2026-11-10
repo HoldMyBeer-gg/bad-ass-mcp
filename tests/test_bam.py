@@ -1631,3 +1631,61 @@ def test_focus_goes_back_to_where_the_run_started_not_where_the_user_clicked(tmp
     script = _real_input_script(tmp_path, [{"action": "key", "key": "F10"}])
     run_script(desk, script, "linux", CONFIG, tmp_path / "out")
     assert desk.raised == [9999, 1111]
+
+
+def test_a_hung_app_is_killed_and_the_script_fails_as_not_responding(tmp_path, monkeypatch):
+    """A UIA call against a hung window blocks forever (ck-crab waited 13 min).
+    The watchdog sees the window stop responding, kills the launched app,
+    which unblocks the call, and the script fails clearly."""
+    import threading
+
+    from bad_ass_mcp.bam import runner as runner_mod
+
+    unblock = threading.Event()
+
+    class _Proc:
+        pid = 9999
+
+        def poll(self):
+            return 0 if unblock.is_set() else None
+
+        def terminate(self):
+            unblock.set()
+
+        def kill(self):
+            unblock.set()
+
+        def wait(self, timeout=None):
+            return 0
+
+    class _Hangs(FakeBackend):
+        def is_hung(self, window_id):
+            return True
+
+        def click(self, handle_id, button="left", clicks=1):
+            unblock.wait(10)  # blocks until the app is killed
+            from bad_ass_mcp.types import ActionResult
+
+            return ActionResult(ok=False, error="element gone")
+
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", lambda *a, **k: _Proc())
+    script = _real_input_script(tmp_path, [{"action": "click", "target": "ok"}], name="hang")
+    cfg = {**CONFIG, "app": "x", "hang_timeout": 0.3}
+    import time as _t
+
+    t0 = _t.monotonic()
+    res = run_script(_Hangs(), script, "linux", cfg, tmp_path / "out")
+    assert _t.monotonic() - t0 < 5
+    assert res["status"] == "FAIL"
+    assert res["failure"]["reason"] == "app not responding (killed after 0.3 s)"
+    assert res["failure"]["action"] == "hang"
+
+
+def test_a_responsive_app_is_left_alone_by_the_watchdog(tmp_path):
+    class _Fine(FakeBackend):
+        def is_hung(self, window_id):
+            return False
+
+    script = _real_input_script(tmp_path, [{"action": "click", "target": "ok"}], name="fine")
+    res = run_script(_Fine(), script, "linux", {**CONFIG, "hang_timeout": 0.2}, tmp_path / "out")
+    assert res["status"] == "PASS"

@@ -1064,6 +1064,14 @@ class WindowsBackend(DesktopBackend):
     def foreground_pid(self) -> int | None:
         return self._root_pid(_user32.GetForegroundWindow())
 
+    def is_hung(self, window_id: str) -> bool | None:
+        # IsHungAppWindow: no messages processed for 5 s. Pure user32, safe
+        # to call while a UIA call into that window is blocked elsewhere.
+        try:
+            return bool(_user32.IsHungAppWindow(int(window_id)))
+        except Exception:
+            return None
+
     def pid_at(self, x: float, y: float) -> int | None:
         return self._root_pid(_user32.WindowFromPoint(_POINT(int(round(x)), int(round(y)))))
 
@@ -1074,8 +1082,8 @@ class WindowsBackend(DesktopBackend):
         the lock, unless an input-grabbing app such as a VM swallows it), our
         input attached to the foreground thread, an Alt tap, a
         minimize/restore (a restored window is activated by the system).
-        `gentle` (handing focus back): only plain SetForegroundWindow and
-        SwitchToThisWindow, no synthetic input.
+        `gentle` (handing focus back): plain SetForegroundWindow, then the
+        unassigned key; no Alt, no attach, no minimize.
         Each attempt goes into self.last_raise with GetLastError's number."""
         self.last_raise: list[dict] = []
         candidates = [w for w in self.list_windows() if w.pid == pid]
@@ -1146,10 +1154,12 @@ class WindowsBackend(DesktopBackend):
             _user32.SetForegroundWindow(hwnd)
 
         if gentle:
-            # No synthetic input: handing focus back must not type anywhere.
+            # Handing focus back: nothing any app could act on. The
+            # unassigned key means nothing to anyone, and plain/switch alone
+            # never beat the lock in ck-crab's logs (0/16).
             ladder = [
                 ("plain", lambda: _user32.SetForegroundWindow(hwnd)),
-                ("switch_to_this_window", lambda: _user32.SwitchToThisWindow(hwnd, True)),
+                ("unlock_key", unlock_key),
             ]
         else:
             # unlock_key first: on Windows 11 it won 12/12 raises while plain

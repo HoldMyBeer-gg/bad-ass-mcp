@@ -1,6 +1,6 @@
 {
   "name": "new-window",
-  "covers": "File > New Window opens a second, fully loaded window that closes on the first click (Windows deadlock fixed in c4d9c5e). Ctrl+N goes through the same new_window command, but bad-ass-mcp can't send chords on macOS/Windows, so the menu path stands in for it. macOS is skipped: its menu bar belongs to the app, not the window, so window-scoped lookups can't reach it.",
+  "covers": "File > New Window opens a second, fully loaded window that closes on the first click (Windows deadlocks fixed in c4d9c5e for Ctrl+N and, for the menu path, by building the window off the event loop: a key event during WebView2 setup used to hang the app about 1 run in 25). Ctrl+N goes through the same new_window command, but bad-ass-mcp can't send chords on macOS/Windows, so the menu path stands in for it. macOS is skipped: its menu bar belongs to the app, not the window, so window-scoped lookups can't reach it.",
   "platforms": [
     "windows",
     "linux"

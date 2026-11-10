@@ -305,6 +305,11 @@
     },
     "notes": {
       "$ref": "#/$defs/note"
+    },
+    "hang_timeout": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Seconds a window may stay unresponsive before the launched app is killed and the script fails (0 = off). Default 30."
     }
   },
   "$defs": {
