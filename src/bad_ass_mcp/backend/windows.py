@@ -1070,11 +1070,12 @@ class WindowsBackend(DesktopBackend):
     def bring_to_front(self, pid: int, *, gentle: bool = False) -> bool:
         """Windows' foreground lock refuses SetForegroundWindow from a process
         that doesn't own the foreground. Try, in order, and stop at the first
-        that lands: plain SetForegroundWindow; SwitchToThisWindow (what
-        Alt+Tab uses); then, unless `gentle`: an Alt tap first (synthetic
-        input unlocks the lock, unless an input-grabbing app such as a VM
-        swallows it), our input attached to the foreground thread, and a
+        that lands. Normally: an unassigned key first (synthetic input lifts
+        the lock, unless an input-grabbing app such as a VM swallows it), our
+        input attached to the foreground thread, an Alt tap, a
         minimize/restore (a restored window is activated by the system).
+        `gentle` (handing focus back): only plain SetForegroundWindow and
+        SwitchToThisWindow, no synthetic input.
         Each attempt goes into self.last_raise with GetLastError's number."""
         self.last_raise: list[dict] = []
         candidates = [w for w in self.list_windows() if w.pid == pid]
@@ -1144,13 +1145,21 @@ class WindowsBackend(DesktopBackend):
             _user32.ShowWindow(hwnd, 9)  # SW_RESTORE
             _user32.SetForegroundWindow(hwnd)
 
-        ladder = [
-            ("plain", lambda: _user32.SetForegroundWindow(hwnd)),
-            ("switch_to_this_window", lambda: _user32.SwitchToThisWindow(hwnd, True)),
-        ]
-        if not gentle:
-            ladder += [("unlock_key", unlock_key), ("attach_thread_input", attached)]
-            ladder += [("alt_tap", alt_tap), ("minimize_restore", min_restore)]
+        if gentle:
+            # No synthetic input: handing focus back must not type anywhere.
+            ladder = [
+                ("plain", lambda: _user32.SetForegroundWindow(hwnd)),
+                ("switch_to_this_window", lambda: _user32.SwitchToThisWindow(hwnd, True)),
+            ]
+        else:
+            # unlock_key first: on Windows 11 it won 12/12 raises while plain
+            # and SwitchToThisWindow lost every time (ck-crab, 2026-11-10).
+            ladder = [
+                ("unlock_key", unlock_key),
+                ("attach_thread_input", attached),
+                ("alt_tap", alt_tap),
+                ("minimize_restore", min_restore),
+            ]
         return any(attempt(m, fn) for m, fn in ladder)
 
     @staticmethod
