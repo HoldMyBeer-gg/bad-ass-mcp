@@ -48,7 +48,7 @@ def _latest_run(results: Path, commit: str, platform: str) -> Path | None:
         return None
     for d in sorted(results.iterdir(), reverse=True):
         try:
-            run = json.loads((d / "run.json").read_text())
+            run = json.loads((d / "run.json").read_text(encoding="utf-8"))
         except Exception:
             continue
         if run.get("commit") == commit and run.get("platform") == platform:
@@ -90,7 +90,7 @@ def run_suite(
     run_dir = _latest_run(results, commit, platform) if resume else None
     previous: dict[str, dict] = {}
     if run_dir is not None:
-        old = json.loads((run_dir / "run.json").read_text())
+        old = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
         previous = {s["folder"]: s for s in old.get("scripts", [])}
     else:
         run_dir = _new_run_dir(results, commit, platform)
@@ -114,7 +114,9 @@ def run_suite(
     }
 
     def save() -> None:
-        (run_dir / "run.json").write_text(json.dumps(run, indent=2, ensure_ascii=False))
+        (run_dir / "run.json").write_text(
+            json.dumps(run, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
 
     def emit(event: dict) -> None:
         if progress:

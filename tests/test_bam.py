@@ -1040,12 +1040,12 @@ def test_describe_phase_turns_steps_and_checks_into_plain_language():
         {"text": "“Search emoji” appears", "expect": True},
         {"text": 'Type "crab" into “Search emoji”'},
         {"text": "Pause 0.3 s", "pause": True},
-        {"text": "Press Escape"},
+        {"text": "Press Escape (real key, to the front window)"},
         {"text": 'Choose "Arial" in “Search emoji”'},
         {"text": '“Search emoji” reads "crab"', "expect": True},
         {"text": "Note where the separator is"},
         {"text": "Drag the separator by (120, 0)"},
-        {"text": "The separator moved", "expect": True},
+        {"text": "The separator is not where it was (saved before)", "expect": True},
         {"text": "Run `test -f a.md`"},
         {"text": "Click at (10, 20)"},
     ]
@@ -1206,3 +1206,149 @@ def test_a_learn_failure_says_what_was_missing_inside_the_phase(tmp_path):
     assert "Couldn’t find x (name &#x27;Gone&#x27;)" in html
     # Only the mark is coloured, not the phase name.
     assert '<span class="m bad">✗</span>' in html
+
+
+# ── Windows feedback (ck-crab, 2026-11-10) ───────────────────────────
+
+
+def test_bam_file_io_is_always_utf8():
+    """Windows' default codepage (cp1252) can't write 🦀: every text read and
+    write in bam/ must say encoding="utf-8"."""
+    import ast
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parent.parent / "src" / "bad_ass_mcp" / "bam"
+    bad = []
+    for f in src.glob("*.py"):
+        for node in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and (
+                    node.func.attr in ("write_text", "read_text")
+                    or any(k.arg == "text" for k in node.keywords)  # subprocess
+                )
+                and not any(k.arg == "encoding" for k in node.keywords)
+            ):
+                bad.append(f"{f.name}:{node.lineno}")
+    assert bad == []
+
+
+def test_step_text_shows_variable_values_for_this_platform(tmp_path):
+    script = write(
+        tmp_path,
+        "vars",
+        {
+            "variables": {"who": {"linux": "crab", "windows": "lobster"}},
+            "phases": [
+                {
+                    "learn": {"n": {"name": "Name"}},
+                    "steps": [{"action": "type", "target": "n", "text": "$who"}],
+                }
+            ],
+        },
+    )
+    res = run_script(FakeBackend(), script, "linux", CONFIG, tmp_path / "out")
+    assert res["phases"][0]["steps"] == [{"text": 'Type "crab" into “Name”'}]
+
+
+def test_a_phase_with_nothing_for_this_platform_is_skipped_not_passed(tmp_path):
+    script = write(
+        tmp_path,
+        "empty",
+        {
+            "phases": [
+                {
+                    "name": "mac only steps",
+                    "steps": [{"action": "key", "key": "F1", "only": ["macos"]}],
+                },
+                {
+                    "name": "real",
+                    "learn": {"ok": {"name": "OK"}},
+                    "steps": [{"action": "click", "target": "ok"}],
+                },
+            ]
+        },
+    )
+    res = run_script(FakeBackend(), script, "linux", CONFIG, tmp_path / "out")
+    assert [(p["name"], p["status"]) for p in res["phases"]] == [
+        ("mac only steps", "SKIP"),
+        ("real", "PASS"),
+    ]
+    # Each screenshot belongs to the phase that took it.
+    assert "screenshot" not in res["phases"][0]
+    assert res["phases"][1]["screenshot"] == res["screenshots"][0]
+
+
+def test_report_labels_screenshots_by_the_phase_that_took_them(tmp_path):
+    script = write(
+        tmp_path,
+        "labels",
+        {
+            "phases": [
+                {
+                    "name": "nothing here",
+                    "steps": [{"action": "key", "key": "F1", "only": ["macos"]}],
+                },
+                {
+                    "name": "click ok",
+                    "learn": {"ok": {"name": "OK"}},
+                    "steps": [{"action": "click", "target": "ok"}],
+                },
+            ]
+        },
+    )
+    run_dir = run_suite(FakeBackend(), [script], "linux", CONFIG, tmp_path / "res", commit="c")
+    html = write_report(run_dir).read_text()
+    assert 'alt="click ok"' in html
+    assert 'alt="nothing here"' not in html
+
+
+def test_keys_without_a_window_say_they_go_to_the_front_window():
+    from bad_ass_mcp.bam.describe import describe_phase
+
+    phase = {
+        "steps": [
+            {"action": "key", "key": "F10"},
+            {"action": "key", "key": "Escape", "window_id": "$WINDOW"},
+        ]
+    }
+    assert describe_phase(phase, "windows")["steps"] == [
+        {"text": "Press F10 (real key, to the front window)"},
+        {"text": "Press Escape"},
+    ]
+
+
+def test_expect_not_a_saved_value_says_differs_from_it():
+    from bad_ass_mcp.bam.describe import describe_phase
+
+    phase = {
+        "learn": {"s": {"name": "Splitter"}},
+        "steps": [
+            {"action": "get_bounds", "target": "s", "expect_not": "$stacked"},
+            {"action": "get_value", "target": "s", "expect_not": "$before"},
+        ],
+    }
+    assert describe_phase(phase, "linux")["steps"] == [
+        {"text": "“Splitter” is not where it was (saved stacked)", "expect": True},
+        {"text": "“Splitter” no longer reads the saved before", "expect": True},
+    ]
+
+
+def test_report_collapses_repeated_steps(tmp_path):
+    script = write(
+        tmp_path,
+        "downs",
+        {
+            "phases": [
+                {
+                    "name": "menu",
+                    "steps": [{"action": "key", "key": "Down", "window_id": "$WINDOW"}] * 7,
+                }
+            ]
+        },
+    )
+    run_dir = run_suite(FakeBackend(), [script], "linux", CONFIG, tmp_path / "res", commit="c")
+    html = write_report(run_dir).read_text()
+    assert "Press Down ×7" in html
+    assert html.count("Press Down") == 1

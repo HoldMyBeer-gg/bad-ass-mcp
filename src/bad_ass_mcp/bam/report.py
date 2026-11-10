@@ -184,10 +184,14 @@ def _card(run_dir: Path, entry: dict) -> str:
     shots = res.get("screenshots", [])
     if shots:
         out.append('<div class="shots">')
-        names = [p.get("name") for p in res.get("phases", [])]
+        by_shot = {p["screenshot"]: p.get("name") for p in phases if p.get("screenshot")}
+        names = [p.get("name") for p in phases]
         for i, s in enumerate(shots, 1):
             src = escape(f"{folder}/{s}")
-            label = names[i - 1] if i - 1 < len(names) and names[i - 1] else f"phase {i}"
+            if by_shot:
+                label = by_shot.get(s) or f"phase {i}"
+            else:  # results from before phases recorded their screenshot
+                label = names[i - 1] if i - 1 < len(names) and names[i - 1] else f"phase {i}"
             cap = escape(f"{entry['name']} · {label}", quote=True)
             img = f'<img src="{src}" alt="{escape(label)}" loading="lazy">'
             out.append(f'<a href="{src}" data-shot data-caption="{cap}">{img}{escape(label)}</a>')
@@ -196,6 +200,19 @@ def _card(run_dir: Path, entry: dict) -> str:
         out.append(f'<p class="sub"><a href="{escape(folder)}/run.mp4">video</a></p>')
     out.append("</section>")
     return "\n".join(out)
+
+
+def _runs(steps: list[dict]):
+    """(first step number, step, count) for each run of identical steps, so
+    seven "Press Down" lines read as one "Press Down ×7"."""
+    out: list[tuple[int, dict, int]] = []
+    for i, s in enumerate(steps, 1):
+        if out and out[-1][1] == s:
+            first, step, count = out[-1]
+            out[-1] = (first, step, count + 1)
+        else:
+            out.append((i, s, 1))
+    return out
 
 
 def _phases(phases: list[dict], failure: dict | None, open_all: bool) -> str:
@@ -210,9 +227,12 @@ def _phases(phases: list[dict], failure: dict | None, open_all: bool) -> str:
         bad_step = failure.get("step") if here else None
         # Learning elements or finding the window happens before any step.
         before_steps = here and failure.get("action") in ("learn", "window")
-        time_ = (
-            "not reached" if st == "NOT_RUN" else f"{p['seconds']:.2f} s" if "seconds" in p else ""
-        )
+        if st == "SKIP":
+            time_ = "not for this platform"
+        elif st == "NOT_RUN":
+            time_ = "not reached"
+        else:
+            time_ = f"{p['seconds']:.2f} s" if "seconds" in p else ""
         steps, checks = p.get("steps"), p.get("checks")
         is_open = " open" if open_all or st == "FAIL" else ""
         head = (
@@ -230,7 +250,7 @@ def _phases(phases: list[dict], failure: dict | None, open_all: bool) -> str:
             missing = reason.removeprefix("element not found: ")
             line = f"Couldn’t find {missing}" if missing != reason else reason
             body.append(f'<li class="step bad">{escape(line)}</li>')
-        for i, s in enumerate(steps or [], 1):
+        for i, s, count in _runs(steps or []):
             kinds = ["step"]
             if s.get("expect"):
                 kinds.append("expect")
@@ -238,13 +258,14 @@ def _phases(phases: list[dict], failure: dict | None, open_all: bool) -> str:
                 kinds.append("pause")
             if before_steps:
                 pass
-            elif st == "PASS" or (st == "FAIL" and bad_step and i < bad_step):
+            elif st == "PASS" or (st == "FAIL" and bad_step and i + count - 1 < bad_step):
                 kinds.append("ok")
-            elif st == "FAIL" and bad_step == i:
+            elif st == "FAIL" and bad_step and i <= bad_step < i + count:
                 kinds.append("bad")
             elif st == "FAIL" and not bad_step:
                 kinds.append("ok")  # the steps ran; learn or a check failed
-            body.append(f'<li class="{" ".join(kinds)}">{escape(s["text"])}</li>')
+            text = s["text"] + (f" ×{count}" if count > 1 else "")
+            body.append(f'<li class="{" ".join(kinds)}">{escape(text)}</li>')
         for c in checks or []:
             failed_check = here and not bad_step and not before_steps
             k = " ok" if st == "PASS" else " bad" if failed_check else ""

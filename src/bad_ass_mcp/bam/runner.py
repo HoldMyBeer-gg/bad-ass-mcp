@@ -47,6 +47,8 @@ def _shell(cmd: str, env: dict[str, str], timeout: float = 60) -> subprocess.Com
         env={**os.environ, **env},
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout,
     )
 
@@ -152,7 +154,9 @@ class _Run:
                 data = _serialise_tree(tree)
             except Exception:
                 data = _plain_tree(tree)
-            (self.out / "tree.json").write_text(json.dumps(data, indent=1, default=str))
+            (self.out / "tree.json").write_text(
+                json.dumps(data, indent=1, default=str), encoding="utf-8"
+            )
         except Exception:
             pass
 
@@ -163,6 +167,9 @@ class _Run:
             v = pick(value, self.platform)
             if v is not None:
                 self.vars[key] = expand(v, self.vars)
+        # The script's own values, shown resolved in step text (saved values
+        # aren't known until the steps run).
+        self.static_vars = {k: v for k, v in self.vars.items() if k != "WINDOW"}
         for entry in self.script.get("setup", []):
             if not applies(entry, self.platform) or "shell" not in entry:
                 continue
@@ -230,14 +237,34 @@ class _Run:
                 raise
 
     def _plan(self, phase: dict, n: int) -> dict:
-        described = describe_phase(phase, self.platform)
+        described = describe_phase(phase, self.platform, getattr(self, "static_vars", {}))
         return {"name": phase_title(phase, described, n), **described}
+
+    def _empty_here(self, phase: dict, described: dict) -> bool:
+        """The phase has steps, elements or checks, but all for other
+        platforms. (A phase that's empty everywhere is a deliberate
+        screenshot point and still runs.)"""
+        has_content = any(phase.get(k) for k in ("steps", "learn", "checks", "window"))
+        return (
+            has_content
+            and not described["steps"]
+            and not described["checks"]
+            and not learn_descriptors(phase.get("learn", {}), self.platform)
+            and pick(phase.get("window"), self.platform) is None
+        )
 
     def run_phase(self, phase: dict) -> None:
         self.phase_no += 1
         n = self.phase_no
         entry = {**self._plan(phase, n), "status": "FAIL"}
         self.phase_log.append(entry)
+        if self._empty_here(phase, entry):
+            # Every step, element and check is for other platforms.
+            entry.update(status="SKIP", seconds=0.0)
+            if self.progress:
+                self.progress(n)
+            return
+        self.phase_entry = entry
         self.phase_name = entry["name"]
         self.log("phase", name=entry["name"], number=n)
         started = time.monotonic()
@@ -308,6 +335,7 @@ class _Run:
             name = self.shot(f"phase-{n}.png", window)
             if name:
                 self.screenshots.append(name)
+                self.phase_entry["screenshot"] = name
 
     def find(self, window: str | None, desc: dict) -> list:
         """find_elements by role/name, then keep those carrying `state`."""
@@ -559,7 +587,7 @@ def run_script(
         final = describe_checks(script.get("checks", []), platform)
         if final:
             result["checks"] = final
-        (out_dir / "timeline.json").write_text(json.dumps(run.timeline, indent=1))
+        (out_dir / "timeline.json").write_text(json.dumps(run.timeline, indent=1), encoding="utf-8")
         if run.window is not None:
             result["window"] = run.window
         result["screenshots"] = run.screenshots
@@ -570,5 +598,7 @@ def run_script(
 
     result["finished_at"] = _now()
     result["seconds"] = round(time.monotonic() - started, 2)
-    (out_dir / "result.json").write_text(json.dumps(result, indent=2, ensure_ascii=False))
+    (out_dir / "result.json").write_text(
+        json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
     return result

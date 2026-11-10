@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .script import applies, learn_descriptors, pick
+from .script import applies, expand, learn_descriptors, pick
 
 
 def _q(name: str) -> str:
@@ -39,10 +39,19 @@ def _num(v: Any) -> str:
     return f"{v:g}" if isinstance(v, (int, float)) else str(v)
 
 
-def describe_step(step: dict, targets: dict[str, dict], platform: str) -> dict:
+def _saved(value) -> str | None:
+    """ "$name" -> "name" for a reference to a saved value."""
+    s = str(value)
+    return s[1:] if s.startswith("$") and s[1:].isidentifier() else None
+
+
+def describe_step(
+    step: dict, targets: dict[str, dict], platform: str, variables: dict | None = None
+) -> dict:
     a = step.get("action")
+    variables = variables or {}
     t = lambda key="target": element(targets.get(step.get(key)))  # noqa: E731
-    v = lambda key: pick(step.get(key), platform)  # noqa: E731
+    v = lambda key: expand(pick(step.get(key), platform), variables)  # noqa: E731
     if a == "click":
         verb = "Right-click" if step.get("button") == "right" else "Click"
         if int(step.get("clicks", 1)) == 2:
@@ -54,7 +63,9 @@ def describe_step(step: dict, targets: dict[str, dict], platform: str) -> dict:
         into = f" into {t()}" if "target" in step else ""
         return {"text": f'Type "{v("text")}"{into}'}
     if a == "key":
-        return {"text": f"Press {v('key')}"}
+        if "window_id" in step:
+            return {"text": f"Press {v('key')}"}
+        return {"text": f"Press {v('key')} (real key, to the front window)"}
     if a == "select":
         return {"text": f'Choose "{v("value")}" in {t()}'}
     if a == "sleep":
@@ -66,11 +77,19 @@ def describe_step(step: dict, targets: dict[str, dict], platform: str) -> dict:
         return {"text": f"A {_q(v('pattern'))} window appears", "expect": True}
     if a in ("get_value", "get_bounds"):
         if "expect" in step:
-            want = str(step["expect"])
-            if want.startswith("$") and want[1:].isidentifier():
-                return {"text": f"{t()} still reads the saved {want[1:]}", "expect": True}
-            return {"text": f'{t()} reads "{want}"', "expect": True}
+            want = step["expect"]
+            name = _saved(want)
+            if name and name not in variables:
+                return {"text": f"{t()} still reads the saved {name}", "expect": True}
+            return {"text": f'{t()} reads "{expand(want, variables)}"', "expect": True}
         if "expect_not" in step:
+            name = _saved(step["expect_not"])
+            if name and name not in variables:
+                if a == "get_bounds":
+                    text = f"{t()} is not where it was (saved {name})"
+                else:
+                    text = f"{t()} no longer reads the saved {name}"
+                return {"text": _cap(text), "expect": True}
             word = "moved" if a == "get_bounds" else "changed"
             return {"text": _cap(f"{t()} {word}"), "expect": True}
         if a == "get_bounds":
@@ -83,7 +102,7 @@ def describe_step(step: dict, targets: dict[str, dict], platform: str) -> dict:
             return {"text": f"Drag {src} onto {t('to_target')}"}
         return {"text": f"Drag {src} by ({_num(step.get('dx', 0))}, {_num(step.get('dy', 0))})"}
     if a == "shell":
-        return {"text": f"Run `{step.get('cmd', '')}`"}
+        return {"text": f"Run `{expand(step.get('cmd', ''), variables)}`"}
     label = f" {t()}" if "target" in step else ""
     return {"text": f"{_cap(str(a))}{label}"}
 
@@ -113,9 +132,11 @@ def describe_checks(checks: list[dict], platform: str) -> list[str]:
     return [describe_check(c, platform) for c in checks if applies(c, platform)]
 
 
-def describe_phase(phase: dict, platform: str) -> dict:
+def describe_phase(phase: dict, platform: str, variables: dict | None = None) -> dict:
     """{"steps": [{"text", "expect"?, "pause"?}], "checks": [str]} for one
-    platform, steps aligned with what build_steps sends."""
+    platform, steps aligned with what build_steps sends. `variables` are the
+    script's own (per-platform, resolved), shown by value; saved values
+    aren't known yet and are shown by name."""
     targets = learn_descriptors(phase.get("learn", {}), platform)
     steps = []
     for step in phase.get("steps", []):
@@ -123,7 +144,7 @@ def describe_phase(phase: dict, platform: str) -> dict:
             continue
         if step.get("action") == "wait_for_window" and pick(step.get("pattern"), platform) is None:
             continue
-        steps.append(describe_step(step, targets, platform))
+        steps.append(describe_step(step, targets, platform, variables))
     return {"steps": steps, "checks": describe_checks(phase.get("checks", []), platform)}
 
 
