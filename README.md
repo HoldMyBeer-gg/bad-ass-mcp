@@ -1,5 +1,7 @@
 # bad-ass-mcp
 
+<!-- mcp-name: io.github.HoldMyBeer-gg/bad-ass-mcp -->
+
 *Every other tool needs a browser or a vision model. This one reads what the OS already knows.*
 
 A cross-platform MCP server for desktop GUI automation — driven by accessibility APIs, not screenshots.

@@ -46,8 +46,10 @@ jobs:
             --onedir \
             --name bad-ass-mcp \
             --collect-all anyio \
+            --collect-data bad_ass_mcp \
+            --collect-data jsonschema_specifications \
             --hidden-import ${{ matrix.hidden }} \
-            src/bad_ass_mcp/server.py
+            scripts/bundle_entry.py
 
       - name: Zip (Unix)
         if: runner.os != 'Windows'
@@ -116,3 +118,57 @@ jobs:
           path: dist
 
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+  # ── Publish to the official MCP Registry (GitHub OIDC, no token) ──────
+  # OIDC grants io.github.HoldMyBeer-gg/* (case-sensitive: the org as GitHub
+  # spells it). Ownership of the PyPI package is proven by the mcp-name line
+  # in README.md, which PyPI shows as the description, so this runs after
+  # the PyPI upload.
+  registry:
+    needs: pypi
+    runs-on: ubuntu-26.04
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      MCP_PUBLISHER_VERSION: v1.8.1
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Download and verify mcp-publisher
+        run: |
+          set -euo pipefail
+          archive="mcp-publisher_linux_amd64.tar.gz"
+          base="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}"
+          curl -fsSL -o "$archive" "$base/$archive"
+          curl -fsSL -o "$archive.sigstore.json" "$base/$archive.sigstore.json"
+          cosign verify-blob \
+            --bundle "$archive.sigstore.json" \
+            --certificate-identity "https://github.com/modelcontextprotocol/registry/.github/workflows/release.yml@refs/tags/${MCP_PUBLISHER_VERSION}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$archive"
+          tar xzf "$archive" mcp-publisher
+
+      - name: Set version from the tag
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          jq --arg v "$v" '.version = $v | .packages[0].version = $v' server.json > s.json
+          mv s.json server.json
+
+      - name: Wait for PyPI to serve the release
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          for i in $(seq 1 30); do
+            curl -fsS "https://pypi.org/pypi/bad-ass-mcp/$v/json" >/dev/null && exit 0
+            sleep 10
+          done
+          echo "PyPI never showed $v" && exit 1
+
+      - name: Publish
+        run: |
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
