@@ -497,8 +497,17 @@ class _Run:
         if idle is None:
             return
         ours = max(self.own_until, last_injected_at())
-        if time.monotonic() - idle > ours + 0.25:
+        now = time.monotonic()
+        if now - idle > ours + 0.25:
             self.user_stopped = True
+            # Numbers only (no window or app names), so a stop can be told
+            # apart from a false alarm caused by our own input.
+            self.log(
+                "user",
+                last_input_age_s=round(idle, 3),
+                ours_age_s=round(now - last_injected_at(), 3),
+                grace_left_s=round(max(0.0, self.own_until - now), 3),
+            )
             raise ScriptFailure(
                 "Run stopped: user input detected.", phase=phase, step=number, action="user"
             )

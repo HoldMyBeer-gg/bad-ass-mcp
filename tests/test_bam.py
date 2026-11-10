@@ -1889,3 +1889,22 @@ def test_a_touch_during_a_long_background_step_is_caught(tmp_path):
     res = run_script(desk, script, "linux", CONFIG, tmp_path / "out")
     assert res["failure"]["reason"] == "Run stopped: user input detected."
     assert desk.key_log == ["F1"]
+
+
+def test_a_user_stop_logs_the_timing_that_triggered_it(tmp_path):
+    desk = _Human(touch_after_key=1.0)
+    script = _real_input_script(
+        tmp_path,
+        [
+            {"action": "key", "key": "F1"},
+            {"action": "sleep", "seconds": 1.5},
+            {"action": "key", "key": "F2"},
+        ],
+    )
+    out = tmp_path / "out"
+    run_script(desk, script, "linux", CONFIG, out)
+    events = json.loads((out / "timeline.json").read_text(encoding="utf-8"))
+    user = next(e for e in events if e["event"] == "user")
+    # Ages in seconds before the check: the foreign input is newer than ours.
+    assert user["last_input_age_s"] < user["ours_age_s"]
+    assert set(user) >= {"last_input_age_s", "ours_age_s", "grace_left_s"}
