@@ -1,0 +1,1015 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bam.holdmybeer.gg/schema/v1/script.json",
+  "title": "BAM script",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "platforms": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "macos",
+          "windows",
+          "linux"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "covers": {
+      "type": "string",
+      "description": "What this script tests; heads its card in the report."
+    },
+    "configuration": {
+      "$ref": "config.json"
+    },
+    "variables": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/per_platform_string"
+      }
+    },
+    "setup": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "shell": {
+            "type": "string"
+          },
+          "only": {
+            "$ref": "#/$defs/only"
+          },
+          "note": {
+            "$ref": "#/$defs/note"
+          }
+        },
+        "required": [
+          "shell"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "launch": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "phases": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/phase"
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/check"
+      }
+    },
+    "verified": {
+      "type": "object",
+      "properties": {
+        "macos": {
+          "type": "string"
+        },
+        "windows": {
+          "type": "string"
+        },
+        "linux": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "note": {
+      "$ref": "#/$defs/note"
+    },
+    "notes": {
+      "$ref": "#/$defs/note"
+    },
+    "variables_note": {
+      "$ref": "#/$defs/note"
+    }
+  },
+  "$defs": {
+    "phase": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "repeat": {
+          "type": "string",
+          "description": "Rerun an earlier phase by id."
+        },
+        "learn": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/learn_entry"
+          }
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/step"
+          }
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/check"
+          }
+        },
+        "window": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "other": {
+                      "$ref": "#/$defs/per_platform_string"
+                    }
+                  },
+                  "required": [
+                    "other"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            {
+              "type": "object",
+              "description": "Per-platform value: macos / windows / linux (null = not on that platform).",
+              "properties": {
+                "macos": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "other": {
+                              "$ref": "#/$defs/per_platform_string"
+                            }
+                          },
+                          "required": [
+                            "other"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "windows": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "other": {
+                              "$ref": "#/$defs/per_platform_string"
+                            }
+                          },
+                          "required": [
+                            "other"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "linux": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "other": {
+                              "$ref": "#/$defs/per_platform_string"
+                            }
+                          },
+                          "required": [
+                            "other"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "minProperties": 1
+            }
+          ]
+        },
+        "only": {
+          "$ref": "#/$defs/only"
+        },
+        "note": {
+          "$ref": "#/$defs/note"
+        },
+        "notes": {
+          "$ref": "#/$defs/note"
+        }
+      }
+    },
+    "step": {
+      "type": "object",
+      "required": [
+        "action"
+      ],
+      "properties": {
+        "action": {
+          "enum": [
+            "click",
+            "click_at",
+            "type",
+            "key",
+            "select",
+            "get_value",
+            "get_bounds",
+            "drag",
+            "sleep",
+            "wait_for_element",
+            "wait_for_window",
+            "shell"
+          ],
+          "description": "What this step does."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "click"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "only": {
+                "$ref": "#/$defs/only"
+              },
+              "note": {
+                "$ref": "#/$defs/note"
+              },
+              "confirm": {
+                "$ref": "#/$defs/note"
+              },
+              "action": {
+                "const": "click"
+              },
+              "target": {
+                "type": "string",
+                "description": "A label from this phase's learn block."
+              },
+              "button": {
+                "enum": [
+                  "left",
+                  "right",
+                  "middle"
+                ]
+              },
+              "clicks": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "target"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "click_at"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "only": {
+                "$ref": "#/$defs/only"
+              },
+              "note": {
+                "$ref": "#/$defs/note"
+              },
+              "confirm": {
+                "$ref": "#/$defs/note"
+              },
+              "action": {
+                "const": "click_at"
+              },
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              },
+              "window_id": {
+                "type": "string",
+                "description": "Usually \"$WINDOW\"."
+              },
+              "button": {
+                "enum": [
+                  "left",
+                  "right",
+                  "middle"
+                ]
+              },
+              "clicks": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "x",
+              "y"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "type"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "only": {
+                "$ref": "#/$defs/only"
+              },
+              "note": {
+                "$ref": "#/$defs/note"
+              },
+              "confirm": {
+                "$ref": "#/$defs/note"
+              },
+              "action": {
+                "const": "type"
+              },
+              "target": {
+                "type": "string",
+                "description": "A label from this phase's learn block."
+              },
+              "text": {
+                "$ref": "#/$defs/per_platform_string"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "target",
+              "text"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "key"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "only": {
+                "$ref": "#/$defs/only"
+              },
+              "note": {
+                "$ref": "#/$defs/note"
+              },
+              "confirm": {
+                "$ref": "#/$defs/note"
+              },
+              "action": {
+                "const": "key"
+              },
+              "key": {
+                "$ref": "#/$defs/per_platform_string"
+              },
+              "window_id": {
+                "type": "string",
+                "description": "Usually \"$WINDOW\"."
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "key"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "select"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "only": {
+                "$ref": "#/$defs/only"
+              },
+              "note": {
+                "$ref": "#/$defs/note"
+              },
+              "confirm": {
+                "$ref": "#/$defs/note"
+              },
+              "action": {
+                "const": "select"
+              },
+              "target": {
+                "type": "string",
+                "description": "A label from this phase's learn block."
+              },
+              "value": {
+                "$ref": "#/$defs/per_platform_string"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "target",
+              "value"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "get_value"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "only": {
+                "$ref": "#/$defs/only"
+              },
+              "note": {
+                "$ref": "#/$defs/note"
+              },
+              "confirm": {
+                "$ref": "#/$defs/note"
+              },
+              "action": {
+                "const": "get_value"
+              },
+              "target": {
+                "type": "string",
+                "description": "A label from this phase's learn block."
+              },
+              "save": {
+                "type": "string",
+                "description": "Save the value as $name."
+              },
+              "expect": {
+                "description": "The value must equal this (\"$name\" for a saved one)."
+              },
+              "expect_not": {
+                "description": "The value must differ from this."
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "target"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "get_bounds"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "only": {
+                "$ref": "#/$defs/only"
+              },
+              "note": {
+                "$ref": "#/$defs/note"
+              },
+              "confirm": {
+                "$ref": "#/$defs/note"
+              },
+              "action": {
+                "const": "get_bounds"
+              },
+              "target": {
+                "type": "string",
+                "description": "A label from this phase's learn block."
+              },
+              "save": {
+                "type": "string",
+                "description": "Save the value as $name."
+              },
+              "expect": {
+                "description": "The value must equal this (\"$name\" for a saved one)."
+              },
+              "expect_not": {
+                "description": "The value must differ from this."
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "target"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "drag"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "only": {
+                "$ref": "#/$defs/only"
+              },
+              "note": {
+                "$ref": "#/$defs/note"
+              },
+              "confirm": {
+                "$ref": "#/$defs/note"
+              },
+              "action": {
+                "const": "drag"
+              },
+              "from_target": {
+                "type": "string",
+                "description": "A label from this phase's learn block."
+              },
+              "to_target": {
+                "type": "string",
+                "description": "A label from this phase's learn block."
+              },
+              "from_x": {
+                "type": "number"
+              },
+              "from_y": {
+                "type": "number"
+              },
+              "to_x": {
+                "type": "number"
+              },
+              "to_y": {
+                "type": "number"
+              },
+              "dx": {
+                "type": "number"
+              },
+              "dy": {
+                "type": "number"
+              },
+              "button": {
+                "enum": [
+                  "left",
+                  "right",
+                  "middle"
+                ]
+              },
+              "duration": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false,
+            "required": []
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "sleep"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "only": {
+                "$ref": "#/$defs/only"
+              },
+              "note": {
+                "$ref": "#/$defs/note"
+              },
+              "confirm": {
+                "$ref": "#/$defs/note"
+              },
+              "action": {
+                "const": "sleep"
+              },
+              "seconds": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "seconds"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "wait_for_element"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "only": {
+                "$ref": "#/$defs/only"
+              },
+              "note": {
+                "$ref": "#/$defs/note"
+              },
+              "confirm": {
+                "$ref": "#/$defs/note"
+              },
+              "action": {
+                "const": "wait_for_element"
+              },
+              "window_id": {
+                "type": "string",
+                "description": "Usually \"$WINDOW\"."
+              },
+              "name": {
+                "$ref": "#/$defs/per_platform_string"
+              },
+              "role": {
+                "$ref": "#/$defs/per_platform_string"
+              },
+              "state": {
+                "$ref": "#/$defs/per_platform_string"
+              },
+              "timeout": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false,
+            "required": []
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "wait_for_window"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "only": {
+                "$ref": "#/$defs/only"
+              },
+              "note": {
+                "$ref": "#/$defs/note"
+              },
+              "confirm": {
+                "$ref": "#/$defs/note"
+              },
+              "action": {
+                "const": "wait_for_window"
+              },
+              "pattern": {
+                "$ref": "#/$defs/per_platform_string"
+              },
+              "timeout": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "pattern"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "shell"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "only": {
+                "$ref": "#/$defs/only"
+              },
+              "note": {
+                "$ref": "#/$defs/note"
+              },
+              "confirm": {
+                "$ref": "#/$defs/note"
+              },
+              "action": {
+                "const": "shell"
+              },
+              "cmd": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "cmd"
+            ]
+          }
+        }
+      ]
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "present": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/per_platform_string"
+            },
+            "role": {
+              "$ref": "#/$defs/per_platform_string"
+            },
+            "state": {
+              "$ref": "#/$defs/per_platform_string"
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "note": {
+              "$ref": "#/$defs/note"
+            }
+          },
+          "additionalProperties": false
+        },
+        "absent": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/per_platform_string"
+            },
+            "role": {
+              "$ref": "#/$defs/per_platform_string"
+            },
+            "state": {
+              "$ref": "#/$defs/per_platform_string"
+            },
+            "note": {
+              "$ref": "#/$defs/note"
+            }
+          },
+          "additionalProperties": false
+        },
+        "windows": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "no_window": {
+          "$ref": "#/$defs/per_platform_string"
+        },
+        "shell": {
+          "type": "string"
+        },
+        "manual": {
+          "type": "string"
+        },
+        "only": {
+          "$ref": "#/$defs/only"
+        },
+        "note": {
+          "$ref": "#/$defs/note"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "present"
+          ]
+        },
+        {
+          "required": [
+            "absent"
+          ]
+        },
+        {
+          "required": [
+            "windows"
+          ]
+        },
+        {
+          "required": [
+            "no_window"
+          ]
+        },
+        {
+          "required": [
+            "shell"
+          ]
+        },
+        {
+          "required": [
+            "manual"
+          ]
+        }
+      ]
+    },
+    "learn_entry": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/per_platform_string"
+        },
+        "role": {
+          "$ref": "#/$defs/per_platform_string"
+        },
+        "state": {
+          "$ref": "#/$defs/per_platform_string"
+        },
+        "only": {
+          "$ref": "#/$defs/only"
+        },
+        "note": {
+          "$ref": "#/$defs/note"
+        }
+      },
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": [
+            "name"
+          ]
+        },
+        {
+          "required": [
+            "role"
+          ]
+        }
+      ]
+    },
+    "per_platform_string": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "description": "Per-platform value: macos / windows / linux (null = not on that platform).",
+          "properties": {
+            "macos": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "windows": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "linux": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "minProperties": 1
+        }
+      ]
+    },
+    "only": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "macos",
+          "windows",
+          "linux"
+        ]
+      },
+      "uniqueItems": true,
+      "description": "Run this only on these platforms."
+    },
+    "note": {
+      "description": "For people; ignored by the runner.",
+      "type": [
+        "string",
+        "array"
+      ]
+    }
+  }
+}

@@ -144,11 +144,60 @@ def parse(argv: list[str]) -> argparse.Namespace:
     return args
 
 
+def _problems(scripts: list[Path], config_path: str | None) -> list[dict]:
+    """Schema problems in the scripts (and the suite config), as
+    {file, path, message}; unreadable JSON is one problem for its file."""
+    from .validate import validate_config, validate_script
+
+    out: list[dict] = []
+    files = [(Path(config_path), validate_config)] if config_path else []
+    files += [(p, validate_script) for p in scripts]
+    for path, check in files:
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            out.append({"file": str(path), "path": "", "message": f"not valid JSON: {e}"})
+            continue
+        out += [{"file": str(path), "path": i.path, "message": i.message} for i in check(data)]
+    return out
+
+
+def _print_problems(problems: list[dict]) -> None:
+    for p in problems:
+        where = f"{p['file']}: {p['path']}: " if p["path"] else f"{p['file']}: "
+        print(where + p["message"])
+
+
+def check_main(argv: list[str]) -> int:
+    """`bad-ass-mcp check PATH... [--config bam.json] [--json]`: validate
+    scripts without running them. Exit 1 if anything is wrong."""
+    ap = argparse.ArgumentParser(prog="bad-ass-mcp check", description="Validate BAM scripts.")
+    ap.add_argument("paths", nargs="+", help="script files or folders of *.json scripts")
+    ap.add_argument("--config", help="suite config JSON to validate too")
+    ap.add_argument("--json", action="store_true", help="problems as a JSON list")
+    args = ap.parse_args(argv)
+    problems = _problems(_collect(args.paths), args.config)
+    if args.json:
+        print(json.dumps(problems, indent=2))
+    elif problems:
+        _print_problems(problems)
+    else:
+        print(f"ok: {len(_collect(args.paths))} script(s) valid")
+    return 1 if problems else 0
+
+
 def main(argv: list[str]) -> int:
     from ..server import _backend
-    from .suite import run_suite
+    from . import suite
 
     args = parse(argv)
+    problems = _problems(args.scripts, args.config)
+    if problems:
+        # Refuse before launching anything: a typo shouldn't cost a run.
+        _print_problems(problems)
+        print(f"{len(problems)} problem(s); nothing was run. `bad-ass-mcp check` to re-check.")
+        return 2
+    run_suite = suite.run_suite
     color = use_color(sys.stdout)
     live = sys.stderr.isatty()
 

@@ -1,0 +1,101 @@
+{
+  "name": "close-tabs",
+  "covers": "File > Close Tab and File > Close Other Tabs (dc2e10a). Close Other Tabs loops through closeTab, so a Cancel on the first unsaved-changes prompt stops the loop instead of keeping prompting; the surviving tabs are the keep-tab plus every tab a cancel left behind.",
+  "platforms": ["linux", "windows"],
+  "verified": { "linux": "2026-11-09", "windows": "2026-11-09" },
+  "setup": [
+    { "shell": "printf 'kept\\n' > \"$SMOKE/keep.md\"" }
+  ],
+  "launch": ["keep.md"],
+  "phases": [
+    {
+      "note": "Dirty keep.md by typing into the editor (it loads with focus on the editor). Avoids clicking tabs to switch, which races with activateTab's async re-render.",
+      "learn": {},
+      "steps": [
+        { "action": "key", "key": "x", "window_id": "$WINDOW", "only": ["linux"] },
+        { "action": "key", "key": "x", "only": ["windows"] },
+        { "action": "sleep", "seconds": 0.3 }
+      ]
+    },
+    {
+      "note": "Open a second tab via the New tab toolbar button; new tab is active, keep.md (dirty) is the only 'other' tab.",
+      "learn": {
+        "new_tab": { "name": "New tab" }
+      },
+      "steps": [
+        { "action": "click", "target": "new_tab" },
+        { "action": "sleep", "seconds": 0.3 }
+      ]
+    },
+    {
+      "note": "File > Close Other Tabs. Windows: F10 + Down (opens on New Window) + Down x5 (New Window, New Tab, Open..., Open Recent, Close Tab, Close Other Tabs) + Return.",
+      "learn": {
+        "file_menu": { "name": "File", "role": "menu", "only": ["linux"] },
+        "close_others_item": { "name": "Close Other Tabs", "only": ["linux"] }
+      },
+      "steps": [
+        { "action": "click", "target": "file_menu", "only": ["linux"] },
+        { "action": "sleep", "seconds": 0.5, "only": ["linux"] },
+        { "action": "click", "target": "close_others_item", "only": ["linux"] },
+        { "action": "key", "key": "F10", "only": ["windows"] },
+        { "action": "sleep", "seconds": 0.3, "only": ["windows"] },
+        { "action": "key", "key": "Down", "only": ["windows"] },
+        { "action": "sleep", "seconds": 0.3, "only": ["windows"] },
+        { "action": "key", "key": "Down", "only": ["windows"] },
+        { "action": "key", "key": "Down", "only": ["windows"] },
+        { "action": "key", "key": "Down", "only": ["windows"] },
+        { "action": "key", "key": "Down", "only": ["windows"] },
+        { "action": "key", "key": "Down", "only": ["windows"] },
+        { "action": "sleep", "seconds": 0.3, "only": ["windows"] },
+        { "action": "key", "key": "Return", "only": ["windows"] },
+        { "action": "wait_for_element", "window_id": "$WINDOW", "name": "Keep editing", "timeout": 5 }
+      ]
+    },
+    {
+      "note": "closeOtherTabs walked to keep.md (dirty) and asked. 'Keep editing' (the dialog's cancelLabel) stops the loop.",
+      "learn": {
+        "keep_editing": { "name": "Keep editing" }
+      },
+      "steps": [
+        { "action": "click", "target": "keep_editing" },
+        { "action": "sleep", "seconds": 0.5 }
+      ]
+    },
+    {
+      "note": "Both tabs survive: keep.md (dirty) and the new Untitled.",
+      "learn": {},
+      "steps": [],
+      "checks": [
+        { "present": { "name": "keep.md", "role": { "linux": "page tab" } } },
+        { "present": { "name": "Untitled", "role": { "linux": "page tab" } } }
+      ]
+    },
+    {
+      "note": "File > Close Tab on the new Untitled (it is still the active tab). Clean, so no prompt; one less tab.",
+      "learn": {
+        "file_menu_2": { "name": "File", "role": "menu", "only": ["linux"] },
+        "close_tab_item": { "name": "Close Tab", "only": ["linux"] }
+      },
+      "steps": [
+        { "action": "click", "target": "file_menu_2", "only": ["linux"] },
+        { "action": "sleep", "seconds": 0.5, "only": ["linux"] },
+        { "action": "click", "target": "close_tab_item", "only": ["linux"] },
+        { "action": "key", "key": "F10", "only": ["windows"] },
+        { "action": "sleep", "seconds": 0.3, "only": ["windows"] },
+        { "action": "key", "key": "Down", "only": ["windows"] },
+        { "action": "sleep", "seconds": 0.3, "only": ["windows"] },
+        { "action": "key", "key": "Down", "only": ["windows"] },
+        { "action": "key", "key": "Down", "only": ["windows"] },
+        { "action": "key", "key": "Down", "only": ["windows"] },
+        { "action": "key", "key": "Down", "only": ["windows"] },
+        { "action": "sleep", "seconds": 0.3, "only": ["windows"] },
+        { "action": "key", "key": "Return", "only": ["windows"] },
+        { "action": "sleep", "seconds": 0.5 }
+      ],
+      "checks": [
+        { "present": { "name": "keep.md", "role": { "linux": "page tab" } } }
+      ]
+    }
+  ],
+  "notes": "Linux names/roles (Close Tab, Close Other Tabs as AT-SPI 'menu item'; Cancel as the discard-prompt button) and Windows Down counts (New Window, New Tab, Open..., Open Recent, Close Tab, Close Other Tabs, Save, Save As...) are from the source; set verified per platform on the first real run."
+}

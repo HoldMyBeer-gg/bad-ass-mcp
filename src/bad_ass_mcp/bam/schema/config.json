@@ -1,0 +1,376 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bam.holdmybeer.gg/schema/v1/config.json",
+  "title": "BAM suite config (bam.json)",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "window": {
+      "type": "string",
+      "description": "Title substring of the app's main window."
+    },
+    "app": {
+      "anyOf": [
+        {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "description": "Per-platform value: macos / windows / linux (null = not on that platform).",
+          "properties": {
+            "macos": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "minItems": 1
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "windows": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "minItems": 1
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "linux": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "minItems": 1
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "minProperties": 1
+        }
+      ],
+      "description": "Launch command, string or argv list."
+    },
+    "pid": {
+      "type": "integer",
+      "description": "Attach mode: drive only this process's windows."
+    },
+    "ready": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/per_platform_string"
+            },
+            "role": {
+              "$ref": "#/$defs/per_platform_string"
+            },
+            "state": {
+              "$ref": "#/$defs/per_platform_string"
+            },
+            "note": {
+              "$ref": "#/$defs/note"
+            }
+          },
+          "additionalProperties": false,
+          "anyOf": [
+            {
+              "required": [
+                "name"
+              ]
+            },
+            {
+              "required": [
+                "role"
+              ]
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "description": "Per-platform value: macos / windows / linux (null = not on that platform).",
+          "properties": {
+            "macos": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "$ref": "#/$defs/per_platform_string"
+                    },
+                    "role": {
+                      "$ref": "#/$defs/per_platform_string"
+                    },
+                    "state": {
+                      "$ref": "#/$defs/per_platform_string"
+                    },
+                    "note": {
+                      "$ref": "#/$defs/note"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "anyOf": [
+                    {
+                      "required": [
+                        "name"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "role"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "windows": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "$ref": "#/$defs/per_platform_string"
+                    },
+                    "role": {
+                      "$ref": "#/$defs/per_platform_string"
+                    },
+                    "state": {
+                      "$ref": "#/$defs/per_platform_string"
+                    },
+                    "note": {
+                      "$ref": "#/$defs/note"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "anyOf": [
+                    {
+                      "required": [
+                        "name"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "role"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "linux": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "$ref": "#/$defs/per_platform_string"
+                    },
+                    "role": {
+                      "$ref": "#/$defs/per_platform_string"
+                    },
+                    "state": {
+                      "$ref": "#/$defs/per_platform_string"
+                    },
+                    "note": {
+                      "$ref": "#/$defs/note"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "anyOf": [
+                    {
+                      "required": [
+                        "name"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "role"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "minProperties": 1
+        }
+      ],
+      "description": "An element that exists only once the app is usable."
+    },
+    "launch_timeout": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "step_timeout": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "timeout_scale": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "screenshot_proof": {
+      "type": "boolean"
+    },
+    "demo": {
+      "type": "boolean"
+    },
+    "demo_pace": {
+      "type": "number",
+      "minimum": 0
+    },
+    "record_video": {
+      "enum": [
+        true,
+        false,
+        "on_failure"
+      ]
+    },
+    "fail_fast": {
+      "enum": [
+        true,
+        false,
+        "first_script"
+      ]
+    },
+    "retries": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "note": {
+      "$ref": "#/$defs/note"
+    },
+    "notes": {
+      "$ref": "#/$defs/note"
+    }
+  },
+  "$defs": {
+    "per_platform_string": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "description": "Per-platform value: macos / windows / linux (null = not on that platform).",
+          "properties": {
+            "macos": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "windows": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "linux": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "minProperties": 1
+        }
+      ]
+    },
+    "only": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "macos",
+          "windows",
+          "linux"
+        ]
+      },
+      "uniqueItems": true,
+      "description": "Run this only on these platforms."
+    },
+    "note": {
+      "description": "For people; ignored by the runner.",
+      "type": [
+        "string",
+        "array"
+      ]
+    }
+  }
+}

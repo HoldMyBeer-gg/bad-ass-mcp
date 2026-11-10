@@ -1,0 +1,160 @@
+{
+  "name": "resize-split",
+  "covers": "The editor/preview splitter: dragging it moves the panes in the side-by-side layout, Toggle layout stacks the panes and the splitter then drags vertically, and toggling back restores the side-by-side layout (the layout is a persisted setting, so the script leaves it as it found it).",
+  "platforms": [
+    "windows",
+    "linux",
+    "macos"
+  ],
+  "verified": {
+    "linux": "2026-11-09",
+    "macos": "2026-11-09"
+  },
+  "setup": [
+    {
+      "shell": "printf '# Split\\n\\nSome text so both panes have content.\\n' > \"$SMOKE/split.md\""
+    }
+  ],
+  "launch": [
+    "split.md"
+  ],
+  "phases": [
+    {
+      "name": "side by side",
+      "note": "The splitter is role=separator with aria-label 'Resize editor and preview'. Drag it 150 px to the right with real pointer events (BAM drag with dx); its bounds must change. A drag that lands nowhere (window not on top, wrong coordinates) leaves the bounds equal and fails here.",
+      "learn": {
+        "resizer": {
+          "name": "Resize editor and preview"
+        }
+      },
+      "steps": [
+        {
+          "action": "get_bounds",
+          "target": "resizer",
+          "save": "before_h"
+        },
+        {
+          "action": "drag",
+          "from_target": "resizer",
+          "dx": 150,
+          "dy": 0,
+          "duration": 0.4
+        },
+        {
+          "action": "sleep",
+          "seconds": 0.3
+        },
+        {
+          "action": "get_bounds",
+          "target": "resizer",
+          "expect_not": "$before_h",
+          "save": "after_h"
+        }
+      ]
+    },
+    {
+      "name": "stack the panes",
+      "learn": {
+        "toggle_layout": {
+          "name": "Toggle layout"
+        }
+      },
+      "steps": [
+        {
+          "action": "click",
+          "target": "toggle_layout"
+        },
+        {
+          "action": "sleep",
+          "seconds": 0.5
+        }
+      ],
+      "checks": [
+        {
+          "present": {
+            "name": "Toggle layout",
+            "state": "pressed"
+          },
+          "only": [
+            "linux"
+          ],
+          "note": "aria-pressed=true shows as the AT-SPI 'pressed' state (bad-ass-mcp collects it since 2026-11-09); other platforms' toggle states unverified, so Linux-only."
+        }
+      ]
+    },
+    {
+      "name": "stacked",
+      "note": "Same splitter, now horizontal between the editor (top) and preview (bottom): drag it 120 px down.",
+      "learn": {
+        "resizer": {
+          "name": "Resize editor and preview"
+        }
+      },
+      "steps": [
+        {
+          "action": "get_bounds",
+          "target": "resizer",
+          "save": "before_v",
+          "expect_not": "$after_h",
+          "note": "The splitter's bounds differ from where the side-by-side drag left it: the layout really changed."
+        },
+        {
+          "action": "drag",
+          "from_target": "resizer",
+          "dx": 0,
+          "dy": 120,
+          "duration": 0.4
+        },
+        {
+          "action": "sleep",
+          "seconds": 0.3
+        },
+        {
+          "action": "get_bounds",
+          "target": "resizer",
+          "expect_not": "$before_v"
+        }
+      ]
+    },
+    {
+      "name": "restore side by side",
+      "learn": {
+        "toggle_layout": {
+          "name": "Toggle layout"
+        }
+      },
+      "steps": [
+        {
+          "action": "click",
+          "target": "toggle_layout"
+        },
+        {
+          "action": "sleep",
+          "seconds": 0.5
+        }
+      ],
+      "checks": [
+        {
+          "absent": {
+            "name": "Toggle layout",
+            "state": "pressed"
+          },
+          "only": [
+            "linux"
+          ]
+        }
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "windows": 1
+    },
+    {
+      "present": {
+        "name": "Resize editor and preview"
+      }
+    }
+  ],
+  "notes": "Needs bad-ass-mcp with drag by target (from_target + dx/dy), get_bounds and expect_not (2026-11-09). The split ratio itself is not persisted, only the layout, so the only cleanup is the second Toggle layout; if the script fails between the two toggles the app is left stacked (vertical_layout = true in settings), so press Toggle layout once by hand. Linux run 2026-11-09 (SteamOS, WebKitGTK 2.54, GDK_BACKEND=x11): xdotool's XTEST pointer reaches the page's mousedown/mousemove handlers, and the toggle's aria-pressed is the AT-SPI 'pressed' state."
+}

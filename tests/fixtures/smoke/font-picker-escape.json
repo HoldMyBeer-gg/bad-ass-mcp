@@ -1,0 +1,62 @@
+{
+  "name": "font-picker-escape",
+  "covers": "Settings > Preview font > Choose a font…: search, then Escape from inside the search box closes only the chooser and restores the dropdown (5914c34).",
+  "platforms": ["macos", "windows", "linux"],
+  "verified": { "macos": "2026-11-09", "windows": "2026-11-09", "linux": "2026-11-09" },
+  "setup": [],
+  "launch": [],
+  "phases": [
+    {
+      "learn": { "settings": { "name": "Settings" } },
+      "steps": [
+        { "action": "click", "target": "settings" },
+        { "action": "wait_for_element", "window_id": "$WINDOW", "name": "Preview font", "timeout": 5 }
+      ]
+    },
+    {
+      "note": "On Windows the name 'Preview font' also matches the label text (role 'text'), so the combobox needs its role. Clicking the <select> there opens a native popup the tree can't see; on Linux (WebKitGTK) the click leaves the native popup open and it swallows every keystroke meant for the chooser. Both pick the option with 'select' instead; macOS clicks.",
+      "learn": { "preview_font": { "name": "Preview font", "role": { "windows": "combobox" } } },
+      "steps": [
+        { "action": "get_value", "target": "preview_font", "save": "before" },
+        { "action": "click", "target": "preview_font", "only": ["macos"] },
+        { "action": "wait_for_element", "window_id": "$WINDOW", "name": "Choose a font…", "timeout": 3, "only": ["macos"] }
+      ]
+    },
+    {
+      "note": "On Windows 'Choose a font…' is an <option> inside the closed select and isn't in the tree, so it's learned on macOS only and Windows/Linux reuse preview_font.",
+      "learn": {
+        "choose": { "name": "Choose a font…", "only": ["macos"] },
+        "preview_font": { "name": "Preview font", "role": { "windows": "combobox" }, "only": ["windows", "linux"] }
+      },
+      "steps": [
+        { "action": "click", "target": "choose", "only": ["macos"] },
+        { "action": "select", "target": "preview_font", "value": "Choose a font…", "only": ["windows", "linux"] },
+        { "action": "wait_for_element", "window_id": "$WINDOW", "name": "Search fonts", "timeout": 5 }
+      ]
+    },
+    {
+      "note": "Windows: a key sent with window_id is posted to the top-level HWND and never reaches WebView2 content, so Escape is sent without window_id (real input to the focused element).",
+      "learn": { "search": { "name": "Search fonts" } },
+      "steps": [
+        { "action": "type", "target": "search", "text": "Geo" },
+        { "action": "sleep", "seconds": 0.3 },
+        { "action": "click", "target": "search", "only": ["windows"] },
+        { "action": "key", "key": "Escape", "window_id": "$WINDOW", "only": ["macos", "linux"] },
+        { "action": "key", "key": "Escape", "only": ["windows"] },
+        { "action": "sleep", "seconds": 0.5 }
+      ]
+    },
+    {
+      "learn": { "preview_font": { "name": "Preview font", "role": { "windows": "combobox" } }, "done": { "name": "Done" } },
+      "steps": [
+        { "action": "get_value", "target": "preview_font", "expect": "$before" },
+        { "action": "click", "target": "done" },
+        { "action": "sleep", "seconds": 0.3 }
+      ]
+    }
+  ],
+  "checks": [
+    { "absent": { "name": "Search fonts" } },
+    { "absent": { "name": "Done" } }
+  ]
+}

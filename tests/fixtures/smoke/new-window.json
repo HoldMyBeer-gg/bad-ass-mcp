@@ -1,0 +1,85 @@
+{
+  "name": "new-window",
+  "covers": "File > New Window opens a second, fully loaded window that closes on the first click (Windows deadlock fixed in c4d9c5e). Ctrl+N goes through the same new_window command, but bad-ass-mcp can't send chords on macOS/Windows, so the menu path stands in for it. macOS is skipped: its menu bar belongs to the app, not the window, so window-scoped lookups can't reach it.",
+  "platforms": [
+    "windows",
+    "linux"
+  ],
+  "verified": { "windows": "2026-11-09", "linux": "2026-11-09" },
+  "setup": [],
+  "launch": [],
+  "phases": [
+    {
+      "note": "Windows: the native menu bar's 'File' is in the tree (role 'menuitem'), but invoking it through UIA doesn't open the popup, and the popup's items aren't under the window. So Windows opens the menu with real keys: F10 focuses the menu bar on File, Down opens it with the first item (New Window) highlighted, Return activates it. Keys go without window_id so they're real input. Linux: the menu bar's File is an AT-SPI 'menu' (confirmed); give the popup a beat before activating its item, or the activation is lost.",
+      "learn": {
+        "file_menu": {
+          "name": "File",
+          "role": "menu",
+          "only": ["linux"]
+        }
+      },
+      "steps": [
+        { "action": "click", "target": "file_menu", "only": ["linux"] },
+        { "action": "wait_for_element", "window_id": "$WINDOW", "name": "New Window", "timeout": 3, "only": ["linux"] },
+        { "action": "sleep", "seconds": 0.5, "only": ["linux"] },
+        { "action": "key", "key": "F10", "only": ["windows"] },
+        { "action": "sleep", "seconds": 0.3, "only": ["windows"] },
+        { "action": "key", "key": "Down", "only": ["windows"] },
+        { "action": "sleep", "seconds": 0.3, "only": ["windows"] },
+        { "action": "key", "key": "Return", "only": ["windows"] },
+        { "action": "sleep", "seconds": 3, "only": ["windows"] }
+      ]
+    },
+    {
+      "learn": {
+        "new_window": {
+          "name": "New Window",
+          "only": ["linux"]
+        }
+      },
+      "steps": [
+        { "action": "click", "target": "new_window", "only": ["linux"] },
+        { "action": "sleep", "seconds": 3, "only": ["linux"] }
+      ]
+    },
+    {
+      "only": ["windows"],
+      "checks": [{ "windows": 2 }]
+    },
+    {
+      "only": ["windows"],
+      "window": { "other": "MarkTheCrab" },
+      "note": "Windows: the new window is listed separately. Learning 'Insert emoji' in it proves it loaded (not blank white, the c4d9c5e deadlock); one click on its close button must close it.",
+      "learn": {
+        "emoji": { "name": "Insert emoji" },
+        "close": { "name": "Close", "role": { "windows": "button" } }
+      },
+      "steps": [
+        { "action": "click", "target": "close" },
+        { "action": "sleep", "seconds": 3 }
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "windows": 2,
+      "only": ["linux"]
+    },
+    {
+      "windows": 1,
+      "only": ["windows"],
+      "note": "The new window closed on the first click; the original is still open."
+    },
+    {
+      "present": { "name": "Insert emoji", "count": 2 },
+      "only": ["linux"],
+      "note": "Both windows expose a toolbar: the new one loaded, it isn't blank white. On Linux both frames live under one AT-SPI application, so one lookup sees both."
+    },
+    {
+      "shell": "new=$(xdotool getactivewindow); xdotool getwindowclassname \"$new\" | grep -qi markthecrab || exit 2; xdotool windowclose \"$new\"; for i in 1 2 3 4 5 6; do sleep 0.5; n=0; for w in $(xdotool search --onlyvisible --class markthecrab); do xprop -id \"$w\" _NET_WM_WINDOW_TYPE | grep -q NORMAL && n=$((n+1)); done; [ \"$n\" -eq 1 ] && exit 0; done; exit 1",
+      "only": ["linux"],
+      "note": "The new window is the active one. Close it with the window manager (its close button isn't in the a11y tree) and expect one normal MarkTheCrab window within 3 s (popups and tooltips share the class, so count only NORMAL-type windows)."
+    }
+  ],
+  "notes": "The toolbar also has a group named 'File' (the New/Open/Save buttons), so the Linux menu lookup needs its role. Linux names/roles confirmed on the 2026-11-09 run; `windows` counts AT-SPI frames there."
+}

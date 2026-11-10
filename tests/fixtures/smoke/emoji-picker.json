@@ -1,0 +1,60 @@
+{
+  "name": "emoji-picker",
+  "covers": "In-app emoji picker (0710976): search + Enter inserts at the cursor and the file saves with it; Escape from the search box with text closes without inserting (5914c34). macOS opens its native palette instead, so it's skipped there.",
+  "platforms": ["windows", "linux"],
+  "verified": { "windows": "2026-11-09", "linux": "2026-11-09" },
+  "setup": [
+    { "shell": "printf 'hello ' > \"$SMOKE/emoji.md\"" }
+  ],
+  "launch": ["emoji.md"],
+  "phases": [
+    {
+      "learn": { "emoji": { "name": "Insert emoji" } },
+      "steps": [
+        { "action": "click", "target": "emoji" },
+        { "action": "wait_for_element", "window_id": "$WINDOW", "name": "Search emoji", "timeout": 5 }
+      ]
+    },
+    {
+      "note": "Windows: a key sent with window_id never reaches WebView2 content, so keys go without window_id there (real input to the focused element; the search box has focus after the picker opens).",
+      "learn": { "search": { "name": "Search emoji" } },
+      "steps": [
+        { "action": "type", "target": "search", "text": "cra" },
+        { "action": "sleep", "seconds": 0.3 },
+        { "action": "key", "key": "Escape", "window_id": "$WINDOW", "only": ["linux"] },
+        { "action": "key", "key": "Escape", "only": ["windows"] },
+        { "action": "sleep", "seconds": 0.5 }
+      ]
+    },
+    {
+      "learn": { "emoji": { "name": "Insert emoji" } },
+      "steps": [
+        { "action": "click", "target": "emoji" },
+        { "action": "wait_for_element", "window_id": "$WINDOW", "name": "Search emoji", "timeout": 5 }
+      ]
+    },
+    {
+      "learn": { "search": { "name": "Search emoji" } },
+      "steps": [
+        { "action": "type", "target": "search", "text": "crab" },
+        { "action": "sleep", "seconds": 0.3 },
+        { "action": "key", "key": "Return", "window_id": "$WINDOW", "only": ["linux"] },
+        { "action": "key", "key": "Return", "only": ["windows"] },
+        { "action": "sleep", "seconds": 0.5 }
+      ]
+    },
+    {
+      "learn": { "save": { "name": "Save" } },
+      "steps": [
+        { "action": "click", "target": "save" },
+        { "action": "sleep", "seconds": 1 }
+      ]
+    }
+  ],
+  "checks": [
+    { "absent": { "name": "Search emoji" } },
+    { "shell": "grep -q '🦀' \"$SMOKE/emoji.md\"" },
+    { "shell": "[ \"$(grep -o '🦀' \"$SMOKE/emoji.md\" | wc -l)\" -eq 1 ]" }
+  ],
+  "notes": "The cursor starts at the top of a freshly opened file, so the crab lands before 'hello'; the checks only count crabs. The Escape pass must insert nothing, which is why exactly one 🦀 is expected."
+}

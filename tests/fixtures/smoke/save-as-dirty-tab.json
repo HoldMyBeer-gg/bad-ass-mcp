@@ -1,0 +1,202 @@
+{
+  "name": "save-as-dirty-tab",
+  "covers": "Save As onto a file another tab has open with unsaved edits, spelled differently (case, separators): MarkTheCrab asks Replace/Cancel after the OS replace prompt. Cancel writes nothing; Replace writes, closes the old tab, and no 'modified outside' prompt follows (44c443a). Also: opening the same file under another spelling switches to its tab.",
+  "platforms": [
+    "windows",
+    "linux"
+  ],
+  "verified": { "windows": "2026-11-09", "linux": "2026-11-09" },
+  "setup": [
+    {
+      "shell": "printf 'original\\n' > \"$SMOKE/style.md\""
+    },
+    {
+      "shell": "mkdir -p \"$SMOKE/sub\""
+    }
+  ],
+  "launch": [
+    "style.md"
+  ],
+  "variables": {
+    "target_path": {
+      "windows": "$SMOKE\\STYLE.MD",
+      "linux": "$SMOKE/sub/../style.md"
+    },
+    "reopen_path": {
+      "windows": "$SMOKE\\.\\STYLE.MD",
+      "linux": "$SMOKE/sub/../style.md"
+    }
+  },
+  "variables_note": "Literal values; $SMOKE expands inside them. target_path is another spelling of $SMOKE/style.md: Windows uses backslashes and different case (upper-case the directory name too if you like), Linux paths are case-sensitive so it uses a '..' segment (setup mkdirs $SMOKE/sub for it). reopen_path on Windows adds a '.' segment because the Open dialog autocompletes a path it has seen back to its on-disk spelling, which would defeat the test. On Windows $SMOKE must be in C:\\ form (backslashes, drive letter), since it is typed into native dialogs: if you set it in Git Bash, use cygpath -w.",
+  "phases": [
+    {
+      "note": "Make tab A (style.md) dirty: the editor has focus after launch. Windows: keys without window_id (a key posted to the HWND doesn't reach WebView2).",
+      "learn": {},
+      "steps": [
+        { "action": "key", "key": "x", "window_id": "$WINDOW", "only": ["linux"] },
+        { "action": "key", "key": "x", "only": ["windows"] },
+        { "action": "sleep", "seconds": 0.3 }
+      ]
+    },
+    {
+      "learn": {
+        "new_tab": { "name": "New tab" }
+      },
+      "steps": [
+        { "action": "click", "target": "new_tab" },
+        { "action": "key", "key": "n", "window_id": "$WINDOW", "only": ["linux"] },
+        { "action": "key", "key": "e", "window_id": "$WINDOW", "only": ["linux"] },
+        { "action": "key", "key": "w", "window_id": "$WINDOW", "only": ["linux"] },
+        { "action": "key", "key": "n", "only": ["windows"] },
+        { "action": "key", "key": "e", "only": ["windows"] },
+        { "action": "key", "key": "w", "only": ["windows"] },
+        { "action": "sleep", "seconds": 0.3 }
+      ]
+    },
+    {
+      "id": "open_save_as",
+      "note": "Windows: invoking the menu bar's File through UIA doesn't open it, so use real keys: F10 (File focused), Down (menu open on New Window), Down x7 to Save As (New Window, New Tab, Open..., Open Recent, Close Tab, Close Other Tabs, Save, Save As...), Return. Linux: the menu bar's File is an AT-SPI 'menu'; give the popup a beat before activating its item or the activation is lost. GTK's Save dialog is not a separate window there (see save_dialog), so the wait is Windows-only.",
+      "learn": {
+        "file_menu": { "name": "File", "role": "menu", "only": ["linux"] },
+        "save_as": { "name": "Save As...", "only": ["linux"] }
+      },
+      "steps": [
+        { "action": "click", "target": "file_menu", "only": ["linux"] },
+        { "action": "sleep", "seconds": 0.5, "only": ["linux"] },
+        { "action": "click", "target": "save_as", "only": ["linux"] },
+        { "action": "sleep", "seconds": 1.5, "only": ["linux"] },
+        { "action": "key", "key": "F10", "only": ["windows"] },
+        { "action": "sleep", "seconds": 0.3, "only": ["windows"] },
+        { "action": "key", "key": "Down", "only": ["windows"] },
+        { "action": "sleep", "seconds": 0.3, "only": ["windows"] },
+        { "action": "key", "key": "Down", "only": ["windows"] },
+        { "action": "key", "key": "Down", "only": ["windows"] },
+        { "action": "key", "key": "Down", "only": ["windows"] },
+        { "action": "key", "key": "Down", "only": ["windows"] },
+        { "action": "key", "key": "Down", "only": ["windows"] },
+        { "action": "key", "key": "Down", "only": ["windows"] },
+        { "action": "key", "key": "Down", "only": ["windows"] },
+        { "action": "sleep", "seconds": 0.3, "only": ["windows"] },
+        { "action": "key", "key": "Return", "only": ["windows"] },
+        { "action": "wait_for_window", "pattern": { "windows": "Save As", "linux": null }, "timeout": 5 }
+      ]
+    },
+    {
+      "id": "save_dialog",
+      "window": { "windows": "Save As", "linux": null },
+      "note": "Native Save dialog. Windows: a separate window; three elements are named 'File name:' (label, combobox, edit), so the field needs role 'textfield'. Linux: GTK's chooser is a 'file chooser' child named 'Save File' inside the app's own AT-SPI application (no separate window, so no `window` here). Its name entry is an unnamed 'text' that has focus when the dialog opens (the chooser holds two more unnamed 'text's for New Folder and Rename), and its 'Save' button shares its name with the toolbar's, so Linux types into the focused text and confirms with Return. GTK's replace prompt is in-process too.",
+      "learn": {
+        "name_field": { "name": { "windows": "File name:", "linux": null }, "role": { "windows": "textfield", "linux": "text" }, "state": { "linux": "focused" } },
+        "save_button": { "name": "Save", "role": { "windows": "button" }, "only": ["windows"] }
+      },
+      "steps": [
+        { "action": "type", "target": "name_field", "text": "$target_path" },
+        { "action": "click", "target": "save_button", "only": ["windows"] },
+        { "action": "key", "key": "Return", "window_id": "$WINDOW", "only": ["linux"] },
+        { "action": "sleep", "seconds": 1 },
+        { "action": "wait_for_window", "pattern": { "windows": "Confirm Save As", "linux": null }, "timeout": 5 }
+      ]
+    },
+    {
+      "id": "os_replace",
+      "window": { "windows": "Confirm Save As", "linux": null },
+      "note": "OS replace prompt (Windows 'Confirm Save As' → Yes; GTK → Replace). Then MarkTheCrab's own prompt: a separate window titled 'Unsaved changes' on Windows, an in-page dialog on Linux (so wait for its Cancel button there).",
+      "learn": {
+        "os_replace": { "name": { "windows": "Yes", "linux": "Replace" }, "role": { "windows": "button" } }
+      },
+      "steps": [
+        { "action": "click", "target": "os_replace" },
+        { "action": "wait_for_window", "pattern": { "windows": "Unsaved changes", "linux": null }, "timeout": 5 },
+        { "action": "wait_for_element", "window_id": "$WINDOW", "name": "Cancel", "timeout": 5, "only": ["linux"] }
+      ]
+    },
+    {
+      "window": { "windows": "Unsaved changes", "linux": null },
+      "learn": {
+        "mtc_cancel": { "name": "Cancel", "role": { "windows": "button" } }
+      },
+      "steps": [
+        { "action": "click", "target": "mtc_cancel" },
+        { "action": "sleep", "seconds": 1 }
+      ]
+    },
+    {
+      "note": "Cancel wrote nothing and both tabs survive (tab names are plain titles since 2b1c250).",
+      "checks": [
+        { "shell": "grep -qx 'original' \"$SMOKE/style.md\"" },
+        { "present": { "name": "style.md", "role": { "windows": "tabitem", "linux": "page tab" } } },
+        { "present": { "name": "Untitled", "role": { "windows": "tabitem", "linux": "page tab" } } }
+      ]
+    },
+    { "repeat": "open_save_as" },
+    { "repeat": "save_dialog" },
+    {
+      "window": { "windows": "Confirm Save As", "linux": null },
+      "note": "Second pass: this time answer MarkTheCrab's prompt with Replace. On Linux the only 'Replace' left once GTK's prompt is gone is ours, so wait for GTK's to go before learning.",
+      "learn": {
+        "os_replace": { "name": { "windows": "Yes", "linux": "Replace" }, "role": { "windows": "button" } }
+      },
+      "steps": [
+        { "action": "click", "target": "os_replace" },
+        { "action": "wait_for_window", "pattern": { "windows": "Unsaved changes", "linux": null }, "timeout": 5 },
+        { "action": "sleep", "seconds": 1, "only": ["linux"] },
+        { "action": "wait_for_element", "window_id": "$WINDOW", "name": "Replace", "timeout": 5, "only": ["linux"] }
+      ]
+    },
+    {
+      "window": { "windows": "Unsaved changes", "linux": null },
+      "learn": {
+        "mtc_replace": { "name": "Replace", "role": { "windows": "button" } }
+      },
+      "steps": [
+        { "action": "click", "target": "mtc_replace" },
+        { "action": "sleep", "seconds": 5 }
+      ]
+    },
+    {
+      "note": "Replace wrote the new tab's text, closed tab A, and no 'modified outside' prompt followed within 5 s (on Linux that prompt is in-page, so check the element).",
+      "checks": [
+        { "shell": "grep -q 'new' \"$SMOKE/style.md\"" },
+        { "no_window": "External changes", "only": ["windows"] },
+        { "absent": { "name": "External changes" }, "only": ["linux"] }
+      ]
+    },
+    {
+      "note": "Reopen under another spelling from a fresh tab. Windows: the Open dialog's 'Open' is a split button whose UIA invoke doesn't open the file; press Return in the name field instead (real key, no window_id). Linux: GTK's Open dialog has no name entry until Ctrl+L (xdotool chord, Linux only) reveals the location entry, focused.",
+      "learn": {
+        "new_tab": { "name": "New tab" },
+        "open_file": { "name": "Open file" }
+      },
+      "steps": [
+        { "action": "click", "target": "new_tab" },
+        { "action": "sleep", "seconds": 0.3 },
+        { "action": "click", "target": "open_file" },
+        { "action": "wait_for_window", "pattern": { "windows": "Open", "linux": null }, "timeout": 5 },
+        { "action": "sleep", "seconds": 1.5, "only": ["linux"] },
+        { "action": "key", "key": "ctrl+l", "window_id": "$WINDOW", "only": ["linux"] },
+        { "action": "sleep", "seconds": 0.5, "only": ["linux"] }
+      ]
+    },
+    {
+      "window": { "windows": "Open", "linux": null },
+      "learn": {
+        "name_field": { "name": { "windows": "File name:", "linux": null }, "role": { "windows": "textfield", "linux": "text" }, "state": { "linux": "focused" } }
+      },
+      "steps": [
+        { "action": "click", "target": "name_field", "only": ["windows"] },
+        { "action": "type", "target": "name_field", "text": "$reopen_path" },
+        { "action": "key", "key": "Return", "only": ["windows"] },
+        { "action": "sleep", "seconds": 0.5, "only": ["linux"], "note": "let GTK's location-entry completion settle before Return, or Return is spent on it" },
+        { "action": "key", "key": "Return", "window_id": "$WINDOW", "only": ["linux"] },
+        { "action": "sleep", "seconds": 1.5 }
+      ]
+    }
+  ],
+  "checks": [
+    { "windows": 1 },
+    { "present": { "role": { "linux": "page tab", "windows": "tabitem" }, "count": 2 }, "note": "Exactly two tabs: no third one was added by re-opening." },
+    { "present": { "name": "style.md", "role": { "linux": "page tab", "windows": "tabitem" }, "state": "selected", "count": 1 } },
+    { "present": { "name": "Untitled", "role": { "linux": "page tab", "windows": "tabitem" }, "count": 1 } }
+  ],
+  "notes": "Windows run 2026-11-09 confirmed every native-dialog name above. Linux run 2026-11-09 (SteamOS, WebKitGTK 2.54) confirmed the Linux ones; the key difference is that GTK's file dialogs and MarkTheCrab's own prompts are not separate windows on Linux, so `window` and `wait_for_window` patterns are null there and the phase runs against $WINDOW. The MarkTheCrab prompt's buttons come from ask() (okLabel 'Replace', cancelLabel 'Cancel'), so those names are ours and stable."
+}

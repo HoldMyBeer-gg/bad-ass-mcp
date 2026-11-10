@@ -27,6 +27,30 @@ Planned before scripts can be shared (BAM strings, `.bam` packages):
   or a package.
 - **Preview before run:** decoding prints the steps and runs nothing.
 
+## Validating
+
+Scripts and configs follow a JSON Schema (`src/bad_ass_mcp/bam/schema/`,
+published at `https://bam.holdmybeer.gg/schema/v1/script.json` and
+`.../config.json`). `run` checks every script and the config before it
+launches anything and exits 2 on a problem; `check` does the same without
+running:
+
+```
+bad-ass-mcp check smoke/ [--config bam.json] [--json]
+```
+
+```
+emoji.json: phases[0].steps[1]: unknown key 'taget' (did you mean 'target'?)
+emoji.json: phases[0].steps[0].action: unknown action 'clik' (did you mean 'click'?)
+emoji.json: phases[0].steps[2].target: 'serch' isn't learned in this phase (did you mean 'search'?)
+```
+
+Beyond shape it checks that every `target` is learned in its phase and that
+`repeat` names an earlier phase's `id`. Add
+`"$schema": "https://bam.holdmybeer.gg/schema/v1/script.json"` to a script
+(or `config.json` to a `bam.json`) for autocomplete and inline errors in
+VS Code and JetBrains.
+
 ## Running
 
 From source: `uv sync --extra macos` or `uv sync --extra windows` first. Linux

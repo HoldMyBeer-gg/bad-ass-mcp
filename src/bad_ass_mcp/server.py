@@ -491,11 +491,16 @@ def press_key(key: str, window_id: str | None = None) -> dict:
 
 
 def main():
-    # `bad-ass-mcp run ...` runs BAM scripts; anything else starts the server.
+    # `bad-ass-mcp run ...` runs BAM scripts, `check` validates them;
+    # anything else starts the server.
     if len(sys.argv) > 1 and sys.argv[1] == "run":
         from .bam.cli import main as run_main
 
         sys.exit(run_main(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "check":
+        from .bam.cli import check_main
+
+        sys.exit(check_main(sys.argv[2:]))
     mcp.run()
 
 
