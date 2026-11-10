@@ -1840,3 +1840,20 @@ def test_user_input_stops_the_whole_suite(tmp_path):
     )
     run = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
     assert [s["status"] for s in run["scripts"]] == ["FAIL", "NOT_RUN"]
+
+
+def test_progress_bar_shows_failures_not_just_how_far_along():
+    """'100%' next to a failure read like success (Michael). The filled part
+    is split by result and the counts are spelled out."""
+    from bad_ass_mcp.bam.cli import render_bar
+
+    plain = render_bar(4, 4, width=20, color=False, results=[(2, "PASS"), (2, "FAIL")])
+    assert "100% done" in plain
+    assert "1 passed" in plain and "1 failed" in plain
+    coloured = render_bar(4, 4, width=20, color=True, results=[(2, "PASS"), (2, "FAIL")])
+    green = "\x1b[38;2;33;200;66m"  # medium green
+    red = "\x1b[38;2;212;82;77m"  # dark red
+    assert green + "█" * 10 in coloured and red + "█" * 10 in coloured
+    # A script still running shows in cyan after the finished ones.
+    mid = render_bar(3, 4, width=20, color=False, results=[(2, "PASS")])
+    assert mid.count("█") == 15 and "1 passed" in mid and "failed" not in mid

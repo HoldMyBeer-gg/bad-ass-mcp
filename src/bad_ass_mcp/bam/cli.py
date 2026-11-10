@@ -43,15 +43,39 @@ def use_color(stream) -> bool:
 
 
 def render_bar(
-    done: int, total: int, *, width: int = 30, label: str = "", color: bool = True
+    done: int,
+    total: int,
+    *,
+    width: int = 30,
+    label: str = "",
+    color: bool = True,
+    results: list[tuple[int, str]] | None = None,
 ) -> str:
-    """`[████░░░░]  25% label`, in TMS9928A colours when `color`."""
+    """`[████░░░░]  25% done · 1 passed · 1 failed label`, in TMS9928A colours.
+
+    `results` is (units, status) per finished script: the filled part is
+    split by result (green pass, red fail, grey other), with the script still
+    running in cyan after them, so "100%" can't be read as "all passed"."""
     frac = 1.0 if total <= 0 else max(0.0, min(1.0, done / total))
     filled = round(frac * width)
-    bar = _fg("cyan", "█" * filled, color) + _fg("dark_blue", "░" * (width - filled), color)
-    pct = _fg("light_yellow", f"{round(frac * 100):3d}%", color)
+    parts, used = [], 0
+    for units, status in results or []:
+        n = min(filled - used, round(units / total * width) if total > 0 else 0)
+        if n > 0:
+            parts.append(_fg(_STATUS_COLOR.get(status, "light_yellow"), "█" * n, color))
+            used += n
+    if filled > used:
+        parts.append(_fg("cyan", "█" * (filled - used), color))
+    bar = "".join(parts) + _fg("dark_blue", "░" * (width - filled), color)
+    pct = _fg("light_yellow", f"{round(frac * 100):3d}% done", color)
+    counts = []
+    for status, word in (("PASS", "passed"), ("FAIL", "failed")):
+        n = sum(1 for _, s in results or [] if s == status)
+        if n:
+            counts.append(_fg(_STATUS_COLOR[status], f"{n} {word}", color))
+    tally = "".join(f" · {c}" for c in counts)
     frame = _fg("dark_blue", "[", color), _fg("dark_blue", "]", color)
-    return f"{frame[0]}{bar}{frame[1]} {pct} {label}".rstrip()
+    return f"{frame[0]}{bar}{frame[1]} {pct}{tally} {label}".rstrip()
 
 
 def _duration(seconds: float) -> str:
@@ -267,13 +291,22 @@ def main(argv: list[str]) -> int:
     color = use_color(sys.stdout)
     live = sys.stderr.isatty()
 
+    finished: list[tuple[int, str]] = []
+    mark = [0]  # units done when the last script finished
+
     def progress(e: dict) -> None:
+        if e["kind"] == "script":
+            finished.append((e["done"] - mark[0], e.get("status", "")))
+            mark[0] = e["done"]
         if not live:
             return
         label = e.get("script") or e.get("name") or ""
         if e["kind"] == "phase" and e.get("phase"):
             label += f" · phase {e['phase']}"
-        sys.stderr.write("\r\x1b[2K" + render_bar(e["done"], e["total"], label=label, color=color))
+        sys.stderr.write(
+            "\r\x1b[2K"
+            + render_bar(e["done"], e["total"], label=label, color=color, results=finished)
+        )
         sys.stderr.flush()
 
     run_dir = run_suite(
