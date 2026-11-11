@@ -728,7 +728,13 @@ class WindowsBackend(DesktopBackend):
         if root is None:
             raise ValueError(f"No window found for id {window_id!r}")
         depth_cap = self._WALK_MAX_DEPTH if max_depth is None else max_depth
-        return prune_tree(self._walk(root, max_depth=depth_cap, hwnd=hwnd))
+
+        def walk():
+            return prune_tree(self._walk(root, max_depth=depth_cap, hwnd=hwnd))
+
+        if target != hwnd or self._is_chromium_window(hwnd):
+            return _until_populated(walk)
+        return walk()
 
     def find_elements(
         self, window_id: str, *, role=None, name=None, index=0
@@ -1437,6 +1443,13 @@ def _first_verified(text, attempts, read_back, settle: float = 0.15) -> ActionRe
         value = read_back()
         if value is None or value == text or (start is not None and value == start + text):
             return ActionResult(ok=True, detail=name)
+        if _masked(value) and not _masked(text):
+            # A password field reads back one bullet per character, never
+            # the text: judge by length, or it falls through to a strategy
+            # that types the text a second time.
+            base = len(start) if start and _masked(start) else 0
+            if len(value) in (len(text), base + len(text)):
+                return ActionResult(ok=True, detail=name)
         tried.append(f"{name}: accepted, but the field reads {value!r}")
     return ActionResult(ok=False, error="Text not set. Tried " + "; ".join(tried))
 
@@ -1444,6 +1457,24 @@ def _first_verified(text, attempts, read_back, settle: float = 0.15) -> ActionRe
 _INPUT_KEYBOARD = 1
 _KEYEVENTF_KEYUP = 0x0002
 _KEYEVENTF_UNICODE = 0x0004
+
+
+def _masked(value) -> bool:
+    """A password field's read-back: nothing but mask characters."""
+    return isinstance(value, str) and bool(value) and set(value) <= {"•", "●", "*"}
+
+
+def _until_populated(walk, timeout: float = 2.0):
+    """Re-walk until the tree has children or `timeout` passes. A fresh
+    WebView2/Chromium window can report its root with no children until it
+    has built its UIA tree; find_elements happened to give it that time,
+    get_tree didn't."""
+    deadline = time.monotonic() + timeout
+    tree = walk()
+    while not tree.children and time.monotonic() < deadline:
+        time.sleep(0.2)
+        tree = walk()
+    return tree
 
 
 def _unicode_key_inputs(text: str):

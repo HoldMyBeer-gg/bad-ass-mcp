@@ -495,3 +495,76 @@ def test_clipboard_calls_get_pointer_sized_types():
     assert k.GlobalLock.argtypes == (ctypes.c_void_p,)
     assert k.GlobalUnlock.argtypes == (ctypes.c_void_p,)
     assert u.SetClipboardData.argtypes == (ctypes.c_uint, ctypes.c_void_p)
+
+
+# ── password fields read back masked (rusty-win-crab, WebView2) ──────
+
+
+def test_password_field_stops_at_setvalue_when_the_mask_length_matches():
+    """UIA returns '••••' for a password input. Comparing to the plain text
+    fell through to the keys strategy, which typed it a second time."""
+    from bad_ass_mcp.backend.windows import _first_verified
+
+    state = {"value": ""}
+
+    def set_value():
+        state["value"] = "•" * 40
+
+    def keys():
+        state["value"] += "•" * 40
+
+    r = _first_verified(
+        "t" * 40, [("SetValue", set_value), ("keys", keys)], lambda: state["value"], settle=0
+    )
+    assert r.ok and r.detail == "SetValue"
+    assert state["value"] == "•" * 40
+
+
+def test_password_field_with_the_wrong_mask_length_is_not_a_pass():
+    from bad_ass_mcp.backend.windows import _first_verified
+
+    state = {"value": ""}
+
+    def doubled():
+        state["value"] = "•" * 80
+
+    r = _first_verified("t" * 40, [("keys", doubled)], lambda: state["value"], settle=0)
+    assert not r.ok
+
+
+def test_masked_append_counts_from_the_starting_mask():
+    from bad_ass_mcp.backend.windows import _first_verified
+
+    state = {"value": "•" * 3}
+
+    def keys():
+        state["value"] += "•" * 4
+
+    r = _first_verified("abcd", [("keys", keys)], lambda: state["value"], settle=0)
+    assert r.ok
+
+
+# ── get_tree on a WebView2 window that hasn't built its tree yet ─────
+
+
+def test_until_populated_retries_an_empty_tree():
+    from bad_ass_mcp.backend.windows import _until_populated
+    from bad_ass_mcp.types import ElementHandle
+
+    empty = ElementHandle(id="r", role="pane", name="Hold My Beer - Web content")
+    full = ElementHandle(
+        id="r", role="pane", name="x", children=[ElementHandle(id="c", role="button", name="Go")]
+    )
+    walks = iter([empty, empty, full])
+    with patch("time.sleep"):
+        tree = _until_populated(lambda: next(walks), timeout=2.0)
+    assert tree is full
+
+
+def test_until_populated_gives_up_and_returns_the_empty_tree():
+    from bad_ass_mcp.backend.windows import _until_populated
+    from bad_ass_mcp.types import ElementHandle
+
+    empty = ElementHandle(id="r", role="pane", name="x")
+    tree = _until_populated(lambda: empty, timeout=0.05)
+    assert tree is empty
