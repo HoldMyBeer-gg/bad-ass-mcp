@@ -1920,3 +1920,35 @@ def test_a_user_stop_logs_the_timing_that_triggered_it(tmp_path):
     # Ages in seconds before the check: the foreign input is newer than ours.
     assert user["last_input_age_s"] < user["ours_age_s"]
     assert set(user) >= {"last_input_age_s", "ours_age_s", "grace_left_s"}
+
+
+class _SparseFirst(FakeBackend):
+    """A web view mid-transition: the first few tree reads come back empty
+    while WebKit rebuilds its accessibility cache."""
+
+    def __init__(self, empty_reads: int):
+        super().__init__()
+        self._empty = empty_reads
+
+    def find_elements(self, *a, **kw):
+        if self._empty > 0:
+            self._empty -= 1
+            return []
+        return super().find_elements(*a, **kw)
+
+
+def test_present_checks_retry_through_a_momentarily_empty_tree(tmp_path):
+    script = write(
+        tmp_path,
+        "sparse",
+        {"phases": [], "checks": [{"present": {"role": "button", "count": 2}}]},
+    )
+    cfg = {**CONFIG, "step_timeout": 2}
+    r = run_script(_SparseFirst(empty_reads=3), script, "linux", cfg, tmp_path / "out")
+    assert r["status"] == "PASS", r
+
+
+def test_present_check_still_fails_after_step_timeout(tmp_path):
+    script = write(tmp_path, "gone", {"phases": [], "checks": [{"present": {"name": "Nope"}}]})
+    r = run_script(FakeBackend(), script, "linux", CONFIG, tmp_path / "out")
+    assert r["status"] == "FAIL" and "Nope" in r["failure"]["reason"]

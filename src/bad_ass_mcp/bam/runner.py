@@ -679,6 +679,16 @@ class _Run:
                 )["x"]
                 spec = c["present" if want_present else "absent"]
                 found = self.find(window, desc)
+                if want_present:
+                    # Web views (WKWebView mid-transition) can briefly expose
+                    # an almost empty tree: retry until step_timeout.
+                    want = int(spec["count"]) if "count" in spec else None
+                    deadline = time.monotonic() + float(self.config.get("step_timeout", 5))
+                    while (
+                        (len(found) != want) if want is not None else not found
+                    ) and time.monotonic() < deadline:
+                        time.sleep(0.2)
+                        found = self.find(window, desc)
                 if want_present and "count" in spec:
                     if len(found) != int(spec["count"]):
                         raise ScriptFailure(
