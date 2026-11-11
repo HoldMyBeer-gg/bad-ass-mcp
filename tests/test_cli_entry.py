@@ -58,12 +58,43 @@ def test_server_starts_when_a_client_pipes_stdin():
     run.assert_called_once()
 
 
-def test_bad_config_json_is_one_readable_line(tmp_path):
+def test_bad_config_json_is_one_readable_line(tmp_path, capsys):
     from bad_ass_mcp.bam.cli import parse
 
     cfg = tmp_path / "bad.json"
     cfg.write_text('{"window": "x",\n  oops}')
+    with pytest.raises(SystemExit):
+        parse(["--config", str(cfg), str(tmp_path)])
+    msg = capsys.readouterr().err
+    assert "bad.json" in msg and "not valid JSON" in msg and "line 2" in msg
+
+
+def test_bad_config_json_exits_2_like_other_config_errors(tmp_path, capsys):
+    from bad_ass_mcp.bam.cli import parse
+
+    cfg = tmp_path / "bad.json"
+    cfg.write_text("{oops")
     with pytest.raises(SystemExit) as e:
         parse(["--config", str(cfg), str(tmp_path)])
-    msg = str(e.value.code)
-    assert "bad.json" in msg and "not valid JSON" in msg and "line 2" in msg
+    assert e.value.code == 2
+    assert "not valid JSON" in capsys.readouterr().err
+
+
+def test_the_run_is_stamped_with_the_scripts_repo_commit(tmp_path):
+    """Run from the bad-ass-mcp checkout, BAM stamped bad-ass-mcp's HEAD
+    instead of the app's. The scripts' repo is the one under test."""
+    import subprocess
+
+    from bad_ass_mcp.bam.cli import _commit
+
+    repo = tmp_path / "app"
+    (repo / "smoke").mkdir(parents=True)
+    git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "init", "-q"], check=True)
+    (repo / "smoke" / "a.json").write_text("{}")
+    subprocess.run([*git, "add", "."], check=True)
+    subprocess.run([*git, "commit", "-qm", "x"], check=True)
+    head = subprocess.run(
+        [*git, "rev-parse", "--short", "HEAD"], capture_output=True, text=True
+    ).stdout.strip()
+    assert _commit([repo / "smoke" / "a.json"]) == head

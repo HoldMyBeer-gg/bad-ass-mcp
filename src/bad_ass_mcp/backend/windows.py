@@ -846,10 +846,10 @@ class WindowsBackend(DesktopBackend):
             # egui/winit. Needs the window in the foreground.
             element.SetFocus()
             time.sleep(0.05)
-            for ch in text:
-                r = self.press_key(ch)
-                if not r.ok:
-                    raise RuntimeError(r.error or "press_key failed")
+            inputs = _unicode_key_inputs(text)
+            sent = _user32.SendInput(len(inputs), inputs, ctypes.sizeof(_INPUT))
+            if sent != len(inputs):
+                raise RuntimeError(f"SendInput sent {sent} of {len(inputs)} events")
 
         return _first_verified(
             text,
@@ -1418,9 +1418,13 @@ class WindowsBackend(DesktopBackend):
 
 
 def _first_verified(text, attempts, read_back, settle: float = 0.15) -> ActionResult:
-    """Run (name, fn) attempts in order until the field reads back with
-    `text` in it. A strategy that raises is skipped. When read_back gives
-    None (no readable value), the first attempt that ran is trusted."""
+    """Run (name, fn) attempts in order until the field reads exactly `text`,
+    or its starting content plus `text` (strategies that type append). A
+    field holding anything else, such as a half-typed attempt followed by a
+    full one, is a failure, never a pass. A strategy that raises is skipped.
+    When read_back gives None (no readable value), the first attempt that
+    ran is trusted. The winner is named in `detail`."""
+    start = read_back()
     tried: list[str] = []
     for name, fn in attempts:
         try:
@@ -1431,7 +1435,51 @@ def _first_verified(text, attempts, read_back, settle: float = 0.15) -> ActionRe
         if settle:
             time.sleep(settle)
         value = read_back()
-        if value is None or text in value:
-            return ActionResult(ok=True)
+        if value is None or value == text or (start is not None and value == start + text):
+            return ActionResult(ok=True, detail=name)
         tried.append(f"{name}: accepted, but the field reads {value!r}")
     return ActionResult(ok=False, error="Text not set. Tried " + "; ".join(tried))
+
+
+_INPUT_KEYBOARD = 1
+_KEYEVENTF_KEYUP = 0x0002
+_KEYEVENTF_UNICODE = 0x0004
+
+
+def _unicode_key_inputs(text: str):
+    """SendInput keyboard events that type `text` as characters, not keys:
+    KEYEVENTF_UNICODE carries the UTF-16 code unit in wScan, so case and
+    symbols need no Shift and don't depend on the keyboard layout."""
+    units = [
+        int.from_bytes(text.encode("utf-16-le")[i : i + 2], "little")
+        for i in range(0, len(text.encode("utf-16-le")), 2)
+    ]
+    inputs = (_INPUT * (2 * len(units)))()
+    for i, u in enumerate(units):
+        for j, flags in enumerate((_KEYEVENTF_UNICODE, _KEYEVENTF_UNICODE | _KEYEVENTF_KEYUP)):
+            ev = inputs[2 * i + j]
+            ev.type = _INPUT_KEYBOARD
+            ev.ki.wVk = 0
+            ev.ki.wScan = u
+            ev.ki.dwFlags = flags
+            ev.ki.time = 0
+            ev.ki.dwExtraInfo = 0
+    return inputs
+
+
+def _declare_clipboard_types(kernel32, user32) -> None:
+    """Pointer-sized types for the clipboard calls. ctypes defaults restype
+    to C int, which truncates a 64-bit HGLOBAL or pointer, and the memmove
+    into it then writes to null."""
+    vp = _ct.c_void_p
+    kernel32.GlobalAlloc.restype = vp
+    kernel32.GlobalAlloc.argtypes = (_ct.c_uint, _ct.c_size_t)
+    kernel32.GlobalLock.restype = vp
+    kernel32.GlobalLock.argtypes = (vp,)
+    kernel32.GlobalUnlock.argtypes = (vp,)
+    user32.SetClipboardData.restype = vp
+    user32.SetClipboardData.argtypes = (_ct.c_uint, vp)
+
+
+if _HAS_UIA:
+    _declare_clipboard_types(_kernel32, ctypes.windll.user32)

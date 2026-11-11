@@ -106,7 +106,7 @@ def test_a_passing_script_saves_proof_screenshots_per_phase(tmp_path):
     r = run_script(FakeBackend(), script, "linux", CONFIG, out)
     assert r["status"] == "PASS", r
     assert (out / "phase-1.png").exists() and (out / "phase-2.png").exists()
-    assert json.loads((out / "result.json").read_text())["status"] == "PASS"
+    assert json.loads((out / "result.json").read_text(encoding="utf-8"))["status"] == "PASS"
 
 
 def test_a_missing_element_fails_with_where_and_evidence(tmp_path):
@@ -123,7 +123,7 @@ def test_a_missing_element_fails_with_where_and_evidence(tmp_path):
     assert r["failure"]["phase"] == 1
     assert "Ghost button" in r["failure"]["reason"]
     assert (out / "fail.png").exists()
-    assert "Fake App" in (out / "tree.json").read_text()
+    assert "Fake App" in (out / "tree.json").read_text(encoding="utf-8")
 
 
 def test_expect_mismatch_and_saved_values(tmp_path):
@@ -244,7 +244,7 @@ def test_suite_writes_numbered_folders_and_run_json(tmp_path):
         tmp_path / "results",
         commit="abc123",
     )
-    run = json.loads((run_dir / "run.json").read_text())
+    run = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
     assert run["commit"] == "abc123" and run["platform"] == "linux"
     assert [(s["name"], s["status"]) for s in run["scripts"]] == [
         ("a-good", "PASS"),
@@ -260,7 +260,7 @@ def test_fail_fast_stops_after_the_first_failure(tmp_path):
     run_dir = run_suite(
         FakeBackend(), suite_scripts(tmp_path), "linux", cfg, tmp_path / "results", commit="abc"
     )
-    statuses = [s["status"] for s in json.loads((run_dir / "run.json").read_text())["scripts"]]
+    statuses = [s["status"] for s in json.loads((run_dir / "run.json").read_text(encoding="utf-8"))["scripts"]]
     assert statuses == ["PASS", "FAIL", "NOT_RUN"]
 
 
@@ -269,7 +269,7 @@ def test_first_script_fail_fast_only_stops_when_the_first_one_fails(tmp_path):
     run_dir = run_suite(
         FakeBackend(), suite_scripts(tmp_path), "linux", cfg, tmp_path / "results", commit="abc"
     )
-    statuses = [s["status"] for s in json.loads((run_dir / "run.json").read_text())["scripts"]]
+    statuses = [s["status"] for s in json.loads((run_dir / "run.json").read_text(encoding="utf-8"))["scripts"]]
     assert statuses == ["PASS", "FAIL", "PASS"]
 
 
@@ -317,7 +317,7 @@ def test_retries_mark_a_flaky_pass(tmp_path):
         tmp_path / "results",
         commit="abc",
     )
-    s = json.loads((run_dir / "run.json").read_text())["scripts"][0]
+    s = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))["scripts"][0]
     assert s["status"] == "PASS" and s["attempts"] == 2
 
 
@@ -325,7 +325,7 @@ def test_report_shows_green_passes_and_the_red_failure(tmp_path):
     run_dir = run_suite(
         FakeBackend(), suite_scripts(tmp_path), "linux", CONFIG, tmp_path / "results", commit="abc"
     )
-    html = write_report(run_dir).read_text()
+    html = write_report(run_dir).read_text(encoding="utf-8")
     assert html.count('class="card pass"') == 2
     assert html.count('class="card fail"') == 1
     assert "02_b-bad/fail.png" in html
@@ -439,7 +439,7 @@ def test_run_json_has_totals_and_duration(tmp_path):
     run_dir = run_suite(
         FakeBackend(), suite_scripts(tmp_path), "linux", CONFIG, tmp_path / "results", commit="abc"
     )
-    run = json.loads((run_dir / "run.json").read_text())
+    run = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
     assert run["totals"] == {"PASS": 2, "FAIL": 1}
     assert isinstance(run["seconds"], float)
     assert run["started_at"] <= run["finished_at"]
@@ -470,7 +470,7 @@ def test_report_shows_phase_names_and_times(tmp_path):
     run_dir = run_suite(
         FakeBackend(), [script], "linux", CONFIG, tmp_path / "results", commit="abc"
     )
-    html = write_report(run_dir).read_text()
+    html = write_report(run_dir).read_text(encoding="utf-8")
     assert "open settings" in html
 
 
@@ -563,7 +563,7 @@ def test_report_screenshots_open_in_a_lightbox_with_prev_next_close(tmp_path):
     run_dir = run_suite(
         FakeBackend(), suite_scripts(tmp_path), "linux", CONFIG, tmp_path / "results", commit="abc"
     )
-    html = write_report(run_dir).read_text()
+    html = write_report(run_dir).read_text(encoding="utf-8")
     assert 'id="lightbox"' in html
     for label in ("Previous screenshot", "Next screenshot", "Close"):
         assert f'aria-label="{label}"' in html
@@ -664,7 +664,7 @@ def test_per_platform_variables_expand_SMOKE_and_reach_steps_and_shell(tmp_path)
     assert r["status"] == "PASS", r
     smoke = str(out / "files")
     assert backend._values["txt-name"] == f"{smoke}/sub/../a.md"
-    assert (out / "files" / "out.txt").read_text() == f"{smoke}/sub/../a.md"
+    assert (out / "files" / "out.txt").read_text(encoding="utf-8") == f"{smoke}/sub/../a.md"
 
 
 def test_a_failing_shell_step_fails_at_that_step(tmp_path):
@@ -937,7 +937,7 @@ def test_every_run_writes_a_timeline_of_phases(tmp_path):
     )
     out = tmp_path / "out"
     run_script(FakeBackend(), script, "linux", CONFIG, out)
-    events = json.loads((out / "timeline.json").read_text())
+    events = json.loads((out / "timeline.json").read_text(encoding="utf-8"))
     phases = [e for e in events if e["event"] == "phase"]
     assert [p["name"] for p in phases] == ["first", "second"]
     assert phases[0]["t"] <= phases[1]["t"]
@@ -963,7 +963,7 @@ def test_demo_mode_logs_each_step_with_bounds_and_paces_it(tmp_path):
     out = tmp_path / "out"
     r = run_script(FakeBackend(), script, "linux", {**CONFIG, "demo": True, "demo_pace": 0.05}, out)
     assert r["status"] == "PASS", r
-    steps = [e for e in json.loads((out / "timeline.json").read_text()) if e["event"] == "step"]
+    steps = [e for e in json.loads((out / "timeline.json").read_text(encoding="utf-8")) if e["event"] == "step"]
     assert [s["action"] for s in steps] == ["click", "key"]
     assert steps[0]["phase"] == "press ok" and steps[0]["target"] == "ok"
     assert steps[0]["bounds"] == [10.0, 10.0, 80.0, 30.0]  # FakeBackend's OK button
@@ -1148,7 +1148,7 @@ def test_report_lists_steps_and_expectations_and_marks_the_failing_step(tmp_path
         },
     )
     run_dir = run_suite(FakeBackend(), [script], "linux", CONFIG, tmp_path / "res", commit="c")
-    html = write_report(run_dir).read_text()
+    html = write_report(run_dir).read_text(encoding="utf-8")
     assert "Typing a name and reading it back" in html
     assert "Type &quot;crab&quot; into “Name”" in html
     assert "“Name” reads &quot;lobster&quot;" in html
@@ -1174,7 +1174,7 @@ def test_a_learn_failure_marks_the_phase_steps_not_run(tmp_path):
     res = run_script(FakeBackend(), script, "linux", CONFIG, tmp_path / "out")
     assert res["failure"]["action"] == "learn"
     run_dir = run_suite(FakeBackend(), [script], "linux", CONFIG, tmp_path / "res", commit="c")
-    html = write_report(run_dir).read_text()
+    html = write_report(run_dir).read_text(encoding="utf-8")
     assert '<li class="step">Click “Missing”</li>' in html
     assert "step ok" not in html
 
@@ -1202,7 +1202,7 @@ def test_a_learn_failure_says_what_was_missing_inside_the_phase(tmp_path):
         {"phases": [{"name": "p", "learn": {"x": {"name": "Gone"}}, "steps": []}]},
     )
     run_dir = run_suite(FakeBackend(), [script], "linux", CONFIG, tmp_path / "res", commit="c")
-    html = write_report(run_dir).read_text()
+    html = write_report(run_dir).read_text(encoding="utf-8")
     assert "Couldn’t find x (name &#x27;Gone&#x27;)" in html
     # Only the mark is coloured, not the phase name.
     assert '<span class="m bad">✗</span>' in html
@@ -1299,7 +1299,7 @@ def test_report_labels_screenshots_by_the_phase_that_took_them(tmp_path):
         },
     )
     run_dir = run_suite(FakeBackend(), [script], "linux", CONFIG, tmp_path / "res", commit="c")
-    html = write_report(run_dir).read_text()
+    html = write_report(run_dir).read_text(encoding="utf-8")
     assert 'alt="click ok"' in html
     assert 'alt="nothing here"' not in html
 
@@ -1349,7 +1349,7 @@ def test_report_collapses_repeated_steps(tmp_path):
         },
     )
     run_dir = run_suite(FakeBackend(), [script], "linux", CONFIG, tmp_path / "res", commit="c")
-    html = write_report(run_dir).read_text()
+    html = write_report(run_dir).read_text(encoding="utf-8")
     assert "Press Down ×7" in html
     assert html.count("Press Down") == 1
 

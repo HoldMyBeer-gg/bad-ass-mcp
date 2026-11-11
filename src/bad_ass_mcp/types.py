@@ -53,6 +53,8 @@ class ElementHandle:
 class ActionResult:
     ok: bool
     error: str | None = None
+    # Which of several strategies did the work (e.g. type_text: "keys").
+    detail: str | None = None
 
 
 class StaleHandleError(Exception):

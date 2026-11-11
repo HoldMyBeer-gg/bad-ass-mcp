@@ -412,3 +412,86 @@ def test_type_text_skips_a_strategy_that_raises():
         "framexml", [("setvalue", boom), attempt("keys", "keys")], lambda: state["value"], settle=0
     )
     assert r.ok
+
+
+def test_type_text_rejects_a_doubled_partial_type():
+    """A strategy that half-typed, then another that appended, must not
+    pass because the text appears somewhere in the field."""
+    from bad_ass_mcp.backend.windows import _first_verified
+
+    state = {"value": ""}
+
+    def partial():
+        state["value"] += "frame"
+
+    def full():
+        state["value"] += "framexml"
+
+    r = _first_verified(
+        "framexml", [("WM_CHAR", partial), ("keys", full)], lambda: state["value"], settle=0
+    )
+    assert not r.ok
+
+
+def test_type_text_accepts_text_appended_to_existing_content():
+    from bad_ass_mcp.backend.windows import _first_verified
+
+    state = {"value": "old "}
+
+    def keys():
+        state["value"] += "framexml"
+
+    r = _first_verified("framexml", [("keys", keys)], lambda: state["value"], settle=0)
+    assert r.ok
+
+
+def test_type_text_says_which_strategy_worked():
+    from bad_ass_mcp.backend.windows import _first_verified
+
+    state = {"value": ""}
+
+    def keys():
+        state["value"] = "x"
+
+    r = _first_verified(
+        "x", [("SetValue", lambda: None), ("keys", keys)], lambda: state["value"], settle=0
+    )
+    assert r.ok and r.detail == "keys"
+
+
+def test_unicode_key_inputs_carry_case_and_need_no_shift():
+    """KEYEVENTF_UNICODE sends the character itself, so 'FrameXML' keeps its
+    capitals (VkKeyScan's shift byte was being masked off)."""
+    from bad_ass_mcp.backend.windows import _unicode_key_inputs
+
+    ins = _unicode_key_inputs("Fx")
+    assert [(i.ki.wScan, i.ki.dwFlags) for i in ins] == [
+        (ord("F"), 0x4),
+        (ord("F"), 0x4 | 0x2),
+        (ord("x"), 0x4),
+        (ord("x"), 0x4 | 0x2),
+    ]
+    assert all(i.type == 1 and i.ki.wVk == 0 for i in ins)
+
+
+def test_unicode_key_inputs_split_astral_characters_into_surrogates():
+    from bad_ass_mcp.backend.windows import _unicode_key_inputs
+
+    ins = _unicode_key_inputs("🦀")
+    assert [i.ki.wScan for i in ins] == [0xD83E, 0xD83E, 0xDD80, 0xDD80]
+
+
+def test_clipboard_calls_get_pointer_sized_types():
+    """GlobalAlloc/GlobalLock default to a C int restype, which truncates a
+    64-bit handle; memmove then wrote to null (access violation)."""
+    import ctypes
+
+    from bad_ass_mcp.backend.windows import _declare_clipboard_types
+
+    k, u = MagicMock(), MagicMock()
+    _declare_clipboard_types(k, u)
+    assert k.GlobalAlloc.restype is ctypes.c_void_p
+    assert k.GlobalLock.restype is ctypes.c_void_p
+    assert k.GlobalLock.argtypes == (ctypes.c_void_p,)
+    assert k.GlobalUnlock.argtypes == (ctypes.c_void_p,)
+    assert u.SetClipboardData.argtypes == (ctypes.c_uint, ctypes.c_void_p)

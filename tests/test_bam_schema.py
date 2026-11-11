@@ -33,11 +33,11 @@ def messages(issues):
 
 @pytest.mark.parametrize("path", SMOKE, ids=lambda p: p.stem)
 def test_real_smoke_scripts_are_valid(path):
-    assert messages(validate_script(json.loads(path.read_text()))) == []
+    assert messages(validate_script(json.loads(path.read_text(encoding="utf-8")))) == []
 
 
 def test_the_examples_in_the_docs_are_valid():
-    doc = (ROOT / "docs" / "bam.md").read_text()
+    doc = (ROOT / "docs" / "bam.md").read_text(encoding="utf-8")
     blocks = [json.loads(b) for b in re.findall(r"```json\n(.*?)```", doc, re.S)]
     scripts = [b for b in blocks if "phases" in b]
     assert scripts, "docs/bam.md should carry at least one full script example"
@@ -172,7 +172,7 @@ def test_every_runner_only_step_key_is_in_the_schema():
 def test_every_backend_action_is_in_the_schema():
     from bad_ass_mcp.bam.validate import step_keys
 
-    src = (ROOT / "src" / "bad_ass_mcp" / "backend" / "base.py").read_text()
+    src = (ROOT / "src" / "bad_ass_mcp" / "backend" / "base.py").read_text(encoding="utf-8")
     backend_actions = set(re.findall(r'action == "([a-z_]+)"', src))
     assert backend_actions <= set(step_keys())
 

@@ -126,10 +126,13 @@ def _collect(paths: list[str]) -> list[Path]:
     return out
 
 
-def _commit() -> str:
+def _commit(scripts: list[Path] | None = None) -> str:
+    """HEAD of the repo the scripts live in (the app under test), not of
+    wherever the command was typed."""
+    where = Path(scripts[0]).resolve().parent if scripts else Path.cwd()
     try:
         r = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
+            ["git", "-C", str(where), "rev-parse", "--short", "HEAD"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -175,11 +178,11 @@ def _load_config(path: str) -> dict:
     try:
         return json.loads(Path(path).read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
-        raise SystemExit(
-            f"config {path}: not valid JSON at line {e.lineno} column {e.colno}: {e.msg}"
-        ) from None
+        msg = f"config {path}: not valid JSON at line {e.lineno} column {e.colno}: {e.msg}"
     except OSError as e:
-        raise SystemExit(f"config {path}: {e.strerror or e}") from None
+        msg = f"config {path}: {e.strerror or e}"
+    print(msg, file=sys.stderr)
+    raise SystemExit(2)
 
 
 def _problems(scripts: list[Path], config_path: str | None) -> list[dict]:
@@ -343,7 +346,7 @@ def main(argv: list[str]) -> int:
         args.platform,
         args.suite_config,
         args.results,
-        commit=args.commit or _commit(),
+        commit=args.commit or _commit(args.scripts),
         resume=args.resume,
         overrides=args.overrides,
         progress=progress,
