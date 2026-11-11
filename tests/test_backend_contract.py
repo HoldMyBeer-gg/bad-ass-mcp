@@ -539,3 +539,27 @@ def test_run_sequence_get_bounds_without_bounds_is_none(backend):
     results = backend.run_sequence([{"action": "get_bounds", "handle": "txt-name"}])
     assert results[0]["ok"] is True
     assert results[0]["value"] is None
+
+
+def test_a_wait_that_times_out_says_what_it_waited_for(backend):
+    from .fake_backend import FAKE_WINDOW_ID
+
+    [r] = backend.run_sequence(
+        [
+            {
+                "action": "wait_for_element",
+                "window_id": FAKE_WINDOW_ID,
+                "role": "menuitem",
+                "name": "Open Game",
+                "timeout": 0.1,
+            }
+        ]
+    )
+    assert not r["ok"]
+    assert "timed out" in r["error"] and "Open Game" in r["error"] and "menuitem" in r["error"]
+
+
+def test_a_window_wait_that_times_out_names_the_pattern(backend):
+    [r] = backend.run_sequence([{"action": "wait_for_window", "pattern": "Nope", "timeout": 0.1}])
+    assert not r["ok"]
+    assert "timed out" in r["error"] and "Nope" in r["error"]
