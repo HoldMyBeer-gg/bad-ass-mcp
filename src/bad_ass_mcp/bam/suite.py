@@ -39,8 +39,12 @@ def _load(path: Path) -> dict:
 
 def effective_config(suite: dict, script: dict, overrides: dict) -> dict:
     """Suite file, then the script's own `configuration`, then the command
-    line: later wins."""
-    return {**suite, **script.get("configuration", {}), **overrides}
+    line: later wins. Keys that widen what a script may do come only from
+    the suite file and the command line."""
+    from .validate import RUNNER_ONLY
+
+    own = {k: v for k, v in script.get("configuration", {}).items() if k not in RUNNER_ONLY}
+    return {**suite, **own, **overrides}
 
 
 def _latest_run(results: Path, commit: str, platform: str) -> Path | None:

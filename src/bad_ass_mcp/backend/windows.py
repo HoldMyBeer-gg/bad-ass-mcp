@@ -950,6 +950,14 @@ class WindowsBackend(DesktopBackend):
         attempts.append(f"keystrokes: {r.error}")
         return ActionResult(ok=False, error=f"Option {value!r}: " + "; ".join(attempts))
 
+    def is_password(self, handle_id: str) -> bool | None:
+        try:
+            return bool(self._resolve(handle_id).CurrentIsPassword)
+        except StaleHandleError:
+            raise
+        except Exception:
+            return super().is_password(handle_id)
+
     def get_value(self, handle_id: str) -> str | None:
         element = self._resolve(handle_id)
         try:

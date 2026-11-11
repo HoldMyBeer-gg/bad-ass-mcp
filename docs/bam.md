@@ -197,6 +197,14 @@ Three layers, later wins: the suite file (`--config`), a script's own
   nothing replaced it. What the user had copied is lost, never restored: a
   restore could bring back a secret a password manager had already cleared.
   Password fields never paste.
+- **Password fields:** a `type` step into a password field (Windows
+  IsPassword, macOS AXSecureTextField, AT-SPI password text, or a masked
+  value) fails with "password field: not allowed by this machine's config"
+  unless the runner's config sets `allow_password_fields`: `true` for any app,
+  or a list of window names. Only `bam.json` or the command line can set it;
+  a script's `configuration` block can't (`check` reports it, and the runner
+  ignores it). `check` and `run` also name type targets that look like
+  secrets (password, passcode, token, secret, PIN, API key) before a run.
 - **Checks:** `present`, `absent` (by name/role), `windows: n` (windows matching
   the config's `window`), `no_window: "<title>"`, `shell` (exit 0),
   `manual` (reported for a human; the script ends `MANUAL`).

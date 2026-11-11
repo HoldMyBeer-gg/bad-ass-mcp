@@ -106,6 +106,21 @@
       ],
       "description": "Launch command, string or argv list."
     },
+    "allow_password_fields": {
+      "description": "Allow type steps into password fields: true for any app, or a list of window names (case-insensitive substring). Only honoured from the runner's own config file or command line, never from a script's configuration block.",
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      ]
+    },
     "helpers": {
       "anyOf": [
         {

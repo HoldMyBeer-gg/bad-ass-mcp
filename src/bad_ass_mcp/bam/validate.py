@@ -226,7 +226,26 @@ def validate_script(script) -> list[Issue]:
     if not isinstance(script, dict):
         return [Issue("(script)", "should be an object")]
     issues = _schema_issues(script, "script", "(script)")
-    return issues + _meaning_issues(script) + _teardown_issues(script)
+    return issues + _meaning_issues(script) + _teardown_issues(script) + _runner_only_issues(script)
+
+
+# Config keys a script may not set for itself: they widen what the runner
+# lets it do, so only the machine's own config can grant them.
+RUNNER_ONLY = ("allow_password_fields",)
+
+
+def _runner_only_issues(script: dict) -> list[Issue]:
+    conf = script.get("configuration")
+    if not isinstance(conf, dict):
+        return []
+    return [
+        Issue(
+            f"(script).configuration.{k}",
+            "only this machine's own config (bam.json or the command line) can set this",
+        )
+        for k in RUNNER_ONLY
+        if k in conf
+    ]
 
 
 def validate_config(config) -> list[Issue]:
