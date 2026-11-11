@@ -189,4 +189,7 @@ def needs_foreground(script: dict, platform: str) -> bool:
         for step in phase.get("steps", []):
             if applies(step, platform) and is_real_input(step):
                 return True
+    for entry in script.get("teardown", []):
+        if "shell" not in entry and applies(entry, platform) and is_real_input(entry):
+            return True
     return False

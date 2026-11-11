@@ -170,6 +170,17 @@ Three layers, later wins: the suite file (`--config`), a script's own
 - **Per-platform values:** any `name`, `role`, step field or window pattern may
   be `{"macos": ..., "windows": ..., "linux": ...}`. `only: [...]` limits a
   step, learn entry, phase or check to platforms.
+- **Teardown:** a top-level `"teardown"` list runs after the last phase and
+  after a failure, before the app is closed and focus goes back. Entries are
+  shell commands (`{"shell": "..."}`) or steps without learned targets
+  (`{"action": "key", "key": "Escape"}`, `click_at`, a key combination). It
+  is best-effort: each entry's outcome is recorded in the result's
+  `teardown` list, a failing entry doesn't stop the rest, and the run's
+  status never changes. Use it in attach mode to close dialogs a failed run
+  left open. For dialogs, send keys without `window_id`: they go to the
+  front window as real keys (the runner raises the app first). On macOS a
+  key with `window_id` is posted to the app's process, which an Open/Save
+  panel never sees, and still reports ok.
 - **Phase extras:** `"window": "<title>"` runs the phase in another window
   (dialogs); `"window": {"other": "<title>"}` picks a matching window that
   isn't the main one (a second editor window; on Windows each window is
