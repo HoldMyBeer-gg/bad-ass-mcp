@@ -186,6 +186,11 @@ Three layers, later wins: the suite file (`--config`), a script's own
   isn't the main one (a second editor window; on Windows each window is
   listed separately); `"id"` + `{"repeat": "<id>"}` reruns a phase with fresh handles;
   a phase may carry its own `checks`.
+- **Pointer clicks:** `{"action": "click", "target": "x", "pointer": true}`
+  clicks with the real pointer at the element's centre instead of its
+  accessibility action. Use it for controls that report the action ok but only
+  react to the mouse, such as egui menus that open on hover. It counts as real
+  input, so it gets the foreground and point checks.
 - **Checks:** `present`, `absent` (by name/role), `windows: n` (windows matching
   the config's `window`), `no_window: "<title>"`, `shell` (exit 0),
   `manual` (reported for a human; the script ends `MANUAL`).

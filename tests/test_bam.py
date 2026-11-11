@@ -1952,3 +1952,72 @@ def test_present_check_still_fails_after_step_timeout(tmp_path):
     script = write(tmp_path, "gone", {"phases": [], "checks": [{"present": {"name": "Nope"}}]})
     r = run_script(FakeBackend(), script, "linux", CONFIG, tmp_path / "out")
     assert r["status"] == "FAIL" and "Nope" in r["failure"]["reason"]
+
+
+# ── pointer: true on click ───────────────────────────────────────────
+
+
+def test_pointer_click_uses_the_real_pointer_at_the_element_centre(tmp_path):
+    # egui menus report Invoke ok but open on hover: the a11y press does
+    # nothing visible, so a script can ask for the real pointer instead.
+    desk = _Desk()
+    script = _real_input_script(tmp_path, [{"action": "click", "target": "ok", "pointer": True}])
+    res = run_script(desk, script, "linux", CONFIG, tmp_path / "out")
+    assert res["status"] == "PASS", res
+    # btn-ok bounds (10, 10, 80, 30) → centre (50, 25)
+    assert desk.pointer_log == [("click", 50.0, 25.0, "left", 1)]
+
+
+def test_pointer_click_keeps_button_and_clicks(tmp_path):
+    desk = _Desk()
+    script = _real_input_script(
+        tmp_path,
+        [{"action": "click", "target": "ok", "pointer": True, "button": "right", "clicks": 2}],
+    )
+    res = run_script(desk, script, "linux", CONFIG, tmp_path / "out")
+    assert res["status"] == "PASS", res
+    assert desk.pointer_log == [("click", 50.0, 25.0, "right", 2)]
+
+
+def test_pointer_click_is_refused_when_another_app_covers_the_element(tmp_path):
+    desk = _Desk(under=4242, raisable=False)
+    desk.under = 4242
+    script = _real_input_script(tmp_path, [{"action": "click", "target": "ok", "pointer": True}])
+    res = run_script(desk, script, "linux", CONFIG, tmp_path / "out")
+    assert res["failure"]["reason"] == "Unexpected app in foreground."
+    assert desk.pointer_log == []
+
+
+def test_pointer_click_on_an_element_without_bounds_fails(tmp_path):
+    desk = _Desk()
+    script = write(
+        tmp_path,
+        "nobounds",
+        {
+            "phases": [
+                {
+                    "learn": {"cancel": {"name": "Cancel"}},
+                    "steps": [{"action": "click", "target": "cancel", "pointer": True}],
+                }
+            ]
+        },
+    )
+    res = run_script(desk, script, "linux", CONFIG, tmp_path / "out")
+    assert res["status"] == "FAIL" and "bounds" in res["failure"]["reason"]
+    assert desk.pointer_log == []
+
+
+def test_pointer_is_valid_on_click_in_the_schema():
+    from bad_ass_mcp.bam.validate import validate_script
+
+    script = {
+        "name": "p",
+        "platforms": ["linux"],
+        "phases": [
+            {
+                "learn": {"ok": {"name": "OK"}},
+                "steps": [{"action": "click", "target": "ok", "pointer": True}],
+            }
+        ],
+    }
+    assert validate_script(script) == []
