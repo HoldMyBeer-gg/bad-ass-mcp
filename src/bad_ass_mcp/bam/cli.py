@@ -156,9 +156,7 @@ def parse(argv: list[str]) -> argparse.Namespace:
     args = ap.parse_args(argv)
 
     args.scripts = _collect(args.paths)
-    args.suite_config = (
-        json.loads(Path(args.config).read_text(encoding="utf-8")) if args.config else {}
-    )
+    args.suite_config = _load_config(args.config) if args.config else {}
     o: dict = {}
     if args.fail_fast:
         o["fail_fast"] = True if args.fail_fast == "true" else args.fail_fast
@@ -171,6 +169,17 @@ def parse(argv: list[str]) -> argparse.Namespace:
     args.overrides = o
     args.platform = args.platform or _PLATFORMS.get(_platform.system(), "linux")
     return args
+
+
+def _load_config(path: str) -> dict:
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise SystemExit(
+            f"config {path}: not valid JSON at line {e.lineno} column {e.colno}: {e.msg}"
+        ) from None
+    except OSError as e:
+        raise SystemExit(f"config {path}: {e.strerror or e}") from None
 
 
 def _problems(scripts: list[Path], config_path: str | None) -> list[dict]:
@@ -272,10 +281,24 @@ def check_main(argv: list[str]) -> int:
     return 1 if problems else 0
 
 
+def _utf8_console() -> None:
+    """The summary uses non-ASCII ("·", bar blocks). A Windows console that
+    is UTF-8 still gets cp1252 bytes from Python when output is piped, and
+    shows them as replacement characters."""
+    if os.name != "nt":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main(argv: list[str]) -> int:
     from ..server import _backend
     from . import suite
 
+    _utf8_console()
     args = parse(argv)
     problems = _problems(args.scripts, args.config)
     if problems:

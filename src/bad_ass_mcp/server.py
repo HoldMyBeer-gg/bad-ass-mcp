@@ -511,7 +511,28 @@ def main():
         from .bam.cli import check_main
 
         sys.exit(check_main(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] in ("--version", "-V"):
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            v = version("bad-ass-mcp")
+        except PackageNotFoundError:
+            v = "unknown"
+        print(f"bad-ass-mcp {v}")
+        sys.exit(0)
+    if len(sys.argv) > 1 or (sys.stdin is not None and sys.stdin.isatty()):
+        # An unknown argument, or a person at a shell: the stdio server would
+        # sit waiting for an MCP client forever.
+        print(_USAGE, file=sys.stderr)
+        sys.exit(2)
     mcp.run()
+
+
+_USAGE = """bad-ass-mcp is an MCP server: an MCP client starts it and talks over stdio.
+
+  bad-ass-mcp run [scripts...]   run BAM scripts (bad-ass-mcp run --help)
+  bad-ass-mcp check [scripts...] validate BAM scripts and configs
+  bad-ass-mcp --version          print the version"""
 
 
 if __name__ == "__main__":
