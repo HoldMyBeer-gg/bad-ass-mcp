@@ -780,7 +780,7 @@ def _type_text_harness(*, set_ok, before, after, pasted="hello", keys=None):
 
     set_ok: what _ax_set(AXValue) returns. before/after: AXValue as read
     before and after the set; pasted: as read after a paste. Returns
-    (result, pbcopy inputs, Cmd+V count); `keys` collects (keycode, flags).
+    (result, pasteboard texts written, Cmd+V count); `keys` collects (keycode, flags).
     """
     from bad_ass_mcp.backend import macos
 
@@ -800,11 +800,12 @@ def _type_text_harness(*, set_ok, before, after, pasted="hello", keys=None):
     def fake_ax_set(_el, attr, _value):
         return set_ok if attr == "AXValue" else True
 
-    def fake_run(cmd, input=None, **_kw):  # noqa: A002
-        if cmd == ["pbpaste"]:
-            return MagicMock(returncode=0, stdout=b"user clipboard")
-        copies.append(input)
-        return MagicMock(returncode=0, stdout=b"")
+    class FakeBoard:
+        def snapshot(self):
+            return [{"public.utf8-plain-text": b"user clipboard"}]
+
+        def write(self, items):
+            copies.extend(i.get("public.utf8-plain-text") for i in items)
 
     def _key(args):
         keys.append((args[0], args[1] if len(args) > 1 else 0))
@@ -816,7 +817,7 @@ def _type_text_harness(*, set_ok, before, after, pasted="hello", keys=None):
         patch.object(backend, "_bring_to_front", return_value=None),
         patch.object(macos, "_ax_get", side_effect=fake_ax_get),
         patch.object(macos, "_ax_set", side_effect=fake_ax_set),
-        patch.object(macos.subprocess, "run", side_effect=fake_run),
+        patch.object(macos, "_MacPasteboard", FakeBoard),
         patch.object(macos, "_quartz_key_press", side_effect=lambda *a, **k: _key(a)),
         patch.object(macos.time, "sleep"),
     ):
@@ -1108,3 +1109,55 @@ def test_list_windows_pumps_the_run_loop_so_new_apps_appear():
     ):
         backend.list_windows()
     assert pumped
+
+
+# ── pasteboard hygiene for the paste fallback ────────────────────────
+
+
+class _FakePasteboard:
+    def __init__(self, items):
+        self.items = [dict(i) for i in items]
+        self.writes: list[list[dict]] = []
+
+    def snapshot(self):
+        return [dict(i) for i in self.items]
+
+    def write(self, items):
+        self.items = [dict(i) for i in items]
+        self.writes.append(self.items)
+
+
+def test_paste_puts_every_pasteboard_item_back():
+    from bad_ass_mcp.backend.macos import _borrowed_pasteboard
+
+    users = [
+        {"public.utf8-plain-text": b"hunter2"},
+        {"public.png": b"\x89PNG", "public.file-url": b"file:///x"},
+    ]
+    pb = _FakePasteboard(users)
+    with _borrowed_pasteboard(pb, "secret"):
+        assert pb.items[0]["public.utf8-plain-text"] == b"secret"
+    assert pb.items == users
+
+
+def test_borrowed_text_is_marked_concealed_and_transient():
+    # The nspasteboard.org markers: clipboard managers (Maccy, Alfred,
+    # Paste, Raycast) skip items carrying them.
+    from bad_ass_mcp.backend.macos import _borrowed_pasteboard
+
+    pb = _FakePasteboard([])
+    with _borrowed_pasteboard(pb, "x"):
+        item = pb.items[0]
+    assert "org.nspasteboard.ConcealedType" in item
+    assert "org.nspasteboard.TransientType" in item
+
+
+def test_pasteboard_is_restored_when_the_paste_raises():
+    from bad_ass_mcp.backend.macos import _borrowed_pasteboard
+
+    users = [{"public.utf8-plain-text": b"mine"}]
+    pb = _FakePasteboard(users)
+    with pytest.raises(RuntimeError):
+        with _borrowed_pasteboard(pb, "x"):
+            raise RuntimeError("boom")
+    assert pb.items == users

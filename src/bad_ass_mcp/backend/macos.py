@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import re
 import subprocess
 import time
@@ -54,6 +55,60 @@ try:
     _HAS_PYOBJC = True
 except ImportError:
     _HAS_PYOBJC = False
+
+
+_TEXT_TYPE = "public.utf8-plain-text"
+# nspasteboard.org markers: clipboard managers skip items carrying them.
+_CONCEALED = "org.nspasteboard.ConcealedType"
+_TRANSIENT = "org.nspasteboard.TransientType"
+
+
+@contextlib.contextmanager
+def _borrowed_pasteboard(pb, text: str):
+    """Put `text` on the general pasteboard for the block, marked concealed
+    and transient, then put back every item the user had, even if the block
+    raises."""
+    saved = pb.snapshot()
+    pb.write([{_TEXT_TYPE: text.encode("utf-8"), _CONCEALED: b"", _TRANSIENT: b""}])
+    try:
+        yield
+    finally:
+        pb.write(saved)
+
+
+class _MacPasteboard:
+    """Items as {type: bytes} dicts over NSPasteboard.generalPasteboard()."""
+
+    def __init__(self):
+        from AppKit import NSPasteboard
+
+        self.pb = NSPasteboard.generalPasteboard()
+
+    def snapshot(self) -> list[dict[str, bytes]]:
+        items = []
+        for item in self.pb.pasteboardItems() or []:
+            entry = {}
+            for t in item.types() or []:
+                data = item.dataForType_(t)
+                if data is not None:
+                    entry[str(t)] = bytes(data)
+            if entry:
+                items.append(entry)
+        return items
+
+    def write(self, items: list[dict[str, bytes]]) -> None:
+        from AppKit import NSPasteboardItem
+        from Foundation import NSData
+
+        self.pb.clearContents()
+        objs = []
+        for entry in items:
+            item = NSPasteboardItem.alloc().init()
+            for t, raw in entry.items():
+                item.setData_forType_(NSData.dataWithBytes_length_(raw, len(raw)), t)
+            objs.append(item)
+        if objs:
+            self.pb.writeObjects_(objs)
 
 
 def _marked(post):
@@ -797,21 +852,16 @@ class MacOSBackend(DesktopBackend):
                 # paste lands in whichever field already had focus.
                 self._click_element_at(handle_id)
                 time.sleep(0.05)
-            saved = subprocess.run(["pbpaste"], capture_output=True, timeout=5)
-            result = subprocess.run(
-                ["pbcopy"], input=text.encode("utf-8"), capture_output=True, timeout=5
-            )
-            if result.returncode != 0:
-                return ActionResult(ok=False, error="pbcopy failed")
-            # Select all first, so the paste replaces the content the way an
-            # AXValue set does instead of inserting at the cursor.
-            _quartz_key_press(0x00, kCGEventFlagMaskCommand, pid=pid)  # Cmd+A
-            _quartz_key_press(0x09, kCGEventFlagMaskCommand, pid=pid)  # Cmd+V
-            # The target reads the pasteboard while handling the event; give
-            # it a moment before restoring the user's clipboard.
-            time.sleep(0.3)
-            if saved.returncode == 0:
-                subprocess.run(["pbcopy"], input=saved.stdout, capture_output=True, timeout=5)
+            # Every item the user had (text, images, files) goes back after,
+            # and the text is marked so clipboard managers don't record it.
+            with _borrowed_pasteboard(_MacPasteboard(), text):
+                # Select all first, so the paste replaces the content the way
+                # an AXValue set does instead of inserting at the cursor.
+                _quartz_key_press(0x00, kCGEventFlagMaskCommand, pid=pid)  # Cmd+A
+                _quartz_key_press(0x09, kCGEventFlagMaskCommand, pid=pid)  # Cmd+V
+                # The target reads the pasteboard while handling the event;
+                # give it a moment before restoring the user's clipboard.
+                time.sleep(0.3)
             got = _ax_get(element, "AXValue")
             if isinstance(got, str) and not _same_text(got, text, secure=secure):
                 return ActionResult(

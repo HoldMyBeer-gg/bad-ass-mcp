@@ -568,3 +568,95 @@ def test_until_populated_gives_up_and_returns_the_empty_tree():
     empty = ElementHandle(id="r", role="pane", name="x")
     tree = _until_populated(lambda: empty, timeout=0.05)
     assert tree is empty
+
+
+# ── clipboard hygiene for the paste strategy ─────────────────────────
+
+
+class _FakeClipboard:
+    """Dict-backed stand-in for the Win32 clipboard calls."""
+
+    def __init__(self, contents):
+        self.data = dict(contents)
+        self.names: dict[str, int] = {}
+        self.opened = 0
+        self.history: list[dict] = []
+
+    def open(self):
+        self.opened += 1
+        return True
+
+    def close(self):
+        self.opened -= 1
+        self.history.append(dict(self.data))
+
+    def formats(self):
+        return list(self.data)
+
+    def get(self, fmt):
+        return self.data.get(fmt)
+
+    def empty(self):
+        self.data.clear()
+
+    def put(self, fmt, raw):
+        self.data[fmt] = raw
+
+    def register(self, name):
+        return self.names.setdefault(name, 0xC000 + len(self.names))
+
+
+def test_paste_puts_the_user_clipboard_back_with_every_format():
+    from bad_ass_mcp.backend.windows import _CF_UNICODETEXT, _borrowed_clipboard
+
+    users = {_CF_UNICODETEXT: "hunter2\0".encode("utf-16-le"), 0xC123: b"\x89PNG..."}
+    cb = _FakeClipboard(users)
+    with _borrowed_clipboard(cb, "*Sylvanas*.m2"):
+        assert cb.data[_CF_UNICODETEXT] == "*Sylvanas*.m2\0".encode("utf-16-le")
+    assert cb.data == users
+    assert cb.opened == 0
+
+
+def test_paste_restores_even_when_the_paste_raises():
+    from bad_ass_mcp.backend.windows import _CF_UNICODETEXT, _borrowed_clipboard
+
+    users = {_CF_UNICODETEXT: "mine\0".encode("utf-16-le")}
+    cb = _FakeClipboard(users)
+    with pytest.raises(RuntimeError):
+        with _borrowed_clipboard(cb, "x"):
+            raise RuntimeError("boom")
+    assert cb.data == users
+
+
+def test_borrowed_text_is_kept_out_of_clipboard_history_and_cloud():
+    from bad_ass_mcp.backend.windows import _borrowed_clipboard
+
+    cb = _FakeClipboard({})
+    with _borrowed_clipboard(cb, "x"):
+        by_name = {n: cb.data.get(f) for n, f in cb.names.items()}
+    assert "ExcludeClipboardContentFromMonitorProcessing" in by_name
+    assert by_name["CanIncludeInClipboardHistory"] == struct.pack("<I", 0)
+    assert by_name["CanUploadToCloudClipboard"] == struct.pack("<I", 0)
+
+
+def test_an_empty_user_clipboard_is_left_empty():
+    from bad_ass_mcp.backend.windows import _borrowed_clipboard
+
+    cb = _FakeClipboard({})
+    with _borrowed_clipboard(cb, "x"):
+        pass
+    assert cb.data == {}
+
+
+def test_password_fields_never_use_the_clipboard():
+    from bad_ass_mcp.backend.windows import _typing_attempts
+
+    names = lambda xs: [n for n, _ in xs]  # noqa: E731
+    attempts = [("SetValue", 1), ("WM_CHAR", 2), ("paste", 3), ("keys", 4)]
+    assert names(_typing_attempts(attempts, password=True)) == ["SetValue", "WM_CHAR", "keys"]
+    assert names(_typing_attempts(attempts, password=False)) == [
+        "SetValue",
+        "WM_CHAR",
+        "paste",
+        "keys",
+    ]

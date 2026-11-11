@@ -10,6 +10,7 @@ where a single process may own multiple windows.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import struct
 import time
@@ -92,6 +93,10 @@ _WM_KEYUP = 0x0101
 _WM_CHAR = 0x0102
 _WM_PASTE = 0x0302
 _CF_UNICODETEXT = 13
+_SMTO_ABORTIFHUNG = 0x0002
+# Clipboard formats whose data is a GDI handle, not an HGLOBAL: they can't be
+# copied as bytes. Windows synthesizes CF_BITMAP from CF_DIB, which is kept.
+_CF_GDI_HANDLES = {2, 3, 9, 14, 0x80, 0x82, 0x83, 0x8E}
 
 # SendInput mouse flags (MOUSEEVENTF_*)
 _MOUSEEVENTF_MOVE = 0x0001
@@ -631,20 +636,6 @@ class WindowsBackend(DesktopBackend):
             return (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
         return None
 
-    def _clipboard_set(self, text: str) -> None:
-        """Copy text to the Windows clipboard via Win32 API."""
-        data = (text + "\0").encode("utf-16-le")
-        _user32.OpenClipboard(0)
-        try:
-            _user32.EmptyClipboard()
-            h = _kernel32.GlobalAlloc(0x0042, len(data))  # GMEM_MOVEABLE | GMEM_ZEROINIT
-            p = _kernel32.GlobalLock(h)
-            ctypes.memmove(p, data, len(data))
-            _kernel32.GlobalUnlock(h)
-            _user32.SetClipboardData(_CF_UNICODETEXT, h)
-        finally:
-            _user32.CloseClipboard()
-
     # ── DesktopBackend impl ───────────────────────────────────────────
 
     def list_windows(self) -> list[WindowInfo]:
@@ -847,11 +838,23 @@ class WindowsBackend(DesktopBackend):
         def paste():
             # Clipboard + WM_PASTE: standard Win32 edits, no modifier keys
             # (PostMessage doesn't update GetKeyState, so Ctrl+V would
-            # arrive as a bare 'V').
+            # arrive as a bare 'V'). The user's clipboard is put back after,
+            # and the text is kept out of clipboard history.
             element.SetFocus()
             time.sleep(0.05)
-            self._clipboard_set(text)
-            _user32.PostMessageW(hwnd or _user32.GetForegroundWindow(), _WM_PASTE, 0, 0)
+            with _borrowed_clipboard(_Win32Clipboard(), text):
+                # Sent, not posted: the target has read the clipboard by the
+                # time this returns, so restoring can't race it.
+                result = ctypes.wintypes.DWORD()
+                _user32.SendMessageTimeoutW(
+                    hwnd or _user32.GetForegroundWindow(),
+                    _WM_PASTE,
+                    0,
+                    0,
+                    _SMTO_ABORTIFHUNG,
+                    1000,
+                    ctypes.byref(result),
+                )
 
         def keys():
             # Real key events to the focused field: what finally works on
@@ -863,9 +866,17 @@ class WindowsBackend(DesktopBackend):
             if sent != len(inputs):
                 raise RuntimeError(f"SendInput sent {sent} of {len(inputs)} events")
 
+        try:
+            password = bool(element.CurrentIsPassword)
+        except Exception:
+            password = False
+        password = password or _masked(read_back())
         return _first_verified(
             text,
-            [("SetValue", set_value), ("WM_CHAR", wm_char), ("paste", paste), ("keys", keys)],
+            _typing_attempts(
+                [("SetValue", set_value), ("WM_CHAR", wm_char), ("paste", paste), ("keys", keys)],
+                password=password,
+            ),
             read_back,
         )
 
@@ -1565,6 +1576,101 @@ def _unicode_key_inputs(text: str):
     return inputs
 
 
+def _typing_attempts(attempts, *, password: bool):
+    """A password never goes on the clipboard: clipboard managers and
+    Win+V history record whatever passes through it."""
+    if password:
+        return [(n, fn) for n, fn in attempts if n != "paste"]
+    return list(attempts)
+
+
+@contextlib.contextmanager
+def _borrowed_clipboard(cb, text: str):
+    """Put `text` on the clipboard for the duration of the block, marked so
+    clipboard history and cloud sync skip it, then put back every format the
+    user had (text, images, files), even if the block raises."""
+    if not cb.open():
+        raise RuntimeError("clipboard is busy")
+    try:
+        saved = {}
+        for fmt in cb.formats():
+            raw = cb.get(fmt)
+            if raw is not None:
+                saved[fmt] = raw
+        cb.empty()
+        cb.put(_CF_UNICODETEXT, (text + "\0").encode("utf-16-le"))
+        cb.put(cb.register("ExcludeClipboardContentFromMonitorProcessing"), b"\0")
+        cb.put(cb.register("CanIncludeInClipboardHistory"), struct.pack("<I", 0))
+        cb.put(cb.register("CanUploadToCloudClipboard"), struct.pack("<I", 0))
+    finally:
+        cb.close()
+    try:
+        yield
+    finally:
+        for _ in range(10):
+            if cb.open():
+                break
+            time.sleep(0.05)
+        else:
+            return
+        try:
+            cb.empty()
+            for fmt, raw in saved.items():
+                cb.put(fmt, raw)
+        finally:
+            cb.close()
+
+
+class _Win32Clipboard:
+    """The few clipboard calls _borrowed_clipboard needs, over user32."""
+
+    def open(self) -> bool:
+        for _ in range(10):
+            if _user32.OpenClipboard(0):
+                return True
+            time.sleep(0.02)
+        return False
+
+    def close(self) -> None:
+        _user32.CloseClipboard()
+
+    def formats(self) -> list[int]:
+        out, fmt = [], 0
+        while True:
+            fmt = _user32.EnumClipboardFormats(fmt)
+            if not fmt:
+                return out
+            out.append(fmt)
+
+    def get(self, fmt: int) -> bytes | None:
+        if fmt in _CF_GDI_HANDLES:
+            return None
+        h = _user32.GetClipboardData(fmt)
+        if not h:
+            return None
+        size = _kernel32.GlobalSize(h)
+        p = _kernel32.GlobalLock(h)
+        if not p:
+            return None
+        try:
+            return _ct.string_at(p, size)
+        finally:
+            _kernel32.GlobalUnlock(h)
+
+    def empty(self) -> None:
+        _user32.EmptyClipboard()
+
+    def put(self, fmt: int, raw: bytes) -> None:
+        h = _kernel32.GlobalAlloc(0x0042, max(len(raw), 1))  # GMEM_MOVEABLE | ZEROINIT
+        p = _kernel32.GlobalLock(h)
+        _ct.memmove(p, raw, len(raw))
+        _kernel32.GlobalUnlock(h)
+        _user32.SetClipboardData(fmt, h)
+
+    def register(self, name: str) -> int:
+        return _user32.RegisterClipboardFormatW(name)
+
+
 def _declare_clipboard_types(kernel32, user32) -> None:
     """Pointer-sized types for the clipboard calls. ctypes defaults restype
     to C int, which truncates a 64-bit HGLOBAL or pointer, and the memmove
@@ -1577,6 +1683,14 @@ def _declare_clipboard_types(kernel32, user32) -> None:
     kernel32.GlobalUnlock.argtypes = (vp,)
     user32.SetClipboardData.restype = vp
     user32.SetClipboardData.argtypes = (_ct.c_uint, vp)
+    user32.GetClipboardData.restype = vp
+    user32.GetClipboardData.argtypes = (_ct.c_uint,)
+    user32.EnumClipboardFormats.restype = _ct.c_uint
+    user32.EnumClipboardFormats.argtypes = (_ct.c_uint,)
+    user32.RegisterClipboardFormatW.restype = _ct.c_uint
+    user32.RegisterClipboardFormatW.argtypes = (_ct.c_wchar_p,)
+    kernel32.GlobalSize.restype = _ct.c_size_t
+    kernel32.GlobalSize.argtypes = (vp,)
 
 
 if _HAS_UIA:
