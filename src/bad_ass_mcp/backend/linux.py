@@ -653,6 +653,11 @@ class LinuxBackend(DesktopBackend):
 
     def element_bounds(self, handle_id: str) -> tuple[float, float, float, float] | None:
         node = self._resolve(handle_id)
+        if not self._screen_coords_trusted(node):
+            # Native-Wayland app: extents are window-relative (measured on
+            # the Deck), so a pointer click or drag would land in the wrong
+            # place. Unknown makes the caller fail loudly instead.
+            return None
         try:
             ext = _iface(node, "component").get_extents(Atspi.CoordType.SCREEN)
         except Exception:
@@ -660,6 +665,17 @@ class LinuxBackend(DesktopBackend):
         if ext is None or ext.width <= 0 or ext.height <= 0:
             return None
         return (float(ext.x), float(ext.y), float(ext.width), float(ext.height))
+
+    def _screen_coords_trusted(self, node) -> bool:
+        """SCREEN-coordinate extents are real on X11, and on Wayland only for
+        an app running under XWayland (it has an X11 window)."""
+        if not _is_wayland_session():
+            return True
+        try:
+            pid = node.get_process_id()
+        except Exception:
+            return False
+        return bool(pid) and self._find_xwid(pid) is not None
 
     def click(self, handle_id: str, button: str = "left", clicks: int = 1) -> ActionResult:
         node = self._resolve(handle_id)
@@ -974,6 +990,12 @@ class LinuxBackend(DesktopBackend):
                 # Resolve geometry — works for AT-SPI apps and non-AX apps
                 # (Tauri/Electron) via the xdotool PID fallback in _window_geometry.
                 geom = self._window_geometry(window_id)
+                if geom is None and app is not None and _is_wayland_session():
+                    raise ValueError(
+                        f"Window {window_id!r} has no known screen position: it is a "
+                        "native-Wayland app, which can't report one. Capture the full "
+                        "screen (window_id=None) or run the app under XWayland."
+                    )
                 if geom is None:
                     raise ValueError(
                         f"Window {window_id!r} not found — pass None for a full-desktop capture"

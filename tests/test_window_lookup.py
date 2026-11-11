@@ -302,3 +302,93 @@ def test_wait_for_window_uses_the_shared_matcher(modname):
     body = src[src.index("def wait_for_window") :]
     body = body[: body.index("\n    def ", 10)]
     assert ".matches(title_pattern)" in body
+
+
+# ── follow-ups from the Deck and macOS runs ─────────────────────────
+
+
+def _node_for_pid(pid, extents):
+    node = MagicMock()
+    node.get_process_id.return_value = pid
+    ext = MagicMock(x=extents[0], y=extents[1], width=extents[2], height=extents[3])
+    comp = MagicMock()
+    comp.get_extents.return_value = ext
+    node.get_component.return_value = comp
+    node.get_component_iface = MagicMock(return_value=comp)
+    return node, comp
+
+
+def _bounds_on(backend, mod, node, comp, *, session, xwid):
+    env = {
+        "XDG_SESSION_TYPE": session,
+        "WAYLAND_DISPLAY": "wayland-0" if session == "wayland" else "",
+    }
+    with (
+        patch.dict("os.environ", env),
+        patch.object(backend, "_resolve", return_value=node),
+        patch.object(mod, "_iface", return_value=comp),
+        patch.object(backend, "_find_xwid", return_value=xwid),
+    ):
+        return backend.element_bounds("h")
+
+
+def test_linux_element_bounds_are_unknown_for_a_native_wayland_app():
+    """Measured on the Deck: a native-Wayland app's element extents are
+    window-relative (Search at 322,34 where XWayland says 772,232)."""
+    backend, mod = _make_backend()
+    node, comp = _node_for_pid(77, (322, 34, 60, 24))
+    assert _bounds_on(backend, mod, node, comp, session="wayland", xwid=None) is None
+
+
+def test_linux_element_bounds_are_real_for_an_xwayland_app():
+    backend, mod = _make_backend()
+    node, comp = _node_for_pid(77, (772, 232, 60, 24))
+    assert _bounds_on(backend, mod, node, comp, session="wayland", xwid="0x400007") == (
+        772.0,
+        232.0,
+        60.0,
+        24.0,
+    )
+
+
+def test_linux_element_bounds_on_x11_are_trusted():
+    backend, mod = _make_backend()
+    node, comp = _node_for_pid(77, (772, 232, 60, 24))
+    assert _bounds_on(backend, mod, node, comp, session="x11", xwid=None) is not None
+
+
+def test_screenshot_of_a_native_wayland_window_says_why():
+    backend, mod = _make_backend()
+    with (
+        patch.dict("os.environ", {"XDG_SESSION_TYPE": "wayland", "WAYLAND_DISPLAY": "wayland-0"}),
+        patch.object(backend, "_find_app", return_value=MagicMock(get_child_count=lambda: 0)),
+        patch.object(backend, "_window_geometry", return_value=None),
+    ):
+        with pytest.raises(ValueError, match="Wayland"):
+            backend.screenshot("77", output_path="/tmp/x.png")
+
+
+def test_a_wrong_form_says_what_the_allowed_forms_are():
+    from bad_ass_mcp.bam.validate import validate_config
+
+    issues = validate_config({"window": 5})
+    assert issues
+    msg = issues[0].message
+    assert "a string" in msg and "per-platform" in msg
+
+
+def test_run_without_the_platform_extra_is_one_line(tmp_path):
+    from bad_ass_mcp.bam import cli
+
+    with (
+        patch(
+            "bad_ass_mcp.server._backend",
+            side_effect=RuntimeError(
+                "macOS backend requires PyObjC: pip install 'bad-ass-mcp[macos]'"
+            ),
+        ),
+        patch.object(cli, "_problems", return_value=[]),
+    ):
+        with pytest.raises(SystemExit) as e:
+            cli.main([str(tmp_path)])
+    assert "PyObjC" in str(e.value.code)

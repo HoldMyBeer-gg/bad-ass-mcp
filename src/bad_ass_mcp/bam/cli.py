@@ -332,8 +332,13 @@ def main(argv: list[str]) -> int:
         )
         sys.stderr.flush()
 
+    try:
+        backend = _backend()
+    except RuntimeError as e:
+        # e.g. the platform extra isn't installed: one line, not a traceback.
+        raise SystemExit(f"bad-ass-mcp run: {e}") from None
     run_dir = run_suite(
-        _backend(),
+        backend,
         args.scripts,
         args.platform,
         args.suite_config,

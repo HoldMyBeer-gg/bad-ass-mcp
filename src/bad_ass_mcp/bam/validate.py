@@ -119,6 +119,9 @@ def _messages(err: ValidationError, root: str) -> list[Issue]:
         if subs and all(s.validator == "required" for s in subs):
             keys = [k for s in subs for k in s.validator_value]
             return [Issue(where, "needs one of " + ", ".join(f"'{k}'" for k in keys))]
+        forms = [f for f in (_form(b) for b in err.validator_value or []) if f]
+        if forms:
+            return [Issue(where, "should be " + " or ".join(dict.fromkeys(forms)))]
         return [Issue(where, "doesn't match any allowed form")]
     return [Issue(where, err.message)]
 
@@ -203,3 +206,27 @@ def validate_script(script) -> list[Issue]:
 
 def validate_config(config) -> list[Issue]:
     return _schema_issues(config, "config", "(config)")
+
+
+def _form(branch) -> str | None:
+    """A plain-words name for one anyOf branch, for "should be X or Y"."""
+    if not isinstance(branch, dict):
+        return None
+    props = set(branch.get("properties", {}))
+    if branch.get("type") == "object" and props and props <= {"macos", "windows", "linux"}:
+        return "a per-platform object (keys macos / windows / linux)"
+    if "anyOf" in branch:
+        inner = [f for f in (_form(b) for b in branch["anyOf"]) if f]
+        return " or ".join(dict.fromkeys(inner)) or None
+    t = branch.get("type")
+    if isinstance(t, str):
+        return {
+            "string": "a string",
+            "array": "a list",
+            "object": "an object",
+            "integer": "a whole number",
+            "number": "a number",
+            "boolean": "true or false",
+            "null": "null",
+        }.get(t)
+    return None
