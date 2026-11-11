@@ -330,10 +330,13 @@ def _quartz_type_char(char: str, pid: int | None = None) -> None:
     c = char[:1]
     if not c:
         return
+    # The length is in UTF-16 units: an emoji or other non-BMP character
+    # is two, and a length of 1 sent only its high surrogate.
+    units = len(c.encode("utf-16-le")) // 2
     down = CGEventCreateKeyboardEvent(None, 0, True)
     up = CGEventCreateKeyboardEvent(None, 0, False)
-    CGEventKeyboardSetUnicodeString(down, 1, c)
-    CGEventKeyboardSetUnicodeString(up, 1, c)
+    CGEventKeyboardSetUnicodeString(down, units, c)
+    CGEventKeyboardSetUnicodeString(up, units, c)
     if pid:
         CGEventPostToPid(pid, down)
         CGEventPostToPid(pid, up)

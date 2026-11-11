@@ -1209,3 +1209,27 @@ def test_lent_pasteboard_cleans_up_when_the_paste_raises():
         with _lent_pasteboard(pb, "x"):
             raise RuntimeError("boom")
     assert pb.items == []
+
+
+# ── typed characters outside the BMP (rusty-macos-crab) ──────────────
+
+
+@_darwin
+def test_a_typed_emoji_sends_both_utf16_units():
+    """'🦀' is two UTF-16 units; sending a length of 1 typed a lone high
+    surrogate ('\\ud83e') into Safari and CodeMirror."""
+    from bad_ass_mcp.backend import macos
+
+    sent: list = []
+    with (
+        patch.object(macos, "CGEventCreateKeyboardEvent", return_value=object()),
+        patch.object(
+            macos,
+            "CGEventKeyboardSetUnicodeString",
+            side_effect=lambda ev, n, s: sent.append((n, s)),
+        ),
+        patch.object(macos, "CGEventPostToPid"),
+    ):
+        macos._quartz_type_char("🦀", pid=4242)
+        macos._quartz_type_char("é", pid=4242)
+    assert sent == [(2, "🦀"), (2, "🦀"), (1, "é"), (1, "é")]
