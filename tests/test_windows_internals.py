@@ -323,3 +323,92 @@ def test_input_struct_dwflags_lands_at_offset_20():
     assert int.from_bytes(raw[8:12], "little") == 1
     assert int.from_bytes(raw[12:16], "little") == 2
     assert int.from_bytes(raw[20:24], "little") == 0x8001
+
+
+# ── type_text: every strategy is verified by reading the value back ──
+# egui (accesskit) exposes a writable ValuePattern and accepts SetValue
+# without raising, then ignores it. Trusting "no exception" reported ok
+# while the field stayed empty.
+
+
+def _field():
+    """A field that only takes text through the strategy named `works`."""
+    state = {"value": ""}
+
+    def attempt(name, works):
+        def go():
+            if name == works:
+                state["value"] += "framexml"
+
+        return (name, go)
+
+    return state, attempt
+
+
+def test_type_text_strategies_fall_through_an_ignored_setvalue():
+    from bad_ass_mcp.backend.windows import _first_verified
+
+    state, attempt = _field()
+    r = _first_verified(
+        "framexml",
+        [attempt("setvalue", "keys"), attempt("wm_char", "keys"), attempt("keys", "keys")],
+        lambda: state["value"],
+        settle=0,
+    )
+    assert r.ok
+    assert state["value"] == "framexml"
+
+
+def test_type_text_stops_at_the_first_strategy_that_verifies():
+    from bad_ass_mcp.backend.windows import _first_verified
+
+    state, attempt = _field()
+    r = _first_verified(
+        "framexml",
+        [attempt("setvalue", "setvalue"), attempt("keys", "setvalue")],
+        lambda: state["value"],
+        settle=0,
+    )
+    assert r.ok
+    assert state["value"] == "framexml"  # not typed twice
+
+
+def test_type_text_fails_loudly_when_nothing_sticks():
+    from bad_ass_mcp.backend.windows import _first_verified
+
+    state, attempt = _field()
+    r = _first_verified(
+        "framexml",
+        [attempt("setvalue", None), attempt("keys", None)],
+        lambda: state["value"],
+        settle=0,
+    )
+    assert not r.ok
+    assert "setvalue" in r.error and "keys" in r.error
+
+
+def test_type_text_trusts_the_first_strategy_when_nothing_can_be_read_back():
+    from bad_ass_mcp.backend.windows import _first_verified
+
+    calls = []
+    r = _first_verified(
+        "x",
+        [("setvalue", lambda: calls.append("setvalue")), ("keys", lambda: calls.append("keys"))],
+        lambda: None,
+        settle=0,
+    )
+    assert r.ok
+    assert calls == ["setvalue"]
+
+
+def test_type_text_skips_a_strategy_that_raises():
+    from bad_ass_mcp.backend.windows import _first_verified
+
+    def boom():
+        raise RuntimeError("no pattern")
+
+    state, attempt = _field()
+    r = _first_verified(
+        "framexml", [("setvalue", boom), attempt("keys", "keys")], lambda: state["value"], settle=0
+    )
+    assert r.ok

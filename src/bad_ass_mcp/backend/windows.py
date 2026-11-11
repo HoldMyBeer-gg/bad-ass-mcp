@@ -799,39 +799,63 @@ class WindowsBackend(DesktopBackend):
         return self._click_element_at(handle_id)
 
     def type_text(self, handle_id: str, text: str) -> ActionResult:
+        """Each strategy is verified by reading the value back, and the next
+        one runs if the text didn't stick: egui (accesskit) exposes a
+        writable ValuePattern and accepts SetValue without raising, then
+        ignores it. When the value can't be read back at all, the first
+        strategy that runs without error is trusted, as before."""
         element = self._resolve(handle_id)
-        # Primary: ValuePattern.SetValue — fully foreground-independent
-        try:
-            pat = element.GetCurrentPattern(_UIA_ValuePatternId)
-            if pat:
-                vp = pat.QueryInterface(IUIAutomationValuePattern)
-                if not vp.CurrentIsReadOnly:
-                    vp.SetValue(text)
-                    return ActionResult(ok=True)
-        except Exception:
-            pass
-        # Fallback: post WM_CHAR messages to the target HWND — foreground-independent
-        # but limited to apps that handle WM_CHAR (most Win32 controls do)
         hwnd = self._hwnd_for_element(handle_id)
-        if hwnd:
+
+        def value_pattern():
+            pat = element.GetCurrentPattern(_UIA_ValuePatternId)
+            return pat.QueryInterface(IUIAutomationValuePattern) if pat else None
+
+        def read_back():
             try:
-                for ch in text:
-                    _user32.PostMessageW(hwnd, _WM_CHAR, ord(ch), 0)
-                return ActionResult(ok=True)
+                vp = value_pattern()
+                return None if vp is None else (vp.CurrentValue or "")
             except Exception:
-                pass
-        # Final fallback: clipboard + WM_PASTE — works for all standard Win32 edit
-        # controls without needing to simulate modifier keys via PostMessage (which
-        # doesn't update GetKeyState and would deliver a bare 'V' instead of Ctrl+V).
-        try:
+                return None
+
+        def set_value():
+            # Fully foreground-independent.
+            vp = value_pattern()
+            if vp is None or vp.CurrentIsReadOnly:
+                raise RuntimeError("no writable ValuePattern")
+            vp.SetValue(text)
+
+        def wm_char():
+            # Foreground-independent, but only apps that handle WM_CHAR.
+            if not hwnd:
+                raise RuntimeError("no HWND")
+            for ch in text:
+                _user32.PostMessageW(hwnd, _WM_CHAR, ord(ch), 0)
+
+        def paste():
+            # Clipboard + WM_PASTE: standard Win32 edits, no modifier keys
+            # (PostMessage doesn't update GetKeyState, so Ctrl+V would
+            # arrive as a bare 'V').
             element.SetFocus()
             time.sleep(0.05)
             self._clipboard_set(text)
-            target = hwnd or _user32.GetForegroundWindow()
-            _user32.PostMessageW(target, _WM_PASTE, 0, 0)
-            return ActionResult(ok=True)
-        except Exception as e:
-            return ActionResult(ok=False, error=f"Cannot set text: {e}")
+            _user32.PostMessageW(hwnd or _user32.GetForegroundWindow(), _WM_PASTE, 0, 0)
+
+        def keys():
+            # Real key events to the focused field: what finally works on
+            # egui/winit. Needs the window in the foreground.
+            element.SetFocus()
+            time.sleep(0.05)
+            for ch in text:
+                r = self.press_key(ch)
+                if not r.ok:
+                    raise RuntimeError(r.error or "press_key failed")
+
+        return _first_verified(
+            text,
+            [("SetValue", set_value), ("WM_CHAR", wm_char), ("paste", paste), ("keys", keys)],
+            read_back,
+        )
 
     def select_option(self, handle_id: str, value: str) -> ActionResult:
         """Three strategies, each verified by reading the value back:
@@ -1391,3 +1415,23 @@ class WindowsBackend(DesktopBackend):
             return ActionResult(ok=True)
         except Exception as e:
             return ActionResult(ok=False, error=str(e))
+
+
+def _first_verified(text, attempts, read_back, settle: float = 0.15) -> ActionResult:
+    """Run (name, fn) attempts in order until the field reads back with
+    `text` in it. A strategy that raises is skipped. When read_back gives
+    None (no readable value), the first attempt that ran is trusted."""
+    tried: list[str] = []
+    for name, fn in attempts:
+        try:
+            fn()
+        except Exception as e:
+            tried.append(f"{name}: {e}")
+            continue
+        if settle:
+            time.sleep(settle)
+        value = read_back()
+        if value is None or text in value:
+            return ActionResult(ok=True)
+        tried.append(f"{name}: accepted, but the field reads {value!r}")
+    return ActionResult(ok=False, error="Text not set. Tried " + "; ".join(tried))
