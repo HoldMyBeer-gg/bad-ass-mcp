@@ -781,7 +781,7 @@ def _type_text_harness(*, set_ok, before, after, pasted="hello", keys=None, past
     set_ok: what _ax_set(AXValue) returns. before/after: AXValue as read
     before and after the set; pasted: as read after a paste. Returns
     (result, pasteboard texts written, Cmd+V count); `keys` collects (keycode, flags)
-    and ("char", c) for typed characters. `paste` is type_text's paste flag.
+    and ("text", t) for typed text. `paste` is type_text's paste flag.
     """
     from bad_ass_mcp.backend import macos
 
@@ -816,9 +816,9 @@ def _type_text_harness(*, set_ok, before, after, pasted="hello", keys=None, past
         def change_count(self):
             return 1
 
-    def _char(c, pid=None):
-        typed.append(c)
-        keys.append(("char", c))
+    def _text(t, pid=None):
+        typed.append(t)
+        keys.append(("text", t))
 
     def _key(args):
         keys.append((args[0], args[1] if len(args) > 1 else 0))
@@ -832,7 +832,7 @@ def _type_text_harness(*, set_ok, before, after, pasted="hello", keys=None, past
         patch.object(macos, "_ax_set", side_effect=fake_ax_set),
         patch.object(macos, "_MacPasteboard", FakeBoard),
         patch.object(macos, "_quartz_key_press", side_effect=lambda *a, **k: _key(a)),
-        patch.object(macos, "_quartz_type_char", side_effect=_char),
+        patch.object(macos, "_quartz_type_text", side_effect=_text),
         patch.object(macos.time, "sleep"),
     ):
         result = backend.type_text("h", "hello", paste=paste)
@@ -873,7 +873,7 @@ def test_type_text_types_keys_and_leaves_the_clipboard_alone_by_default():
     assert result.ok
     assert copies == [] and pastes == 0
     cmd = macos.kCGEventFlagMaskCommand
-    assert keys == [(0x00, cmd)] + [("char", c) for c in "hello"]  # Cmd+A, then the text
+    assert keys == [(0x00, cmd), ("text", "hello")]  # Cmd+A, then the text
 
 
 @_darwin
@@ -1233,3 +1233,30 @@ def test_a_typed_emoji_sends_both_utf16_units():
         macos._quartz_type_char("🦀", pid=4242)
         macos._quartz_type_char("é", pid=4242)
     assert sent == [(2, "🦀"), (2, "🦀"), (1, "é"), (1, "é")]
+
+
+@_darwin
+def test_typed_text_goes_in_chunks_that_never_split_a_pair():
+    """CodeMirror turned a one-character two-unit event into U+5442; whole
+    strings per event (up to 20 UTF-16 units, the CGEvent limit) avoid
+    per-character events for astral text."""
+    from bad_ass_mcp.backend import macos
+
+    sent: list = []
+    with (
+        patch.object(macos, "CGEventCreateKeyboardEvent", return_value=object()),
+        patch.object(
+            macos,
+            "CGEventKeyboardSetUnicodeString",
+            side_effect=lambda ev, n, s: sent.append((n, s)),
+        ),
+        patch.object(macos, "CGEventPostToPid"),
+        patch.object(macos.time, "sleep"),
+    ):
+        text = "cm fkeys héllo 🦀" + "x" * 19 + "🦀"
+        macos._quartz_type_text(text, pid=4242)
+    downs = sent[::2]
+    assert "".join(s for _, s in downs) == text
+    for n, s in downs:
+        assert n == len(s.encode("utf-16-le")) // 2 <= 20
+        assert not ("\ud800" <= s[-1] <= "\udbff")
