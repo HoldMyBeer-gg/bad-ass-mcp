@@ -64,37 +64,35 @@ _TRANSIENT = "org.nspasteboard.TransientType"
 
 
 @contextlib.contextmanager
-def _borrowed_pasteboard(pb, text: str):
+def _lent_pasteboard(pb, text: str):
     """Put `text` on the general pasteboard for the block, marked concealed
-    and transient, then put back every item the user had, even if the block
-    raises."""
-    saved = pb.snapshot()
+    and transient, then clear it only if it still holds that entry (same
+    changeCount). The user's pasteboard is never read, saved or restored: a
+    restore can't know what changed in between, and would bring back a
+    secret a password manager had already cleared."""
     pb.write([{_TEXT_TYPE: text.encode("utf-8"), _CONCEALED: b"", _TRANSIENT: b""}])
+    ours = pb.change_count()
     try:
         yield
     finally:
-        pb.write(saved)
+        if pb.change_count() == ours:
+            pb.clear()
 
 
 class _MacPasteboard:
-    """Items as {type: bytes} dicts over NSPasteboard.generalPasteboard()."""
+    """The pasteboard calls _lent_pasteboard needs, over
+    NSPasteboard.generalPasteboard()."""
 
     def __init__(self):
         from AppKit import NSPasteboard
 
         self.pb = NSPasteboard.generalPasteboard()
 
-    def snapshot(self) -> list[dict[str, bytes]]:
-        items = []
-        for item in self.pb.pasteboardItems() or []:
-            entry = {}
-            for t in item.types() or []:
-                data = item.dataForType_(t)
-                if data is not None:
-                    entry[str(t)] = bytes(data)
-            if entry:
-                items.append(entry)
-        return items
+    def change_count(self) -> int:
+        return int(self.pb.changeCount())
+
+    def clear(self) -> None:
+        self.pb.clearContents()
 
     def write(self, items: list[dict[str, bytes]]) -> None:
         from AppKit import NSPasteboardItem
@@ -795,7 +793,7 @@ class MacOSBackend(DesktopBackend):
         # No AX action (custom views, canvas UI): click the element's center.
         return self._click_element_at(handle_id)
 
-    def type_text(self, handle_id: str, text: str) -> ActionResult:
+    def type_text(self, handle_id: str, text: str, paste: bool = False) -> ActionResult:
         element = self._resolve(handle_id)
         # Primary: direct AXValue set — foreground-independent, handles all
         # Unicode. Some editors (CodeMirror, Monaco, other contenteditable
@@ -828,17 +826,21 @@ class MacOSBackend(DesktopBackend):
                 _ax_get(element, "AXValue"), text, secure=secure
             ):
                 return ActionResult(ok=True)
-            return self._paste_text(element, handle_id, text, secure=secure)
+            # Real input next. The clipboard only when the caller asked, and
+            # never for a password field.
+            via = "paste" if paste and not secure else "keys"
+            return self._input_text(element, handle_id, text, secure=secure, via=via)
         finally:
             if previous is not None:
                 self._set_frontmost(previous)
 
-    def _paste_text(
-        self, element: Any, handle_id: str, text: str, *, secure: bool = False
+    def _input_text(
+        self, element: Any, handle_id: str, text: str, *, secure: bool = False, via: str = "keys"
     ) -> ActionResult:
-        """Type by pasting: focus, put `text` on the clipboard, Cmd+V to the
-        element's process (no focus stealing, no AppleScript), then put the
-        user's clipboard back."""
+        """Type with real input to the element's process: focus, Cmd+A so the
+        text replaces the content, then either the characters as key events
+        (via="keys") or Cmd+V with the text lent to the pasteboard
+        (via="paste"). Read back to confirm."""
         pid = self._handle_pids.get(handle_id)
         try:
             previous = self._bring_to_front(pid) if pid else None
@@ -852,21 +854,28 @@ class MacOSBackend(DesktopBackend):
                 # paste lands in whichever field already had focus.
                 self._click_element_at(handle_id)
                 time.sleep(0.05)
-            # Every item the user had (text, images, files) goes back after,
-            # and the text is marked so clipboard managers don't record it.
-            with _borrowed_pasteboard(_MacPasteboard(), text):
-                # Select all first, so the paste replaces the content the way
-                # an AXValue set does instead of inserting at the cursor.
-                _quartz_key_press(0x00, kCGEventFlagMaskCommand, pid=pid)  # Cmd+A
-                _quartz_key_press(0x09, kCGEventFlagMaskCommand, pid=pid)  # Cmd+V
-                # The target reads the pasteboard while handling the event;
-                # give it a moment before restoring the user's clipboard.
-                time.sleep(0.3)
+            # Select all first, so the text replaces the content the way an
+            # AXValue set does instead of inserting at the cursor.
+            _quartz_key_press(0x00, kCGEventFlagMaskCommand, pid=pid)  # Cmd+A
+            if via == "paste":
+                # Marked so clipboard managers skip it, and cleared after if
+                # nothing replaced it. The user's pasteboard is never read
+                # or put back.
+                with _lent_pasteboard(_MacPasteboard(), text):
+                    _quartz_key_press(0x09, kCGEventFlagMaskCommand, pid=pid)  # Cmd+V
+                    # The target reads the pasteboard while handling the event.
+                    time.sleep(0.3)
+            else:
+                for ch in text:
+                    _quartz_type_char(ch, pid=pid)
+                    time.sleep(0.005)
+                time.sleep(0.15)
             got = _ax_get(element, "AXValue")
             if isinstance(got, str) and not _same_text(got, text, secure=secure):
+                verb = "Pasted" if via == "paste" else "Typed"
                 return ActionResult(
                     ok=False,
-                    error=f"Pasted, but the field reads {got!r}: the text went elsewhere "
+                    error=f"{verb}, but the field reads {got!r}: the text went elsewhere "
                     "(focus did not reach this field), or the field consumed it and "
                     "cleared itself (e.g. a Go-to-folder box that navigates at once)",
                 )

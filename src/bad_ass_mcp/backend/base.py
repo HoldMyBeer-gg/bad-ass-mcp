@@ -197,8 +197,12 @@ class DesktopBackend(ABC):
         return self.click_at(center[0], center[1], None, button=button, clicks=clicks)
 
     @abstractmethod
-    def type_text(self, handle_id: str, text: str) -> ActionResult:
-        """Set text value. Uses SetValue on text controls, falls back to key events."""
+    def type_text(self, handle_id: str, text: str, paste: bool = False) -> ActionResult:
+        """Set text value. Uses SetValue on text controls, falls back to key
+        events. `paste` also allows typing through the clipboard: the text is
+        lent to the clipboard (marked out of history) and cleared after if
+        nothing replaced it. The user's clipboard is never read or restored,
+        and password fields never use it."""
 
     @abstractmethod
     def select_option(self, handle_id: str, value: str) -> ActionResult:
@@ -610,7 +614,9 @@ class DesktopBackend(ABC):
                     b = self.element_bounds(step["handle"])
                     entry.update(ok=True, value=list(b) if b else None)
                 elif action == "type":
-                    r = self.type_text(step["handle"], step["text"])
+                    r = self.type_text(
+                        step["handle"], step["text"], paste=bool(step.get("paste", False))
+                    )
                     entry.update(ok=r.ok, error=r.error)
                 elif action == "key":
                     r = self.press_key(step["key"], step.get("window_id"))

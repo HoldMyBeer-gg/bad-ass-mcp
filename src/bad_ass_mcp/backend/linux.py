@@ -716,7 +716,8 @@ class LinuxBackend(DesktopBackend):
         except Exception as e:
             return ActionResult(ok=False, error=f"Cannot click: {e}")
 
-    def type_text(self, handle_id: str, text: str) -> ActionResult:
+    def type_text(self, handle_id: str, text: str, paste: bool = False) -> ActionResult:
+        # Linux never uses the clipboard: `paste` has nothing to enable.
         """Type, then read the field back: a path that reports success while
         the text never arrived (egui on native Wayland ignores every route)
         must not pass. Unreadable fields are trusted, as before."""

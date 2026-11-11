@@ -191,6 +191,12 @@ Three layers, later wins: the suite file (`--config`), a script's own
   accessibility action. Use it for controls that report the action ok but only
   react to the mouse, such as egui menus that open on hover. It counts as real
   input, so it gets the foreground and point checks.
+- **Typing and the clipboard:** a `type` step never touches the clipboard
+  unless it has `"paste": true`. With it, the text is lent to the clipboard
+  (kept out of clipboard history and clipboard managers) and cleared after if
+  nothing replaced it. What the user had copied is lost, never restored: a
+  restore could bring back a secret a password manager had already cleared.
+  Password fields never paste.
 - **Checks:** `present`, `absent` (by name/role), `windows: n` (windows matching
   the config's `window`), `no_window: "<title>"`, `shell` (exit 0),
   `manual` (reported for a human; the script ends `MANUAL`).

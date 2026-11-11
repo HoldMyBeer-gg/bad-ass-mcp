@@ -444,6 +444,10 @@
               },
               "text": {
                 "$ref": "#/$defs/per_platform_string"
+              },
+              "paste": {
+                "type": "boolean",
+                "description": "Also allow typing through the clipboard (Windows, macOS) if the other ways fail. The text is lent to the clipboard, kept out of clipboard history, and cleared after; whatever the user had copied is lost. Never used for password fields."
               }
             },
             "additionalProperties": false,

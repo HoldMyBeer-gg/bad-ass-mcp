@@ -207,15 +207,20 @@ def click(handle_id: str, button: str = "left", clicks: int = 1) -> dict:
 
 
 @mcp.tool()
-def type_text(handle_id: str, text: str) -> dict:
+def type_text(handle_id: str, text: str, paste: bool = False) -> dict:
     """Type text into a field. Uses native SetValue — foreground-independent.
     Falls back to key injection if the element doesn't support SetValue.
 
     SetValue REPLACES the field's content. A window matched by title can be
     the user's own (single-instance apps such as Windows 11 Notepad reuse
-    their open window), so type only into windows of a process you started."""
+    their open window), so type only into windows of a process you started.
+
+    paste=true also allows typing through the clipboard (Windows, macOS) when
+    the other ways fail. The text is lent to the clipboard, marked out of
+    clipboard history, and cleared afterwards if nothing replaced it; what the
+    user had copied is lost, never restored. Password fields never paste."""
     try:
-        result = _backend().type_text(handle_id, text)
+        result = _backend().type_text(handle_id, text, paste=paste)
         return {"ok": result.ok, "error": result.error}
     except StaleHandleError as e:
         return {"ok": False, "error": f"Stale handle: {e}"}
