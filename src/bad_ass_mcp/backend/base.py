@@ -179,7 +179,11 @@ class DesktopBackend(ABC):
         if center is None:
             return ActionResult(
                 ok=False,
-                error="No actionable a11y pattern and element reports no screen bounds",
+                error=(
+                    "Element reports no screen bounds"
+                    if button != "left" or clicks != 1
+                    else "No actionable a11y pattern and element reports no screen bounds"
+                ),
             )
         return self.click_at(center[0], center[1], None, button=button, clicks=clicks)
 

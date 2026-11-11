@@ -392,3 +392,14 @@ def test_run_without_the_platform_extra_is_one_line(tmp_path):
         with pytest.raises(SystemExit) as e:
             cli.main([str(tmp_path)])
     assert "PyObjC" in str(e.value.code)
+
+
+def test_a_pointer_click_without_bounds_gives_the_real_reason():
+    """A right-click never uses a11y invoke, so 'no actionable pattern'
+    isn't why it failed."""
+    desk = FakeBackend()
+    with patch.object(desk, "element_bounds", return_value=None):
+        r = desk._click_element_at("btn-ok", button="right")
+    assert not r.ok
+    assert "no screen bounds" in r.error
+    assert "a11y pattern" not in r.error
