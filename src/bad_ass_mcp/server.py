@@ -198,7 +198,11 @@ def click(handle_id: str, button: str = "left", clicks: int = 1) -> dict:
 @mcp.tool()
 def type_text(handle_id: str, text: str) -> dict:
     """Type text into a field. Uses native SetValue — foreground-independent.
-    Falls back to key injection if the element doesn't support SetValue."""
+    Falls back to key injection if the element doesn't support SetValue.
+
+    SetValue REPLACES the field's content. A window matched by title can be
+    the user's own (single-instance apps such as Windows 11 Notepad reuse
+    their open window), so type only into windows of a process you started."""
     try:
         result = _backend().type_text(handle_id, text)
         return {"ok": result.ok, "error": result.error}

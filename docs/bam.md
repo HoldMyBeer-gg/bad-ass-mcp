@@ -16,6 +16,13 @@ commands (`setup`, `shell` checks), launch programs (through the config), and
 send clicks and keys to any window it can name. **Only run scripts you wrote
 or reviewed.**
 
+**A window found by title can be the user's own.** Single-instance apps
+(Windows 11 Notepad with its tabs, browsers, editors that reuse a window)
+answer a title match with the window the user already has open, and typing
+into it replaces their text. In a run, set `app` (or `pid`) so only the
+launched process is driven. With the MCP tools directly, check the `pid` from
+`list_windows` belongs to a process you started before typing.
+
 Planned before scripts can be shared (BAM strings, `.bam` packages):
 
 - **Untrusted mode**, on by default for anything decoded from a string or
