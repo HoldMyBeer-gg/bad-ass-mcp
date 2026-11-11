@@ -103,6 +103,7 @@ def test_macos_combo_posts_the_key_with_modifier_flags():
     with (
         patch.object(backend, "_pid_for_window", return_value=4242),
         patch.object(backend, "_bring_to_front", return_value=None),
+        patch.object(backend, "_frontmost_pid", return_value=4242),
         patch.object(macos, "_quartz_key_press", side_effect=lambda *a, **k: sent.append((a, k))),
     ):
         r = backend.press_key("Cmd+Shift+G", window_id="4242")
@@ -110,7 +111,9 @@ def test_macos_combo_posts_the_key_with_modifier_flags():
     (args, kw) = sent[0]
     assert args[0] == 0x05  # G on an ANSI keyboard
     assert args[1] == macos.kCGEventFlagMaskCommand | macos.kCGEventFlagMaskShift
-    assert kw["pid"] == 4242
+    # Posted as real input, not to the pid: an NSOpenPanel runs out of
+    # process and never sees pid-targeted keys (TextEdit, Audition).
+    assert kw["pid"] is None
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="needs PyObjC")
@@ -128,6 +131,7 @@ def test_macos_combo_brings_the_app_forward_and_gives_focus_back():
         patch.object(
             backend, "_set_frontmost", side_effect=lambda pid: order.append(f"back:{pid}")
         ),
+        patch.object(backend, "_frontmost_pid", return_value=4242),
         patch.object(macos, "_quartz_key_press", side_effect=lambda *a, **k: order.append("key")),
     ):
         assert backend.press_key("Cmd+A", window_id="4242").ok
@@ -251,3 +255,53 @@ def test_macos_combo_failure_names_the_whole_combination():
     ):
         r = backend.press_key("Cmd+Shift+G", window_id="4242")
     assert not r.ok and "Cmd+Shift+G" in r.error
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="needs PyObjC")
+def test_macos_combo_refuses_when_the_target_is_not_in_front_after_all():
+    from bad_ass_mcp.backend import macos
+
+    backend = macos.MacOSBackend()
+    with (
+        patch.object(backend, "_pid_for_window", return_value=4242),
+        patch.object(backend, "_bring_to_front", return_value=None),
+        patch.object(backend, "_frontmost_pid", return_value=111),
+        patch.object(macos, "_quartz_key_press") as kp,
+    ):
+        r = backend.press_key("Cmd+Shift+G", window_id="4242")
+    assert not r.ok and "Cmd+Shift+G" in r.error
+    kp.assert_not_called()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="needs PyObjC")
+def test_macos_frontmost_pid_pumps_the_run_loop():
+    """frontmostApplication() is updated by the same notifications as
+    runningApplications(): without a run loop it never changes, so a raise
+    that worked was reported as failed."""
+    from bad_ass_mcp.backend import macos
+
+    pumped = []
+    with patch.object(macos, "_pump_run_loop", side_effect=lambda: pumped.append(1)):
+        macos.MacOSBackend._frontmost_pid()
+    assert pumped
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="needs PyObjC")
+def test_macos_failed_raise_hands_focus_back():
+    """The raise can land after we stop waiting; then the user's app must
+    get focus back rather than being left behind the target."""
+    from bad_ass_mcp.backend import macos
+
+    backend = macos.MacOSBackend()
+    restored = []
+    with (
+        patch.object(backend, "_frontmost_pid", return_value=111),
+        patch.object(
+            backend,
+            "_set_frontmost",
+            side_effect=lambda pid: restored.append(pid) or (pid == 111),
+        ),
+    ):
+        with pytest.raises(RuntimeError):
+            backend._bring_to_front(4242)
+    assert restored == [4242, 111]
