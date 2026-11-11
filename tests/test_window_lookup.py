@@ -403,3 +403,25 @@ def test_a_pointer_click_without_bounds_gives_the_real_reason():
     assert not r.ok
     assert "no screen bounds" in r.error
     assert "a11y pattern" not in r.error
+
+
+def test_linux_untitled_atspi_window_takes_its_x11_title():
+    """Seen on Kali X11: an egui/accesskit build with no AT-SPI name and an
+    untitled frame, while X11 WM_NAME carries the title."""
+    backend, mod = _make_backend()
+    app = _atspi_app("", 69360, "", (5, 64, 1014, 699))
+    x11 = [
+        WindowInfo(
+            id="69360",
+            name="Rusty Demon — CASC Explorer",
+            pid=69360,
+            focused=False,
+            bounds=(5, 64, 1014, 699),
+            accessible=False,
+        )
+    ]
+    wins = _listed(backend, mod, app, session="x11", x11=x11)
+    assert len(wins) == 1
+    assert wins[0].accessible is True
+    assert wins[0].titles == ("Rusty Demon — CASC Explorer",)
+    assert wins[0].matches("Rusty Demon")

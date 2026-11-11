@@ -539,9 +539,21 @@ class LinuxBackend(DesktopBackend):
                     if waiting <= atspi_pids:
                         break
                 extra = [w for w in extra if w.pid not in atspi_pids]
+        self._x11_titles(atspi, x11)
         if _is_wayland_session():
             self._wayland_bounds(atspi, x11)
         return atspi + extra
+
+    @staticmethod
+    def _x11_titles(atspi: list[WindowInfo], x11: list[WindowInfo]) -> None:
+        """An app can publish no AT-SPI name and an untitled frame (older
+        egui/accesskit builds) while its X11 window has a title. Borrow the
+        X11 title so a script can still find it by title."""
+        titles = {w.pid: w.name for w in x11 if w.name}
+        for w in atspi:
+            t = titles.get(w.pid)
+            if t and t != w.name and t not in w.titles:
+                w.titles = (*w.titles, t)
 
     @staticmethod
     def _wayland_bounds(atspi: list[WindowInfo], x11: list[WindowInfo]) -> None:
