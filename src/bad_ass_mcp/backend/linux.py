@@ -230,6 +230,11 @@ class LinuxBackend(DesktopBackend):
                     handle.children.append(self._walk(child, depth + 1, max_depth, budget))
             except Exception:
                 pass
+        elif depth >= max_depth:
+            try:
+                handle.truncated = node.get_child_count() > 0
+            except Exception:
+                pass
         return handle
 
     def _find_app(self, window_id: str) -> Any | None:

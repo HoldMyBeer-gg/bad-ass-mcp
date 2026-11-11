@@ -47,6 +47,9 @@ class ElementHandle:
     value: str | None = None
     states: set[str] = field(default_factory=set)
     children: list[ElementHandle] = field(default_factory=list)
+    # The walk's depth cap stopped here although the node has children: an
+    # empty `children` then means "not walked", not "empty".
+    truncated: bool = False
 
 
 @dataclass

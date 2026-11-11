@@ -581,6 +581,12 @@ class WindowsBackend(DesktopBackend):
                             pass
             except Exception:
                 pass
+        elif depth >= max_depth:
+            try:
+                cond = self._uia.CreateTrueCondition()
+                handle.truncated = element.FindFirst(_TreeScope_Children, cond) is not None
+            except Exception:
+                pass
         return handle
 
     def _search(self, element: Any, role: str | None, name: str | None) -> list[Any]:
@@ -1500,7 +1506,7 @@ def _until_populated(walk, timeout: float = 2.0):
     get_tree didn't."""
     deadline = time.monotonic() + timeout
     tree = walk()
-    while not tree.children and time.monotonic() < deadline:
+    while not tree.children and not tree.truncated and time.monotonic() < deadline:
         time.sleep(0.2)
         tree = walk()
     return tree

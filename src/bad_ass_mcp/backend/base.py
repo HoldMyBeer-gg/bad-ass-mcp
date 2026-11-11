@@ -68,6 +68,10 @@ def prune_tree(root: "ElementHandle") -> "ElementHandle":
             prune_children(child)
             if _is_noise_wrapper(child):
                 kept.extend(child.children)  # graft grandchildren up
+                if child.truncated:
+                    # The cap cut inside a wrapper that's about to vanish:
+                    # the mark moves up so the cut stays visible.
+                    node.truncated = True
             else:
                 kept.append(child)
         node.children = kept
