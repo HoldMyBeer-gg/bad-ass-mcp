@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -425,3 +426,39 @@ def test_linux_untitled_atspi_window_takes_its_x11_title():
     assert wins[0].accessible is True
     assert wins[0].titles == ("Rusty Demon — CASC Explorer",)
     assert wins[0].matches("Rusty Demon")
+
+
+def _x11_then_atspi(backend, polls_before_atspi):
+    """list_windows that shows only the X11 entry for the first N polls,
+    as on Kali right after launch, then the AT-SPI entry."""
+    x11_only = WindowInfo(
+        id="71550", name="Rusty Demon — CASC Explorer", pid=71550, focused=True, accessible=False
+    )
+    atspi = WindowInfo(
+        id="71550", name="", pid=71550, focused=True, titles=("Rusty Demon — CASC Explorer",)
+    )
+    calls = {"n": 0}
+
+    def listing():
+        calls["n"] += 1
+        return [x11_only] if calls["n"] <= polls_before_atspi else [atspi]
+
+    return patch.object(backend, "list_windows", side_effect=listing)
+
+
+def test_linux_wait_for_window_lets_atspi_catch_up_after_an_x11_only_match():
+    backend, _mod = _make_backend()
+    with _x11_then_atspi(backend, 2), patch("time.sleep"):
+        w = backend.wait_for_window("Rusty Demon", timeout=5)
+    assert w.accessible is True
+
+
+def test_linux_wait_for_window_still_returns_a_genuinely_x11_only_window():
+    backend, _mod = _make_backend()
+    backend._ATSPI_GRACE_S = 0.05
+    started = time.monotonic()
+    with _x11_then_atspi(backend, 10**9):
+        w = backend.wait_for_window("Rusty Demon", timeout=5)
+    assert w is not None and w.accessible is False
+    # Bounded by time (Kali measured ~3 s when it was 15 polls).
+    assert time.monotonic() - started < 1.0

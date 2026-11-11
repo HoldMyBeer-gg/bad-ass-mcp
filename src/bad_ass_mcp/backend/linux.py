@@ -882,14 +882,29 @@ class LinuxBackend(DesktopBackend):
             return None
         return str(current).strip().lower() == value.strip().lower()
 
+    # Seconds to wait for an app's AT-SPI entry after its X11 window has
+    # matched: X11 maps the window before the app registers with AT-SPI, and
+    # an early accessible=False would send callers to pixels. Bounded by
+    # time, not polls: one list_windows() can itself take ~0.1 s.
+    _ATSPI_GRACE_S = 1.5
+
     def wait_for_window(self, title_pattern: str, timeout: float = 5.0) -> WindowInfo | None:
         deadline = time.monotonic() + timeout
+        x11_only: WindowInfo | None = None
+        grace_until: float | None = None
         while time.monotonic() < deadline:
-            for w in self.list_windows():
-                if w.matches(title_pattern):
+            hits = [w for w in self.list_windows() if w.matches(title_pattern)]
+            for w in hits:
+                if w.accessible:
                     return w
+            if hits:
+                x11_only = hits[0]
+                if grace_until is None:
+                    grace_until = time.monotonic() + self._ATSPI_GRACE_S
+                elif time.monotonic() >= grace_until:
+                    return x11_only
             time.sleep(0.1)
-        return None
+        return x11_only
 
     def wait_for_element(
         self, window_id, *, role=None, name=None, state=None, timeout=5.0
