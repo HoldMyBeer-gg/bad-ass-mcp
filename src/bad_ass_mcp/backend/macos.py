@@ -17,6 +17,7 @@ try:
         AXUIElementPerformAction,
         AXUIElementSetAttributeValue,
     )
+    from Foundation import NSDate, NSRunLoop
     from Quartz import (
         CGEventCreateKeyboardEvent,
         CGEventCreateMouseEvent,
@@ -458,6 +459,7 @@ class MacOSBackend(DesktopBackend):
         return []
 
     def _find_app_element(self, window_id: str) -> Any | None:
+        _pump_run_loop()
         for app in NSWorkspace.sharedWorkspace().runningApplications():
             pid = app.processIdentifier()
             name = app.localizedName() or ""
@@ -486,6 +488,7 @@ class MacOSBackend(DesktopBackend):
         return None
 
     def _pid_for_window(self, window_id: str) -> int | None:
+        _pump_run_loop()
         for app in NSWorkspace.sharedWorkspace().runningApplications():
             pid = app.processIdentifier()
             name = app.localizedName() or ""
@@ -540,6 +543,7 @@ class MacOSBackend(DesktopBackend):
     # ── DesktopBackend impl ───────────────────────────────────────────
 
     def list_windows(self) -> list[WindowInfo]:
+        _pump_run_loop()
         ws = NSWorkspace.sharedWorkspace()
         active = ws.frontmostApplication()
         active_pid = active.processIdentifier() if active else -1
@@ -1238,3 +1242,15 @@ def _same_text(value, text: str, *, secure: bool = False) -> bool:
     if secure and value and set(value) <= {"•", "●", "*"}:
         return len(value) == len(text)
     return value.strip() == text.strip()
+
+
+def _pump_run_loop() -> None:
+    """Let NSWorkspace take in app launches and quits. Its
+    runningApplications() list only updates while the calling thread's run
+    loop runs, and this server never runs one, so apps launched after it
+    started never appeared (verified on macOS 26 with Calculator). FastMCP
+    calls sync tools on the main thread, where the updates are delivered."""
+    try:
+        NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.01))
+    except Exception:
+        pass
