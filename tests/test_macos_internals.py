@@ -775,23 +775,27 @@ def test_start_recording_scales_window_crop_for_retina():
 # ── type_text: AXValue set that "succeeds" without changing anything ──
 
 
-def _type_text_harness(*, set_ok, before, after):
+def _type_text_harness(*, set_ok, before, after, pasted="hello", keys=None):
     """Run MacOSBackend.type_text against a fake element.
 
     set_ok: what _ax_set(AXValue) returns. before/after: AXValue as read
-    before and after the set. Returns (result, pbcopy inputs, Cmd+V count).
+    before and after the set; pasted: as read after a paste. Returns
+    (result, pbcopy inputs, Cmd+V count); `keys` collects (keycode, flags).
     """
     from bad_ass_mcp.backend import macos
 
     backend = macos.MacOSBackend()
     backend._handles["h"] = MagicMock()
     backend._handle_pids["h"] = 4242
-    reads = iter([before, after])
+    del before  # type_text no longer reads the value before setting it
     copies: list[bytes] = []
     pastes: list[tuple] = []
+    keys = keys if keys is not None else []
 
     def fake_ax_get(_el, attr):
-        return next(reads) if attr == "AXValue" else None
+        if attr != "AXValue":
+            return None
+        return pasted if pastes else after
 
     def fake_ax_set(_el, attr, _value):
         return set_ok if attr == "AXValue" else True
@@ -802,13 +806,18 @@ def _type_text_harness(*, set_ok, before, after):
         copies.append(input)
         return MagicMock(returncode=0, stdout=b"")
 
+    def _key(args):
+        keys.append((args[0], args[1] if len(args) > 1 else 0))
+        if args[0] == 0x09:
+            pastes.append(args)
+
     with (
         patch.object(backend, "_resolve", return_value=backend._handles["h"]),
         patch.object(backend, "_bring_to_front", return_value=None),
         patch.object(macos, "_ax_get", side_effect=fake_ax_get),
         patch.object(macos, "_ax_set", side_effect=fake_ax_set),
         patch.object(macos.subprocess, "run", side_effect=fake_run),
-        patch.object(macos, "_quartz_key_press", side_effect=lambda *a, **k: pastes.append((a, k))),
+        patch.object(macos, "_quartz_key_press", side_effect=lambda *a, **k: _key(a)),
         patch.object(macos.time, "sleep"),
     ):
         result = backend.type_text("h", "hello")
@@ -878,7 +887,7 @@ def test_paste_brings_a_background_app_forward_then_gives_focus_back():
     ):
         result = backend._paste_text(MagicMock(), "h", "x")
     assert result.ok
-    assert order == ["front:4242", "paste", "restore:777"]
+    assert order == ["front:4242", "paste", "paste", "restore:777"]  # Cmd+A, Cmd+V
 
 
 @_darwin
@@ -927,3 +936,77 @@ def test_set_frontmost_falls_back_to_system_events_when_activation_is_ignored():
         backend._set_frontmost(4242)
     assert calls and calls[0][0] == "osascript"
     assert "unix id is 4242" in calls[0][-1]
+
+
+# ── type_text in WKWebView inputs (Tauri), from rusty-macos-crab ─────
+
+
+@_darwin
+def test_type_text_does_not_trust_a_set_that_appended():
+    """'Test worker. Do nothing.' became 'Test worker. Do nothing.idler':
+    the field changed, but not to the text. That is not a success."""
+    result, copies, pastes = _type_text_harness(
+        set_ok=True, before="Test worker. Do nothing.", after="Test worker. Do nothing.idler"
+    )
+    assert pastes == 1 and copies[0] == b"hello"
+    assert result.ok
+
+
+@_darwin
+def test_paste_selects_all_first_so_it_replaces():
+    from bad_ass_mcp.backend import macos
+
+    keys: list = []
+    _type_text_harness(set_ok=False, before="old", after="old", keys=keys)
+    cmd = macos.kCGEventFlagMaskCommand
+    assert keys == [(0x00, cmd), (0x09, cmd)]  # Cmd+A, then Cmd+V
+
+
+@_darwin
+def test_paste_that_lands_elsewhere_fails_loudly():
+    """The text went to whichever field had focus, not the handle given."""
+    result, _, _ = _type_text_harness(set_ok=False, before="", after="", pasted="")
+    assert not result.ok
+    assert "reads" in result.error
+
+
+@_darwin
+def test_paste_fails_when_the_app_cannot_be_brought_forward():
+    from bad_ass_mcp.backend import macos
+
+    backend = macos.MacOSBackend()
+    with (
+        patch.object(backend, "_frontmost_pid", return_value=111),
+        patch.object(backend, "_set_frontmost", return_value=False),
+    ):
+        with pytest.raises(RuntimeError, match="front"):
+            backend._bring_to_front(4242)
+
+
+@_darwin
+def test_paste_clicks_the_field_when_ax_focus_does_not_take():
+    """WKWebView inputs can ignore AXFocused; a real click focuses them."""
+    from bad_ass_mcp.backend import macos
+
+    backend = macos.MacOSBackend()
+    backend._handle_pids["h"] = 4242
+    clicks: list = []
+
+    def fake_ax_get(_el, attr):
+        return False if attr == "AXFocused" else "x"
+
+    with (
+        patch.object(backend, "_bring_to_front", return_value=None),
+        patch.object(
+            backend,
+            "_click_element_at",
+            side_effect=lambda h: clicks.append(h) or MagicMock(ok=True),
+        ),
+        patch.object(macos, "_ax_get", side_effect=fake_ax_get),
+        patch.object(macos, "_ax_set", return_value=True),
+        patch.object(macos.subprocess, "run", return_value=MagicMock(returncode=0, stdout=b"")),
+        patch.object(macos, "_quartz_key_press"),
+        patch.object(macos.time, "sleep"),
+    ):
+        assert backend._paste_text(MagicMock(), "h", "x").ok
+    assert clicks == ["h"]
