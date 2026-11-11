@@ -782,6 +782,10 @@ class MacOSBackend(DesktopBackend):
         if front == pid:
             return None
         if not self._set_frontmost(pid):
+            # The raise may still land after we stopped waiting; don't leave
+            # the user's app stuck behind the target.
+            if front is not None:
+                self._set_frontmost(front)
             raise RuntimeError(f"could not bring pid {pid} to the front")
         return front
 
@@ -812,7 +816,15 @@ class MacOSBackend(DesktopBackend):
         except RuntimeError as e:
             return ActionResult(ok=False, error=f"Cannot send {label!r}: {e}")
         try:
-            _quartz_key_press(keycode, flags, pid=pid)
+            if pid and self._frontmost_pid() != pid:
+                return ActionResult(
+                    ok=False, error=f"Cannot send {label!r}: the target app isn't in front"
+                )
+            # Post as real input to the (now front) app rather than to its
+            # pid: an NSOpenPanel runs out of process as a view service and
+            # never sees pid-targeted keys (TextEdit's Open panel, Audition's
+            # Import panel), while HID-level keys reach it.
+            _quartz_key_press(keycode, flags, pid=None)
             return ActionResult(ok=True)
         except Exception as e:
             return ActionResult(ok=False, error=str(e))
@@ -872,6 +884,9 @@ class MacOSBackend(DesktopBackend):
 
     @staticmethod
     def _frontmost_pid() -> int | None:
+        # Same notification-fed state as runningApplications(): stale until
+        # the run loop runs, so a raise that worked looked like it hadn't.
+        _pump_run_loop()
         app = NSWorkspace.sharedWorkspace().frontmostApplication()
         return app.processIdentifier() if app is not None else None
 
