@@ -242,6 +242,41 @@ class _Run:
                     raise ScriptFailure(f"app not ready: no {_describe(desc)} within {limit:g}s")
                 time.sleep(0.2)
 
+    def run_teardown(self) -> list[dict]:
+        """The script's own cleanup (`teardown`): after the last phase and
+        after a failure, before the app is closed and focus goes back. Each
+        entry is a shell command or a step; best-effort, so a failing entry
+        is recorded and the rest still run, and the result never changes.
+        Steps are skipped when there is no app window to send them to (it
+        never appeared, hung, or the user took over)."""
+        out: list[dict] = []
+        entries = [e for e in self.script.get("teardown", []) if applies(e, self.platform)]
+        scale = float(self.config.get("timeout_scale", 1))
+        for i, entry in enumerate(entries, 1):
+            try:
+                if "shell" in entry:
+                    r = _shell(entry["shell"], self.vars)
+                    ok, err = r.returncode == 0, (r.stderr.strip() or None)
+                elif self.window is None or self.hung_after is not None or self.user_stopped:
+                    ok, err = False, "skipped: no app window to send it to"
+                else:
+                    sent, _ = build_steps(
+                        [entry], self.platform, {}, self.window, self.vars, timeout_scale=scale
+                    )
+                    if not sent:
+                        continue
+                    if is_real_input(sent[0]):
+                        self.guard(sent[0], 0, i)
+                    res = self.b.run_sequence(sent, stop_on_error=True)[0]
+                    ok, err = bool(res.get("ok")), res.get("error")
+            except ScriptFailure as f:
+                ok, err = False, f.reason
+            except Exception as e:
+                ok, err = False, f"{type(e).__name__}: {e}"
+            out.append({"step": i, "ok": ok, **({"error": err} if err and not ok else {})})
+            self.log("teardown", step=i, ok=ok)
+        return out
+
     def teardown(self) -> None:
         try:
             self._close_app()
@@ -757,6 +792,11 @@ def run_script(
             result["status"] = "FAIL"
             result["failure"] = {"reason": f"{type(e).__name__}: {e}"}
         finally:
+            # Before the watchdog stops: a teardown step into a hung app
+            # must still be unblocked by it.
+            cleanup = run.run_teardown()
+            if cleanup:
+                result["teardown"] = cleanup
             run.stop_watchdog()
             if getattr(run, "hung_after", None) is not None:
                 # Whatever the unblocked call said, the cause is the hang.

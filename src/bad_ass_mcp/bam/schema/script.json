@@ -68,6 +68,35 @@
         "$ref": "#/$defs/phase"
       }
     },
+    "teardown": {
+      "type": "array",
+      "description": "Best-effort cleanup after the last phase and after a failure, before the app is closed and focus goes back: shell commands or steps (no learned targets).",
+      "items": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "shell": {
+                "type": "string"
+              },
+              "only": {
+                "$ref": "#/$defs/only"
+              },
+              "note": {
+                "$ref": "#/$defs/note"
+              }
+            },
+            "required": [
+              "shell"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "$ref": "#/$defs/step"
+          }
+        ]
+      }
+    },
     "checks": {
       "type": "array",
       "items": {

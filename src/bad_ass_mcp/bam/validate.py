@@ -204,11 +204,29 @@ def _meaning_issues(script: dict) -> list[Issue]:
     return issues
 
 
+def _teardown_issues(script: dict) -> list[Issue]:
+    """Teardown has no learn block, so learned targets can't resolve."""
+    issues: list[Issue] = []
+    for i, entry in enumerate(script.get("teardown") or []):
+        if not isinstance(entry, dict):
+            continue
+        for key in ("target", "from_target", "to_target"):
+            if key in entry:
+                issues.append(
+                    Issue(
+                        f"teardown[{i}].{key}",
+                        "teardown steps can't use learned targets; use key, click_at, "
+                        "a handle-free step or shell",
+                    )
+                )
+    return issues
+
+
 def validate_script(script) -> list[Issue]:
     if not isinstance(script, dict):
         return [Issue("(script)", "should be an object")]
     issues = _schema_issues(script, "script", "(script)")
-    return issues + _meaning_issues(script)
+    return issues + _meaning_issues(script) + _teardown_issues(script)
 
 
 def validate_config(config) -> list[Issue]:
