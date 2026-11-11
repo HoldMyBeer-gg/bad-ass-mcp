@@ -625,17 +625,31 @@ class DesktopBackend(ABC):
                     time.sleep(float(step.get("seconds", 0.1)))
                     entry["ok"] = True
                 elif action == "wait_for_element":
+                    timeout = float(step.get("timeout", 5.0))
                     el = self.wait_for_element(
                         step["window_id"],
                         role=step.get("role"),
                         name=step.get("name"),
                         state=step.get("state"),
-                        timeout=float(step.get("timeout", 5.0)),
+                        timeout=timeout,
                     )
                     entry.update(ok=el is not None, handle=el.id if el else None)
+                    if el is None:
+                        wanted = ", ".join(
+                            f"{k}={step[k]!r}" for k in ("role", "name", "state") if step.get(k)
+                        )
+                        entry["error"] = (
+                            f"timed out after {timeout:g}s waiting for {wanted or 'an element'}"
+                        )
                 elif action == "wait_for_window":
-                    w = self.wait_for_window(step["pattern"], float(step.get("timeout", 5.0)))
+                    timeout = float(step.get("timeout", 5.0))
+                    w = self.wait_for_window(step["pattern"], timeout)
                     entry.update(ok=w is not None, window_id=w.id if w else None)
+                    if w is None:
+                        entry["error"] = (
+                            f"timed out after {timeout:g}s waiting for a window "
+                            f"matching {step['pattern']!r}"
+                        )
                 else:
                     entry.update(ok=False, error=f"Unknown action: {action!r}")
             except StaleHandleError as e:
