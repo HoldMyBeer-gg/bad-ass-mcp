@@ -329,3 +329,66 @@ def test_macos_combo_lets_the_target_handle_the_key_before_focus_goes_back():
     i_key, i_back = order.index(key), order.index("back")
     settles = [o for o in order[i_key:i_back] if isinstance(o, str) and o.startswith("sleep:")]
     assert settles and float(settles[0].split(":")[1]) >= 0.2
+
+
+# ── no stuck modifiers after a combo (rusty-macos-crab, Audition) ─────
+
+
+def _record_cg(macos):
+    """Patch CoreGraphics so events become dicts and posts are recorded."""
+    posted = []
+
+    def kb(_src, code, down):
+        return {"kind": "key", "code": code, "down": down, "flags": 0}
+
+    def mouse(_src, typ, pt, btn):
+        return {"kind": "mouse", "type": typ, "flags": "unset"}
+
+    def set_flags(ev, flags):
+        ev["flags"] = flags
+
+    return posted, [
+        patch.object(macos, "CGEventCreateKeyboardEvent", side_effect=kb),
+        patch.object(macos, "CGEventCreateMouseEvent", side_effect=mouse),
+        patch.object(macos, "CGEventSetFlags", side_effect=set_flags),
+        patch.object(macos, "CGEventSetIntegerValueField"),
+        patch.object(macos, "CGEventPost", side_effect=lambda tap, ev: posted.append(ev)),
+        patch.object(macos.time, "sleep"),
+    ]
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="needs PyObjC")
+def test_hid_combo_presses_and_releases_its_modifiers():
+    """Cmd posted only as a flag on the key events left Command 'down' at
+    the HID level: every later click_at landed as a Cmd+click."""
+    from contextlib import ExitStack
+
+    from bad_ass_mcp.backend import macos
+
+    posted, patches = _record_cg(macos)
+    with ExitStack() as st:
+        for p in patches:
+            st.enter_context(p)
+        macos._quartz_key_press(
+            0x00, macos.kCGEventFlagMaskCommand | macos.kCGEventFlagMaskShift, hid=True
+        )
+    codes = [(e["code"], e["down"]) for e in posted]
+    assert codes[0] == (0x37, True)  # Command down
+    assert (0x00, True) in codes and (0x00, False) in codes
+    assert codes[-2:] == [(0x38, False), (0x37, False)]  # released, reverse order
+    assert posted[-1]["flags"] == 0  # nothing left held
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="needs PyObjC")
+def test_mouse_events_carry_no_modifiers():
+    from contextlib import ExitStack
+
+    from bad_ass_mcp.backend import macos
+
+    posted, patches = _record_cg(macos)
+    with ExitStack() as st:
+        for p in patches:
+            st.enter_context(p)
+        macos._quartz_mouse_click(10, 10)
+        macos._quartz_mouse_drag(0, 0, 50, 0, duration=0.01)
+    assert posted and all(e["flags"] == 0 for e in posted)

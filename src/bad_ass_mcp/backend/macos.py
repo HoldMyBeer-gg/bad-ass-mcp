@@ -119,6 +119,9 @@ def _quartz_key_press(
     HID tap, the closest thing to a real keyboard (for out-of-process
     panels, which pid-targeted keys never reach).
     """
+    if hid and flags:
+        _hid_chord(keycode, flags)
+        return
     down = CGEventCreateKeyboardEvent(None, keycode, True)
     up = CGEventCreateKeyboardEvent(None, keycode, False)
     if flags:
@@ -131,6 +134,52 @@ def _quartz_key_press(
         tap = kCGHIDEventTap if hid else kCGSessionEventTap
         CGEventPost(tap, down)
         CGEventPost(tap, up)
+
+
+# Modifier key codes, in the order a person presses them.
+_MODIFIER_KEYCODES = (
+    (0x3B, "ctrl"),
+    (0x3A, "alt"),
+    (0x37, "cmd"),
+    (0x38, "shift"),
+)
+
+
+def _hid_chord(keycode: int, flags: int) -> None:
+    """A chord at the HID tap as a keyboard makes it: each modifier key down,
+    the key, then the modifiers up in reverse, the last event carrying no
+    flags. Setting the flags on the key events alone left Command logically
+    held at the HID level, and every later click arrived as a Cmd+click."""
+    mask = {
+        "ctrl": kCGEventFlagMaskControl,
+        "alt": kCGEventFlagMaskAlternate,
+        "cmd": kCGEventFlagMaskCommand,
+        "shift": kCGEventFlagMaskShift,
+    }
+    held = [(code, mask[name]) for code, name in _MODIFIER_KEYCODES if flags & mask[name]]
+    state = 0
+    for code, bit in held:
+        state |= bit
+        ev = CGEventCreateKeyboardEvent(None, code, True)
+        CGEventSetFlags(ev, state)
+        CGEventPost(kCGHIDEventTap, ev)
+    for down in (True, False):
+        ev = CGEventCreateKeyboardEvent(None, keycode, down)
+        CGEventSetFlags(ev, state)
+        CGEventPost(kCGHIDEventTap, ev)
+    for code, bit in reversed(held):
+        state &= ~bit
+        ev = CGEventCreateKeyboardEvent(None, code, False)
+        CGEventSetFlags(ev, state)
+        CGEventPost(kCGHIDEventTap, ev)
+
+
+def _mouse_event(typ, point, btn):
+    """A mouse event with no modifier flags, so a stray held modifier never
+    turns a click into a Cmd/Shift-click."""
+    ev = CGEventCreateMouseEvent(None, typ, point, btn)
+    CGEventSetFlags(ev, 0)
+    return ev
 
 
 def _quartz_button(button: str) -> tuple[int, int, int, int]:
@@ -179,8 +228,8 @@ def _quartz_mouse_click(x: float, y: float, button: str = "left", clicks: int = 
     point = (float(x), float(y))
     down_t, up_t, _, btn = _quartz_button(button)
     for n in range(1, clicks + 1):
-        down = CGEventCreateMouseEvent(None, down_t, point, btn)
-        up = CGEventCreateMouseEvent(None, up_t, point, btn)
+        down = _mouse_event(down_t, point, btn)
+        up = _mouse_event(up_t, point, btn)
         if clicks > 1:
             CGEventSetIntegerValueField(down, kCGMouseEventClickState, n)
             CGEventSetIntegerValueField(up, kCGMouseEventClickState, n)
@@ -200,15 +249,15 @@ def _quartz_mouse_drag(
     calls to decide to accept, so the path is stepped rather than jumped."""
     down_t, up_t, drag_t, btn = _quartz_button(button)
     steps = max(8, int(duration / 0.015))
-    CGEventPost(kCGHIDEventTap, CGEventCreateMouseEvent(None, down_t, (x1, y1), btn))
+    CGEventPost(kCGHIDEventTap, _mouse_event(down_t, (x1, y1), btn))
     time.sleep(0.05)
     for i in range(1, steps + 1):
         t = i / steps
         pt = (x1 + (x2 - x1) * t, y1 + (y2 - y1) * t)
-        CGEventPost(kCGHIDEventTap, CGEventCreateMouseEvent(None, drag_t, pt, btn))
+        CGEventPost(kCGHIDEventTap, _mouse_event(drag_t, pt, btn))
         time.sleep(max(duration, 0.1) / steps)
     time.sleep(0.05)
-    CGEventPost(kCGHIDEventTap, CGEventCreateMouseEvent(None, up_t, (x2, y2), btn))
+    CGEventPost(kCGHIDEventTap, _mouse_event(up_t, (x2, y2), btn))
 
 
 def _cg_onscreen_windows() -> list[dict]:
