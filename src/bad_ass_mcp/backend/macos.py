@@ -325,15 +325,52 @@ def _cg_onscreen_windows() -> list[dict]:
     return [dict(w) for w in raw]
 
 
+# CGEventKeyboardSetUnicodeString carries at most 20 UTF-16 units per event.
+_UNICODE_EVENT_UNITS = 20
+
+
+def _quartz_type_text(text: str, pid: int | None = None) -> None:
+    """Type `text` as key events carrying whole strings, up to 20 UTF-16
+    units each and never splitting a character. One event per character
+    broke astral characters in CodeMirror (🦀 arrived as U+5442)."""
+    chunk, units = "", 0
+    for ch in text:
+        n = len(ch.encode("utf-16-le")) // 2
+        if units + n > _UNICODE_EVENT_UNITS:
+            _quartz_type_unicode(chunk, units, pid)
+            time.sleep(0.005)
+            chunk, units = "", 0
+        chunk += ch
+        units += n
+    if chunk:
+        _quartz_type_unicode(chunk, units, pid)
+
+
+def _quartz_type_unicode(s: str, units: int, pid: int | None) -> None:
+    down = CGEventCreateKeyboardEvent(None, 0, True)
+    up = CGEventCreateKeyboardEvent(None, 0, False)
+    CGEventKeyboardSetUnicodeString(down, units, s)
+    CGEventKeyboardSetUnicodeString(up, units, s)
+    if pid:
+        CGEventPostToPid(pid, down)
+        CGEventPostToPid(pid, up)
+    else:
+        CGEventPost(kCGSessionEventTap, down)
+        CGEventPost(kCGSessionEventTap, up)
+
+
 def _quartz_type_char(char: str, pid: int | None = None) -> None:
     """Inject a single Unicode character via CoreGraphics keyboard event."""
     c = char[:1]
     if not c:
         return
+    # The length is in UTF-16 units: an emoji or other non-BMP character
+    # is two, and a length of 1 sent only its high surrogate.
+    units = len(c.encode("utf-16-le")) // 2
     down = CGEventCreateKeyboardEvent(None, 0, True)
     up = CGEventCreateKeyboardEvent(None, 0, False)
-    CGEventKeyboardSetUnicodeString(down, 1, c)
-    CGEventKeyboardSetUnicodeString(up, 1, c)
+    CGEventKeyboardSetUnicodeString(down, units, c)
+    CGEventKeyboardSetUnicodeString(up, units, c)
     if pid:
         CGEventPostToPid(pid, down)
         CGEventPostToPid(pid, up)
@@ -866,9 +903,7 @@ class MacOSBackend(DesktopBackend):
                     # The target reads the pasteboard while handling the event.
                     time.sleep(0.3)
             else:
-                for ch in text:
-                    _quartz_type_char(ch, pid=pid)
-                    time.sleep(0.005)
+                _quartz_type_text(text, pid=pid)
                 time.sleep(0.15)
             got = _ax_get(element, "AXValue")
             if isinstance(got, str) and not _same_text(got, text, secure=secure):
