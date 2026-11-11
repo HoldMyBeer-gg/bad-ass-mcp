@@ -238,3 +238,16 @@ def test_the_tool_refuses_a_combo_without_a_window():
     assert desk.key_log == []
     with patch.object(server, "_backend", return_value=desk):
         assert server.press_key("Return")["ok"] is True
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="needs PyObjC")
+def test_macos_combo_failure_names_the_whole_combination():
+    from bad_ass_mcp.backend import macos
+
+    backend = macos.MacOSBackend()
+    with (
+        patch.object(backend, "_pid_for_window", return_value=4242),
+        patch.object(backend, "_bring_to_front", side_effect=RuntimeError("could not raise")),
+    ):
+        r = backend.press_key("Cmd+Shift+G", window_id="4242")
+    assert not r.ok and "Cmd+Shift+G" in r.error

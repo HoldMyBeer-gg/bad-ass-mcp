@@ -776,7 +776,9 @@ class MacOSBackend(DesktopBackend):
             raise RuntimeError(f"could not bring pid {pid} to the front")
         return front
 
-    def _press_combo(self, mods: tuple[str, ...], key: str, pid: int | None) -> ActionResult:
+    def _press_combo(
+        self, mods: tuple[str, ...], key: str, pid: int | None, label: str
+    ) -> ActionResult:
         """A chord as one key event carrying modifier flags. Shortcuts are
         only routed to the active app, so a target app is brought forward
         for the key and the previous front app gets focus back."""
@@ -795,11 +797,11 @@ class MacOSBackend(DesktopBackend):
         if keycode is None:
             keycode = _ANSI_KEYCODES.get(key.lower())
         if keycode is None:
-            return ActionResult(ok=False, error=f"no key code for {key!r} in a combination")
+            return ActionResult(ok=False, error=f"no key code for {key!r} in {label!r}")
         try:
             previous = self._bring_to_front(pid) if pid else None
         except RuntimeError as e:
-            return ActionResult(ok=False, error=f"Cannot send {key!r}: {e}")
+            return ActionResult(ok=False, error=f"Cannot send {label!r}: {e}")
         try:
             _quartz_key_press(keycode, flags, pid=pid)
             return ActionResult(ok=True)
@@ -1246,7 +1248,7 @@ class MacOSBackend(DesktopBackend):
         except ValueError as e:
             return ActionResult(ok=False, error=str(e))
         if combo:
-            return self._press_combo(platform_modifiers(combo[0], "macos"), combo[1], pid)
+            return self._press_combo(platform_modifiers(combo[0], "macos"), combo[1], pid, key)
         try:
             keycode = _KEY_CODES.get(key)
             if keycode is not None:
