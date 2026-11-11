@@ -76,7 +76,7 @@ def test_a_key_that_belongs_to_another_action_is_rejected():
 
 def test_a_missing_required_field_is_named():
     s = one_phase(learn={"n": {"name": "Name"}}, steps=[{"action": "type", "target": "n"}])
-    assert messages(validate_script(s)) == ["phases[0].steps[0]: missing 'text'"]
+    assert messages(validate_script(s)) == ["phases[0].steps[0]: needs one of 'text', 'secret'"]
 
 
 def test_wrong_types_say_what_was_expected():

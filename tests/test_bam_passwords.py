@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from bad_ass_mcp.bam.runner import run_script
 from bad_ass_mcp.bam.suite import effective_config
 from bad_ass_mcp.bam.validate import validate_script
@@ -28,10 +30,16 @@ SCRIPT = {
     "phases": [
         {
             "learn": {"pw": {"name": "Name"}},
-            "steps": [{"action": "type", "target": "pw", "text": "hunter2"}],
+            # A password field only takes a secret (see test_bam_secrets).
+            "steps": [{"action": "type", "target": "pw", "secret": "env:BAM_TEST_PW"}],
         }
     ],
 }
+
+
+@pytest.fixture(autouse=True)
+def _password_env(monkeypatch):
+    monkeypatch.setenv("BAM_TEST_PW", "hunter2")
 
 
 def _run(tmp_path, backend, config):
@@ -63,7 +71,15 @@ def test_the_runner_config_can_allow_it_for_named_apps(tmp_path):
 
 
 def test_ordinary_fields_are_not_affected(tmp_path):
-    r = _run(tmp_path, FakeBackend(), CONFIG)
+    p = tmp_path / "plain.json"
+    plain = {
+        **SCRIPT,
+        "phases": [
+            {**SCRIPT["phases"][0], "steps": [{"action": "type", "target": "pw", "text": "hello"}]}
+        ],
+    }
+    p.write_text(json.dumps(plain))
+    r = run_script(FakeBackend(), p, "linux", CONFIG, tmp_path / "out")
     assert r["status"] == "PASS", r
 
 

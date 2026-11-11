@@ -106,6 +106,10 @@
       ],
       "description": "Launch command, string or argv list."
     },
+    "allow_secrets_in_plain_fields": {
+      "type": "boolean",
+      "description": "Allow a type step's secret into a field that isn't a password field. Its value would be visible, so once one is typed the run keeps no further screenshots and no video. Only honoured from the runner's own config file or command line."
+    },
     "allow_password_fields": {
       "description": "Allow type steps into password fields: true for any app, or a list of window names (case-insensitive substring). Only honoured from the runner's own config file or command line, never from a script's configuration block.",
       "anyOf": [

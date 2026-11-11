@@ -205,6 +205,17 @@ Three layers, later wins: the suite file (`--config`), a script's own
   a script's `configuration` block can't (`check` reports it, and the runner
   ignores it). `check` and `run` also name type targets that look like
   secrets (password, passcode, token, secret, PIN, API key) before a run.
+- **Secrets:** a `type` step can take `"secret": "env:NAME"` instead of
+  `text`: the value is read from the environment variable `NAME` when the
+  phase starts (unset or empty fails the run before anything is typed). It
+  is replaced with ••• everywhere a run writes: result.json, timeline.json,
+  tree.json, run.json and the report. A password field only takes a secret,
+  never literal `text`, and still needs `allow_password_fields`. A secret into
+  any other field is refused, because the value would be visible on screen and
+  in screenshots, unless the runner's config sets
+  `allow_secrets_in_plain_fields`; then, from that step on, the run keeps no
+  screenshots (phase proofs, fail.png) and no video. Keychain and Credential
+  Manager sources are planned.
 - **Checks:** `present`, `absent` (by name/role), `windows: n` (windows matching
   the config's `window`), `no_window: "<title>"`, `shell` (exit 0),
   `manual` (reported for a human; the script ends `MANUAL`).
