@@ -260,7 +260,10 @@ def test_fail_fast_stops_after_the_first_failure(tmp_path):
     run_dir = run_suite(
         FakeBackend(), suite_scripts(tmp_path), "linux", cfg, tmp_path / "results", commit="abc"
     )
-    statuses = [s["status"] for s in json.loads((run_dir / "run.json").read_text(encoding="utf-8"))["scripts"]]
+    statuses = [
+        s["status"]
+        for s in json.loads((run_dir / "run.json").read_text(encoding="utf-8"))["scripts"]
+    ]
     assert statuses == ["PASS", "FAIL", "NOT_RUN"]
 
 
@@ -269,7 +272,10 @@ def test_first_script_fail_fast_only_stops_when_the_first_one_fails(tmp_path):
     run_dir = run_suite(
         FakeBackend(), suite_scripts(tmp_path), "linux", cfg, tmp_path / "results", commit="abc"
     )
-    statuses = [s["status"] for s in json.loads((run_dir / "run.json").read_text(encoding="utf-8"))["scripts"]]
+    statuses = [
+        s["status"]
+        for s in json.loads((run_dir / "run.json").read_text(encoding="utf-8"))["scripts"]
+    ]
     assert statuses == ["PASS", "FAIL", "PASS"]
 
 
@@ -963,7 +969,11 @@ def test_demo_mode_logs_each_step_with_bounds_and_paces_it(tmp_path):
     out = tmp_path / "out"
     r = run_script(FakeBackend(), script, "linux", {**CONFIG, "demo": True, "demo_pace": 0.05}, out)
     assert r["status"] == "PASS", r
-    steps = [e for e in json.loads((out / "timeline.json").read_text(encoding="utf-8")) if e["event"] == "step"]
+    steps = [
+        e
+        for e in json.loads((out / "timeline.json").read_text(encoding="utf-8"))
+        if e["event"] == "step"
+    ]
     assert [s["action"] for s in steps] == ["click", "key"]
     assert steps[0]["phase"] == "press ok" and steps[0]["target"] == "ok"
     assert steps[0]["bounds"] == [10.0, 10.0, 80.0, 30.0]  # FakeBackend's OK button
