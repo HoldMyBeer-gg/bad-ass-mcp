@@ -880,7 +880,7 @@ class WindowsBackend(DesktopBackend):
                 password=password,
                 paste=paste,
             ),
-            read_back,
+            _password_read_back(read_back, password=password),
         )
 
     def select_option(self, handle_id: str, value: str) -> ActionResult:
@@ -1577,6 +1577,21 @@ def _unicode_key_inputs(text: str):
             ev.ki.time = 0
             ev.ki.dwExtraInfo = 0
     return inputs
+
+
+def _password_read_back(read_back, *, password: bool):
+    """Win32 and WinForms password boxes read back '' through UIA, whatever
+    they hold. For a password field that is "can't tell", not "empty":
+    report None so the first strategy that runs is trusted, instead of
+    every strategy typing the password again."""
+    if not password:
+        return read_back
+
+    def wrapped():
+        value = read_back()
+        return None if value == "" else value
+
+    return wrapped
 
 
 def _typing_attempts(attempts, *, password: bool, paste: bool):

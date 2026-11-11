@@ -676,3 +676,35 @@ def test_paste_is_left_out_unless_asked_for_and_never_for_passwords():
         "WM_CHAR",
         "keys",
     ]
+
+
+def test_a_password_box_that_reads_empty_trusts_the_first_strategy():
+    """Win32/WinForms password boxes read back '' through UIA, never the
+    text or bullets. Treating that as 'wrong' ran every strategy: 'abcdef'
+    went in twice (12 bullets) and type_text still said it failed."""
+    from bad_ass_mcp.backend.windows import _first_verified, _password_read_back
+
+    field: list[str] = []
+    ran: list[str] = []
+
+    def strategy(name):
+        def fn():
+            ran.append(name)
+            field.append("abcdef")
+
+        return fn
+
+    read_back = _password_read_back(lambda: "", password=True)
+    r = _first_verified(
+        "abcdef", [("SetValue", strategy("SetValue")), ("keys", strategy("keys"))], read_back
+    )
+    assert r.ok and r.detail == "SetValue"
+    assert ran == ["SetValue"]
+
+
+def test_password_read_back_leaves_other_fields_and_masks_alone():
+    from bad_ass_mcp.backend.windows import _password_read_back
+
+    assert _password_read_back(lambda: "", password=False)() == ""
+    assert _password_read_back(lambda: "••••", password=True)() == "••••"
+    assert _password_read_back(lambda: None, password=True)() is None
