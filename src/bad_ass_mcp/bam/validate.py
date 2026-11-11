@@ -185,6 +185,13 @@ def _meaning_issues(script: dict) -> list[Issue]:
         for s, step in enumerate(phase.get("steps") or []):
             if not isinstance(step, dict):
                 continue
+            if step.get("action") == "key" and isinstance(step.get("key"), str):
+                from ..backend.base import parse_combo
+
+                try:
+                    parse_combo(step["key"])
+                except ValueError as e:
+                    issues.append(Issue(f"phases[{n}].steps[{s}].key", str(e)))
             for key in ("target", "from_target", "to_target"):
                 label = step.get(key)
                 if isinstance(label, str) and label not in labels:

@@ -26,7 +26,10 @@ try:
         CGEventSetFlags,
         CGEventSetIntegerValueField,
         CGWindowListCopyWindowInfo,
+        kCGEventFlagMaskAlternate,
         kCGEventFlagMaskCommand,
+        kCGEventFlagMaskControl,
+        kCGEventFlagMaskShift,
         kCGEventLeftMouseDown,
         kCGEventLeftMouseDragged,
         kCGEventLeftMouseUp,
@@ -773,6 +776,41 @@ class MacOSBackend(DesktopBackend):
             raise RuntimeError(f"could not bring pid {pid} to the front")
         return front
 
+    def _press_combo(
+        self, mods: tuple[str, ...], key: str, pid: int | None, label: str
+    ) -> ActionResult:
+        """A chord as one key event carrying modifier flags. Shortcuts are
+        only routed to the active app, so a target app is brought forward
+        for the key and the previous front app gets focus back."""
+        flag_for = {
+            "cmd": kCGEventFlagMaskCommand,
+            "shift": kCGEventFlagMaskShift,
+            "alt": kCGEventFlagMaskAlternate,
+            "ctrl": kCGEventFlagMaskControl,
+        }
+        flags = 0
+        for m in mods:
+            flags |= flag_for[m]
+        if key == "+":
+            key, flags = "=", flags | kCGEventFlagMaskShift
+        keycode = _KEY_CODES.get(key)
+        if keycode is None:
+            keycode = _ANSI_KEYCODES.get(key.lower())
+        if keycode is None:
+            return ActionResult(ok=False, error=f"no key code for {key!r} in {label!r}")
+        try:
+            previous = self._bring_to_front(pid) if pid else None
+        except RuntimeError as e:
+            return ActionResult(ok=False, error=f"Cannot send {label!r}: {e}")
+        try:
+            _quartz_key_press(keycode, flags, pid=pid)
+            return ActionResult(ok=True)
+        except Exception as e:
+            return ActionResult(ok=False, error=str(e))
+        finally:
+            if previous is not None:
+                self._set_frontmost(previous)
+
     def foreground_pid(self) -> int | None:
         return self._frontmost_pid()
 
@@ -1202,7 +1240,15 @@ class MacOSBackend(DesktopBackend):
             return ActionResult(ok=False, error=str(e))
 
     def press_key(self, key: str, window_id: str | None = None) -> ActionResult:
+        from .base import parse_combo, platform_modifiers
+
         pid = self._pid_for_window(window_id) if window_id else None
+        try:
+            combo = parse_combo(key)
+        except ValueError as e:
+            return ActionResult(ok=False, error=str(e))
+        if combo:
+            return self._press_combo(platform_modifiers(combo[0], "macos"), combo[1], pid, key)
         try:
             keycode = _KEY_CODES.get(key)
             if keycode is not None:
@@ -1212,6 +1258,50 @@ class MacOSBackend(DesktopBackend):
             return ActionResult(ok=True)
         except Exception as e:
             return ActionResult(ok=False, error=str(e))
+
+
+# Virtual key codes on an ANSI keyboard, for chords. A character typed on
+# its own goes in as Unicode; a shortcut needs the key's code.
+_ANSI_KEYCODES: dict[str, int] = {
+    **dict(zip("asdfhgzxcv", range(0x00, 0x0A), strict=True)),
+    "b": 0x0B,
+    "q": 0x0C,
+    "w": 0x0D,
+    "e": 0x0E,
+    "r": 0x0F,
+    "y": 0x10,
+    "t": 0x11,
+    "1": 0x12,
+    "2": 0x13,
+    "3": 0x14,
+    "4": 0x15,
+    "6": 0x16,
+    "5": 0x17,
+    "=": 0x18,
+    "9": 0x19,
+    "7": 0x1A,
+    "-": 0x1B,
+    "8": 0x1C,
+    "0": 0x1D,
+    "]": 0x1E,
+    "o": 0x1F,
+    "u": 0x20,
+    "[": 0x21,
+    "i": 0x22,
+    "p": 0x23,
+    "l": 0x25,
+    "j": 0x26,
+    "'": 0x27,
+    "k": 0x28,
+    ";": 0x29,
+    "\\": 0x2A,
+    ",": 0x2B,
+    "/": 0x2C,
+    "n": 0x2D,
+    "m": 0x2E,
+    ".": 0x2F,
+    "`": 0x32,
+}
 
 
 def _ax_titles(ax_wins, name: str) -> tuple[str, ...]:

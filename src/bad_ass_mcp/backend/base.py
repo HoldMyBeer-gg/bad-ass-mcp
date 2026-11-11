@@ -630,3 +630,58 @@ class DesktopBackend(ABC):
             if not entry["ok"] and stop_on_error:
                 break
         return results
+
+
+# ── key combinations ("Cmd+A", "Ctrl+Shift+G") ───────────────────────
+
+_MODIFIER_ALIASES = {
+    "ctrl": "ctrl",
+    "control": "ctrl",
+    "shift": "shift",
+    "alt": "alt",
+    "option": "alt",
+    "opt": "alt",
+    "cmd": "cmd",
+    "command": "cmd",
+    "super": "super",
+    "win": "super",
+    "meta": "super",
+}
+_MODIFIER_ORDER = ("ctrl", "alt", "cmd", "shift", "super")
+
+
+def parse_combo(key: str) -> tuple[tuple[str, ...], str] | None:
+    """Split "Ctrl+Shift+G" into (("ctrl", "shift"), "G"); None for a plain
+    key. "Ctrl++" targets the plus key. An unknown modifier raises
+    ValueError instead of being typed as text."""
+    if "+" not in key or key == "+":
+        return None
+    if key.endswith("++"):
+        mods, main = key[:-2].split("+"), "+"
+    else:
+        *mods, main = key.split("+")
+    if not main:
+        raise ValueError(f"key combination {key!r} has no key after the modifiers")
+    out: list[str] = []
+    for m in mods:
+        canon = _MODIFIER_ALIASES.get(m.strip().lower())
+        if canon is None:
+            raise ValueError(
+                f"unknown modifier {m!r} in {key!r}; use Ctrl, Shift, Alt/Option, "
+                "Cmd (Command on macOS, Ctrl elsewhere) or Super/Win"
+            )
+        if canon not in out:
+            out.append(canon)
+    return tuple(out), main
+
+
+def platform_modifiers(mods: tuple[str, ...], platform: str) -> tuple[str, ...]:
+    """Map portable modifiers to the platform's own: "cmd" is the primary
+    shortcut modifier (Command on macOS, Ctrl elsewhere), so "Cmd+A" means
+    select-all everywhere; "super" is the Windows/Super key (Command on
+    macOS). Order is canonical and duplicates collapse."""
+    if platform == "macos":
+        mapped = {"cmd" if m == "super" else m for m in mods}
+    else:
+        mapped = {"ctrl" if m == "cmd" else m for m in mods}
+    return tuple(m for m in _MODIFIER_ORDER if m in mapped)

@@ -1398,7 +1398,41 @@ class LinuxBackend(DesktopBackend):
         "Delete": 0xFFFF,
     }
 
+    def _press_combo(self, mods: tuple[str, ...], key: str, window_id: str | None) -> ActionResult:
+        """A chord through XTEST: real modifier presses, which AT-SPI's
+        keyboard synthesis can't do. Native-Wayland apps have no X11 window
+        to send to, so a combination there fails instead of going astray."""
+        from .linux_keys import xdotool_chord
+
+        chord = xdotool_chord(mods, key)
+        try:
+            if window_id:
+                app = self._find_app(window_id)
+                pid = app.get_process_id() if app else None
+                xwid = self._find_xwid(pid) if pid else None
+                if not xwid:
+                    return ActionResult(
+                        ok=False,
+                        error="key combinations need X11 or an XWayland app; this window "
+                        "has no X11 window (native Wayland?)",
+                    )
+                self._activate_for_pid(xwid, pid)
+            self._xtest(["key", chord])
+            return ActionResult(ok=True)
+        except FileNotFoundError:
+            return ActionResult(ok=False, error="key combinations need xdotool")
+        except Exception as e:
+            return ActionResult(ok=False, error=str(e))
+
     def press_key(self, key: str, window_id: str | None = None) -> ActionResult:
+        from .base import parse_combo, platform_modifiers
+
+        try:
+            combo = parse_combo(key)
+        except ValueError as e:
+            return ActionResult(ok=False, error=str(e))
+        if combo:
+            return self._press_combo(platform_modifiers(combo[0], "linux"), combo[1], window_id)
         if window_id:
             app = self._find_app(window_id)
             if app:

@@ -200,7 +200,16 @@ Three layers, later wins: the suite file (`--config`), a script's own
 Most steps act on elements through the accessibility tree and work with the
 app buried under other windows. Three kinds don't: `key` without `window_id`
 (a real key to the front window), `click_at` and `drag` (real pointer
-events at screen points). Before each of those the runner checks which
+events at screen points). Key combinations (`"key": "Cmd+S"`) are always
+real input, window or not.
+
+**Key combinations.** A step like
+`{"action": "key", "key": "Cmd+Shift+G"}`; also `"Ctrl+A"`, `"Alt+F4"`.
+Modifiers: Ctrl, Shift, Alt (or Option), Cmd, Super (or Win). `Cmd` is the
+platform's shortcut key, Command on macOS and Ctrl on Windows and Linux, so
+`"Cmd+S"` saves everywhere; `Super` is the literal Windows/Super key.
+`"Ctrl++"` sends Ctrl and the plus key. On Linux combinations need X11 or an
+XWayland app. An unknown modifier fails `bad-ass-mcp check`. Before each of those the runner checks which
 process would receive it: the foreground window's top-level owner for keys,
 the window under the point for clicks and drags. If it isn't the app, the
 runner raises the app (on Windows through the foreground lock: plain, after
