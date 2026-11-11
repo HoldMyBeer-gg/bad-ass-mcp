@@ -582,6 +582,27 @@ class _Run:
                 "Unexpected app in foreground.", phase=phase, step=number, action="foreground"
             )
 
+    def _pointer_click(self, step: dict, phase: int, number: int) -> dict:
+        """A click marked `pointer` becomes a click_at the element's centre,
+        read right before it runs, so it gets the same point guard."""
+        b = self.b.element_bounds(step["handle"])
+        if not b:
+            raise ScriptFailure(
+                "pointer click: element reports no screen bounds",
+                phase=phase,
+                step=number,
+                action="click",
+            )
+        x, y, w, h = b
+        return {
+            "action": "click_at",
+            "x": x + w / 2,
+            "y": y + h / 2,
+            "window_id": self.window,
+            "button": step.get("button", "left"),
+            "clicks": int(step.get("clicks", 1)),
+        }
+
     def _point_of(self, step: dict) -> tuple[float, float] | None:
         if step.get("action") == "click_at":
             return float(step["x"]), float(step["y"])
@@ -613,6 +634,8 @@ class _Run:
                 start += 1
                 continue
             self.check_user(phase, base + start + 1)
+            if sent[start].get("action") == "click" and sent[start].get("pointer"):
+                sent[start] = self._pointer_click(sent[start], phase, base + start + 1)
             end = start
             if is_real_input(sent[start]):
                 # Its own chunk, checked right before it runs.

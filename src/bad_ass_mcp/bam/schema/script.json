@@ -346,6 +346,10 @@
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 3
+              },
+              "pointer": {
+                "type": "boolean",
+                "description": "Click with the real pointer at the element's centre instead of its accessibility action. For controls that report the action ok but react only to the mouse (egui menus open on hover)."
               }
             },
             "additionalProperties": false,

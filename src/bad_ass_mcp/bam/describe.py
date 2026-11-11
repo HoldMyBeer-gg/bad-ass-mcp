@@ -162,9 +162,12 @@ def phase_title(phase: dict, described: dict, n: int) -> str:
 
 def is_real_input(step: dict) -> bool:
     """Steps that go to whatever is in front or under the pointer rather than
-    to an element: keys without a window, key combinations, click_at, drag."""
+    to an element: keys without a window, key combinations, click_at, drag,
+    and clicks marked `pointer`."""
     a = step.get("action")
     if a in ("click_at", "drag"):
+        return True
+    if a == "click" and step.get("pointer"):
         return True
     if a != "key":
         return False
