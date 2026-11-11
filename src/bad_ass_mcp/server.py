@@ -496,7 +496,11 @@ def press_key(key: str, window_id: str | None = None) -> dict:
     """Inject a key press into the focused element or a specific window.
     key: 'Down', 'Up', 'Left', 'Right', 'Return', 'Escape', 'Tab',
          'Home', 'End', 'PageUp', 'PageDown', 'BackSpace', or any single character.
-    Useful for navigating combo box dropdowns, dismissing dialogs, etc."""
+    Useful for navigating combo box dropdowns, dismissing dialogs, etc.
+
+    Pass window_id. Without it the key goes to whatever app is in front,
+    which is often your own terminal, and still returns ok. There are no
+    modifier combinations (Cmd/Ctrl+key) yet."""
     try:
         result = _backend().press_key(key, window_id)
         return {"ok": result.ok, "error": result.error}
