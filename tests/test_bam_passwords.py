@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from bad_ass_mcp.bam.runner import run_script
 from bad_ass_mcp.bam.suite import effective_config
 from bad_ass_mcp.bam.validate import validate_script
@@ -28,10 +30,16 @@ SCRIPT = {
     "phases": [
         {
             "learn": {"pw": {"name": "Name"}},
-            "steps": [{"action": "type", "target": "pw", "text": "hunter2"}],
+            # A password field only takes a secret (see test_bam_secrets).
+            "steps": [{"action": "type", "target": "pw", "secret": "env:BAM_TEST_PW"}],
         }
     ],
 }
+
+
+@pytest.fixture(autouse=True)
+def _password_env(monkeypatch):
+    monkeypatch.setenv("BAM_TEST_PW", "hunter2")
 
 
 def _run(tmp_path, backend, config):
