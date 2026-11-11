@@ -712,6 +712,33 @@ class LinuxBackend(DesktopBackend):
             return ActionResult(ok=False, error=f"Cannot click: {e}")
 
     def type_text(self, handle_id: str, text: str) -> ActionResult:
+        """Type, then read the field back: a path that reports success while
+        the text never arrived (egui on native Wayland ignores every route)
+        must not pass. Unreadable fields are trusted, as before."""
+        result = self._type_text_once(handle_id, text)
+        if not result.ok:
+            return result
+        got = self._read_text(self._resolve(handle_id))
+        if got is not None and not _landed(got, text):
+            return ActionResult(
+                ok=False,
+                error=f"Typed, but the field reads {got!r}: the text did not arrive "
+                "(on native Wayland, input to another app's window often can't be "
+                "delivered; XWayland works)",
+            )
+        return result
+
+    @staticmethod
+    def _read_text(node) -> str | None:
+        """The field's text through the Text interface only (never the
+        accessible name, which isn't the content)."""
+        try:
+            got = _iface(node, "text").get_text(0, -1)
+        except Exception:
+            return None
+        return got if isinstance(got, str) else None
+
+    def _type_text_once(self, handle_id: str, text: str) -> ActionResult:
         node = self._resolve(handle_id)
         try:
             # Try SetValue first (foreground-independent)
@@ -741,7 +768,10 @@ class LinuxBackend(DesktopBackend):
             try:
                 et = _iface(node, "editable_text")
                 et.set_text_contents(text)
-                return ActionResult(ok=True)
+                got = self._read_text(node)
+                if got is None or _landed(got, text):
+                    return ActionResult(ok=True)
+                # Accepted and ignored (egui/accesskit): try real keys.
             except Exception:
                 pass
         try:
@@ -1416,3 +1446,11 @@ def _is_wayland_session() -> bool:
     return session_type == "wayland" or (
         session_type != "x11" and bool(os.environ.get("WAYLAND_DISPLAY"))
     )
+
+
+def _landed(value: str, text: str) -> bool:
+    """The field holds the text (whitespace aside), or, for a password
+    field, one mask character per character typed."""
+    if value.strip() == text.strip():
+        return True
+    return bool(value) and set(value) <= {"•", "●", "*"} and len(value) == len(text)
