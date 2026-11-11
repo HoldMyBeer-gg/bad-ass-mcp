@@ -64,6 +64,7 @@ def _shell(cmd: str, env: dict[str, str], timeout: float = 60) -> subprocess.Com
 class _Run:
     def __init__(self, backend, platform: str, config: dict, out_dir: Path, script: dict):
         self.secret_values: set[str] = set()
+        self.secret_on_screen = False
         self.b = backend
         self.platform = platform
         self.config = config
@@ -162,6 +163,8 @@ class _Run:
 
     # ── evidence ──────────────────────────────────────────────────────
     def shot(self, name: str, window: str | None) -> str | None:
+        if self.secret_on_screen:
+            return None  # a secret may be visible in the window
         try:
             path = self.out / name
             self.b.screenshot(window, output_path=str(path))
@@ -631,6 +634,19 @@ class _Run:
         except Exception:
             secret = None
         if not secret:
+            if step.get("secret"):
+                # Unmasked: the value would be on screen, so in screenshots
+                # and video, which no redaction of the logs can reach.
+                if self.config.get("allow_secrets_in_plain_fields") is not True:
+                    raise ScriptFailure(
+                        "secret into a field that isn't a password field: it would show on "
+                        "screen and in screenshots; this machine's config must set "
+                        "allow_secrets_in_plain_fields",
+                        phase=phase,
+                        step=number,
+                        action="type",
+                    )
+                self.secret_on_screen = True
             return
         allow = self.config.get("allow_password_fields", False)
         allowed = allow is True
@@ -910,6 +926,7 @@ def run_script(
                 }
             if recording is not None:
                 keep = config.get("record_video") is True or result.get("status") == "FAIL"
+                keep = keep and not run.secret_on_screen
                 try:
                     path = backend.stop_recording(recording, str(out_dir / "run.mp4"))
                     if keep:
@@ -933,6 +950,10 @@ def run_script(
             result["manual"] = run.manual
         if (out_dir / "fail.png").exists():
             result["fail_screenshot"] = "fail.png"
+        if run.secret_on_screen:
+            result["pictures_withheld"] = (
+                "a secret was typed into a plain field: no screenshots or video after that"
+            )
 
     result["finished_at"] = _now()
     result["seconds"] = round(time.monotonic() - started, 2)

@@ -71,7 +71,15 @@ def test_the_runner_config_can_allow_it_for_named_apps(tmp_path):
 
 
 def test_ordinary_fields_are_not_affected(tmp_path):
-    r = _run(tmp_path, FakeBackend(), CONFIG)
+    p = tmp_path / "plain.json"
+    plain = {
+        **SCRIPT,
+        "phases": [
+            {**SCRIPT["phases"][0], "steps": [{"action": "type", "target": "pw", "text": "hello"}]}
+        ],
+    }
+    p.write_text(json.dumps(plain))
+    r = run_script(FakeBackend(), p, "linux", CONFIG, tmp_path / "out")
     assert r["status"] == "PASS", r
 
 

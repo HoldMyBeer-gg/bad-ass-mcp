@@ -37,11 +37,14 @@ def _everything_written(out):
     return "".join(p.read_text(encoding="utf-8", errors="replace") for p in out.rglob("*.json"))
 
 
+PLAIN_OK = {**CONFIG, "allow_secrets_in_plain_fields": True}
+
+
 def test_a_secret_is_typed_from_the_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("BAM_TEST_PW", VALUE)
     b = FakeBackend()
     p = _script(tmp_path, [{"action": "type", "target": "f", "secret": "env:BAM_TEST_PW"}])
-    r = run_script(b, p, "linux", CONFIG, tmp_path / "out")
+    r = run_script(b, p, "linux", PLAIN_OK, tmp_path / "out")
     assert r["status"] == "PASS", r
     assert b.get_value("txt-name") == VALUE
 
@@ -57,7 +60,7 @@ def test_a_secret_never_reaches_the_results_even_in_a_failure(tmp_path, monkeypa
         ],
     )
     out = tmp_path / "out"
-    r = run_script(FakeBackend(), p, "linux", CONFIG, out)
+    r = run_script(FakeBackend(), p, "linux", PLAIN_OK, out)
     assert r["status"] == "FAIL"
     assert VALUE not in json.dumps(r)
     assert "•••" in r["failure"]["reason"]
@@ -107,3 +110,54 @@ def test_schema_takes_text_or_secret_but_not_both():
     assert validate_script(script(both))
     assert validate_script(script({"action": "type", "target": "f"}))
     assert validate_script(script({"action": "type", "target": "f", "secret": "PW"}))
+
+
+def test_a_secret_into_a_plain_field_is_refused_by_default(tmp_path, monkeypatch):
+    # An unmasked field shows the value on screen: screenshots and video
+    # would carry it, and redacting the logs can't reach pixels.
+    monkeypatch.setenv("BAM_TEST_PW", VALUE)
+    b = FakeBackend()
+    p = _script(tmp_path, [{"action": "type", "target": "f", "secret": "env:BAM_TEST_PW"}])
+    r = run_script(b, p, "linux", CONFIG, tmp_path / "out")
+    assert r["status"] == "FAIL"
+    assert r["failure"]["reason"].startswith("secret into a field that isn't a password field")
+    assert b.get_value("txt-name") == ""
+
+
+def test_once_a_secret_is_on_screen_no_pictures_are_kept(tmp_path, monkeypatch):
+    monkeypatch.setenv("BAM_TEST_PW", VALUE)
+    p = tmp_path / "two.json"
+    p.write_text(
+        json.dumps(
+            {
+                "name": "two",
+                "platforms": ["linux"],
+                "phases": [
+                    {"learn": {"ok": {"name": "OK"}}, "steps": []},
+                    {
+                        "learn": {"f": {"name": "Name"}},
+                        "steps": [
+                            {"action": "type", "target": "f", "secret": "env:BAM_TEST_PW"},
+                            {"action": "get_value", "target": "f", "expect": "nope"},
+                        ],
+                    },
+                ],
+            }
+        )
+    )
+    out = tmp_path / "out"
+    cfg = {**PLAIN_OK, "screenshot_proof": True, "record_video": True}
+    r = run_script(FakeBackend(), p, "linux", cfg, out)
+    assert r["status"] == "FAIL"
+    # Phase 1 ran before the secret was typed: its proof is kept.
+    assert (out / "phase-1.png").exists()
+    assert not (out / "fail.png").exists() and "fail_screenshot" not in r
+    assert "video" not in r and not (out / "run.mp4").exists()
+    assert "secret" in r.get("pictures_withheld", "")
+
+
+def test_allow_secrets_in_plain_fields_is_runner_only():
+    from bad_ass_mcp.bam.suite import effective_config
+
+    script = {"configuration": {"allow_secrets_in_plain_fields": True}}
+    assert "allow_secrets_in_plain_fields" not in effective_config({}, script, {})
