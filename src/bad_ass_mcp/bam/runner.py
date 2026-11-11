@@ -63,6 +63,7 @@ def _shell(cmd: str, env: dict[str, str], timeout: float = 60) -> subprocess.Com
 
 class _Run:
     def __init__(self, backend, platform: str, config: dict, out_dir: Path, script: dict):
+        self.secret_values: set[str] = set()
         self.b = backend
         self.platform = platform
         self.config = config
@@ -182,7 +183,7 @@ class _Run:
             except Exception:
                 data = _plain_tree(tree)
             (self.out / "tree.json").write_text(
-                json.dumps(data, indent=1, default=str), encoding="utf-8"
+                json.dumps(self.redact(data), indent=1, default=str), encoding="utf-8"
             )
         except Exception:
             pass
@@ -458,6 +459,7 @@ class _Run:
                 window,
                 self.vars,
                 timeout_scale=float(self.config.get("timeout_scale", 1)),
+                secrets=self._resolve_secrets(phase.get("steps", []), n),
             )
             self.run_steps(sent, meta, n)
             if "checks" in phase:
@@ -603,6 +605,24 @@ class _Run:
             "clicks": int(step.get("clicks", 1)),
         }
 
+    def _resolve_secrets(self, steps: list[dict], phase: int) -> dict[str, str]:
+        """Read each `secret` reference (env:NAME) a phase uses, now, and
+        remember the values so every output can be scrubbed of them."""
+        out: dict[str, str] = {}
+        for step in steps:
+            ref = step.get("secret") if applies(step, self.platform) else None
+            if not ref or ref in out:
+                continue
+            value = os.environ.get(ref[len("env:") :]) if ref.startswith("env:") else None
+            if not value:
+                raise ScriptFailure(f"secret {ref} is not set", phase=phase, action="type")
+            out[ref] = value
+            self.secret_values.add(value)
+        return out
+
+    def redact(self, obj):
+        return _redact(obj, self.secret_values)
+
     def _password_gate(self, step: dict, phase: int, number: int) -> None:
         """Refuse to type into a password field unless this machine's own
         config allows it, for every app (true) or the named ones."""
@@ -613,18 +633,24 @@ class _Run:
         if not secret:
             return
         allow = self.config.get("allow_password_fields", False)
-        if allow is True:
-            return
+        allowed = allow is True
         if isinstance(allow, list) and allow:
             win = next((w for w in self.b.list_windows() if w.id == self.window), None)
-            if win is not None and any(win.matches(p) for p in allow):
-                return
-        raise ScriptFailure(
-            "password field: not allowed by this machine's config",
-            phase=phase,
-            step=number,
-            action="type",
-        )
+            allowed = win is not None and any(win.matches(p) for p in allow)
+        if not allowed:
+            raise ScriptFailure(
+                "password field: not allowed by this machine's config",
+                phase=phase,
+                step=number,
+                action="type",
+            )
+        if not step.get("secret"):
+            raise ScriptFailure(
+                'password field: use "secret", not literal text',
+                phase=phase,
+                step=number,
+                action="type",
+            )
 
     def _point_of(self, step: dict) -> tuple[float, float] | None:
         if step.get("action") == "click_at":
@@ -792,6 +818,21 @@ def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+def _redact(obj, secrets: set[str]):
+    """A copy of `obj` with every secret value replaced by •••."""
+    if not secrets:
+        return obj
+    if isinstance(obj, str):
+        for value in sorted(secrets, key=len, reverse=True):
+            obj = obj.replace(value, "•••")
+        return obj
+    if isinstance(obj, dict):
+        return {k: _redact(v, secrets) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_redact(v, secrets) for v in obj]
+    return obj
+
+
 def run_script(
     backend,
     script_path: Path | str,
@@ -817,6 +858,7 @@ def run_script(
         result["covers"] = script["covers"]
     started = time.monotonic()
 
+    run = None
     if platform not in script.get("platforms", [platform]):
         result["status"] = "SKIP"
     else:
@@ -881,7 +923,9 @@ def run_script(
         final = describe_checks(script.get("checks", []), platform)
         if final:
             result["checks"] = final
-        (out_dir / "timeline.json").write_text(json.dumps(run.timeline, indent=1), encoding="utf-8")
+        (out_dir / "timeline.json").write_text(
+            json.dumps(run.redact(run.timeline), indent=1), encoding="utf-8"
+        )
         if run.window is not None:
             result["window"] = run.window
         result["screenshots"] = run.screenshots
@@ -892,6 +936,8 @@ def run_script(
 
     result["finished_at"] = _now()
     result["seconds"] = round(time.monotonic() - started, 2)
+    if run is not None:
+        result = run.redact(result)
     (out_dir / "result.json").write_text(
         json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8"
     )

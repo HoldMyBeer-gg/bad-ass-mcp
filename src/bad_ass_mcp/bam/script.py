@@ -67,6 +67,7 @@ def build_steps(
     variables: dict[str, str],
     *,
     timeout_scale: float = 1.0,
+    secrets: dict[str, str] | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """run_sequence steps for this platform, plus per-step runner metadata
     ({"expect", "save"}) aligned by index. `timeout_scale` stretches every
@@ -84,6 +85,12 @@ def build_steps(
         s = {}
         for k, v in step.items():
             if k in _RUNNER_KEYS:
+                continue
+            if k == "secret":
+                # Typed as the text; the reference stays for the password
+                # gate. Never $-expanded.
+                s["text"] = (secrets or {})[v]
+                s["secret"] = v
                 continue
             v = pick(v, platform)
             s[k] = expand(v, env)

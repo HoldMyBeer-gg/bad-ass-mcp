@@ -445,6 +445,11 @@
               "text": {
                 "$ref": "#/$defs/per_platform_string"
               },
+              "secret": {
+                "type": "string",
+                "pattern": "^env:[A-Za-z_][A-Za-z0-9_]*$",
+                "description": "Type a secret read at run time instead of literal text: env:NAME reads the environment variable NAME. The value never appears in result.json, timeline.json, tree.json or the report."
+              },
               "paste": {
                 "type": "boolean",
                 "description": "Also allow typing through the clipboard (Windows, macOS) if the other ways fail. The text is lent to the clipboard, kept out of clipboard history, and cleared after; whatever the user had copied is lost. Never used for password fields."
@@ -452,8 +457,19 @@
             },
             "additionalProperties": false,
             "required": [
-              "target",
-              "text"
+              "target"
+            ],
+            "oneOf": [
+              {
+                "required": [
+                  "text"
+                ]
+              },
+              {
+                "required": [
+                  "secret"
+                ]
+              }
             ]
           }
         },
