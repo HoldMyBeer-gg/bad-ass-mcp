@@ -155,7 +155,9 @@ def get_tree(window_id: str, max_depth: int | None = None) -> str:
     content (WebView2, WKWebView, Chromium) sits under several of them: a
     cap below ~12 can stop above a page's content. A node whose children the
     cap skipped carries "truncated_by_depth": true, so an empty "children"
-    there means "not walked", not "empty".
+    there means "not walked", not "empty". Right after a Tauri/WebView2
+    window appears its web pane may not exist yet; wait_for_element on a
+    control you expect is the reliable way to know the page has loaded.
 
     Returned as a compact JSON string (not a nested object) so the client's
     result-size cap counts real content, not indentation whitespace; parse it
