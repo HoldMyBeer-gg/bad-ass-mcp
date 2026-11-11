@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -454,6 +455,10 @@ def test_linux_wait_for_window_lets_atspi_catch_up_after_an_x11_only_match():
 
 def test_linux_wait_for_window_still_returns_a_genuinely_x11_only_window():
     backend, _mod = _make_backend()
-    with _x11_then_atspi(backend, 10**6), patch("time.sleep"):
+    backend._ATSPI_GRACE_S = 0.05
+    started = time.monotonic()
+    with _x11_then_atspi(backend, 10**9):
         w = backend.wait_for_window("Rusty Demon", timeout=5)
     assert w is not None and w.accessible is False
+    # Bounded by time (Kali measured ~3 s when it was 15 polls).
+    assert time.monotonic() - started < 1.0
