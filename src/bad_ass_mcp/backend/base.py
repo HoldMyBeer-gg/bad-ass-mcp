@@ -95,6 +95,11 @@ def last_injected_at() -> float:
     return _LAST_INJECTED[0]
 
 
+# How long select_option waits for a changed value to show up in the
+# accessibility tree before reporting a mismatch.
+_SELECT_SETTLE_S = 1.0
+
+
 class DesktopBackend(ABC):
     @abstractmethod
     def list_windows(self) -> list[WindowInfo]:
@@ -238,8 +243,15 @@ class DesktopBackend(ABC):
         r = self.press_key("Return", None)
         if not r.ok:
             return r
-        time.sleep(0.15)
-        verified = self._option_selected(handle_id, value)
+        # Web views (WKWebView, WebView2) update the control's a11y value a
+        # beat after the change lands, so poll briefly before calling it a
+        # mismatch.
+        deadline = time.monotonic() + _SELECT_SETTLE_S
+        while True:
+            time.sleep(0.15)
+            verified = self._option_selected(handle_id, value)
+            if verified is not False or time.monotonic() >= deadline:
+                break
         if verified is False:
             return ActionResult(
                 ok=False,

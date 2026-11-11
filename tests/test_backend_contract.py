@@ -385,6 +385,35 @@ def test_select_by_keystrokes_reports_mismatch(backend):
     assert "Medium" in (r.error or "")
 
 
+def test_select_by_keystrokes_waits_for_a_late_value(backend, monkeypatch):
+    # WKWebView updates a <select>'s AX value a moment after the change
+    # lands: the first reads still show the old option.
+    backend._values["combo-size"] = "Medium"
+    reads = {"n": 0}
+    real = backend.get_value
+
+    def late(handle_id):
+        if handle_id == "combo-size":
+            reads["n"] += 1
+            if reads["n"] >= 3:
+                backend._values["combo-size"] = "Large"
+        return real(handle_id)
+
+    monkeypatch.setattr(backend, "get_value", late)
+    r = backend._select_option_by_keystrokes("combo-size", "Large")
+    assert r.ok, r.error
+
+
+def test_select_by_keystrokes_mismatch_gives_up_in_about_a_second(backend):
+    import time
+
+    backend._values["combo-size"] = "Medium"
+    t0 = time.monotonic()
+    r = backend._select_option_by_keystrokes("combo-size", "Large")
+    assert not r.ok
+    assert time.monotonic() - t0 < 2.0
+
+
 def test_select_by_keystrokes_without_bounds_fails(backend):
     r = backend._select_option_by_keystrokes("txt-name", "x")
     assert not r.ok
