@@ -189,6 +189,10 @@ Three layers, later wins: the suite file (`--config`), a script's own
 - **Checks:** `present`, `absent` (by name/role), `windows: n` (windows matching
   the config's `window`), `no_window: "<title>"`, `shell` (exit 0),
   `manual` (reported for a human; the script ends `MANUAL`).
+  A `present` check retries until `step_timeout`, because web views can show
+  an almost empty tree for a moment during a view change. `absent` is read
+  once, so an empty moment can make it pass early: follow a transition with a
+  `present` check on the new view before an `absent` check on the old one.
 - **Null windows:** a per-platform `window` (or a `wait_for_window` step's
   `pattern`) that is `null` for this platform runs the phase in the main window
   and skips the wait. GTK dialogs, for example, live inside the app's window.
