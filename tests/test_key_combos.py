@@ -222,3 +222,19 @@ def test_a_script_with_an_unknown_modifier_is_rejected_before_running():
     }
     issues = validate_script(s)
     assert any("Hyper" in i.message and i.path.endswith(".key") for i in issues)
+
+
+def test_the_tool_refuses_a_combo_without_a_window():
+    """Without window_id a chord goes to whatever is in front, unchecked; a
+    stray Alt+F4 closes the user's app. The MCP tool insists on a target.
+    (BAM key steps without window_id are guarded by the runner instead.)"""
+    from bad_ass_mcp import server
+    from tests.fake_backend import FakeBackend
+
+    desk = FakeBackend()
+    with patch.object(server, "_backend", return_value=desk):
+        r = server.press_key("Alt+F4")
+    assert r["ok"] is False and "window_id" in r["error"]
+    assert desk.key_log == []
+    with patch.object(server, "_backend", return_value=desk):
+        assert server.press_key("Return")["ok"] is True

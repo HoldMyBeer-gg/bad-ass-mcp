@@ -203,7 +203,8 @@ app buried under other windows. Three kinds don't: `key` without `window_id`
 events at screen points). Key combinations (`"key": "Cmd+S"`) are always
 real input, window or not.
 
-**Key combinations.** `"key": "Cmd+Shift+G"`, `"Ctrl+A"`, `"Alt+F4"`.
+**Key combinations.** A step like
+`{"action": "key", "key": "Cmd+Shift+G"}`; also `"Ctrl+A"`, `"Alt+F4"`.
 Modifiers: Ctrl, Shift, Alt (or Option), Cmd, Super (or Win). `Cmd` is the
 platform's shortcut key, Command on macOS and Ctrl on Windows and Linux, so
 `"Cmd+S"` saves everywhere; `Super` is the literal Windows/Super key.

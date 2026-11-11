@@ -501,7 +501,8 @@ def press_key(key: str, window_id: str | None = None) -> dict:
     Combinations: 'Cmd+A', 'Ctrl+Shift+G', 'Alt+F4', 'Cmd+Shift+G'. 'Cmd' is
     the platform's shortcut key (Command on macOS, Ctrl on Windows/Linux), so
     'Cmd+A' selects all everywhere; 'Super'/'Win' is the literal Windows key.
-    Combinations use real input, so the window is brought to the front.
+    Combinations need window_id and use real input, so that window is
+    brought to the front first.
     On Linux they need X11 or an XWayland app.
 
     Pass window_id. Without it the key goes to whatever app is in front,
@@ -509,7 +510,11 @@ def press_key(key: str, window_id: str | None = None) -> dict:
     try:
         from .backend.base import parse_combo
 
-        parse_combo(key)  # an unknown modifier fails here, before any input
+        # An unknown modifier fails here, before any input. A combination
+        # needs a target: unchecked, a stray Alt+F4 or Ctrl+W lands on
+        # whatever the user has in front.
+        if parse_combo(key) and not window_id:
+            return {"ok": False, "error": "key combinations need window_id"}
         result = _backend().press_key(key, window_id)
         return {"ok": result.ok, "error": result.error}
     except Exception as e:

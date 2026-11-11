@@ -977,7 +977,9 @@ def test_demo_mode_logs_each_step_with_bounds_and_paces_it(tmp_path):
     assert [s["action"] for s in steps] == ["click", "key"]
     assert steps[0]["phase"] == "press ok" and steps[0]["target"] == "ok"
     assert steps[0]["bounds"] == [10.0, 10.0, 80.0, 30.0]  # FakeBackend's OK button
-    assert steps[1]["t"] - steps[0]["t"] >= 0.05  # paced
+    # Paced. Slack for Windows' ~15.6 ms timer: a 50 ms sleep can come out a
+    # few ms short (seen at 47 ms on Windows 11).
+    assert steps[1]["t"] - steps[0]["t"] >= 0.04
 
 
 def test_demo_mode_clicks_with_the_real_pointer_at_the_element_centre(tmp_path):
