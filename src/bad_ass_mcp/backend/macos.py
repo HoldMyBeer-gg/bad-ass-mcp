@@ -325,6 +325,23 @@ def _cg_onscreen_windows() -> list[dict]:
     return [dict(w) for w in raw]
 
 
+def _mismatch_error(verb: str, got: str, text: str) -> str:
+    if verb == "Typed" and any(ord(c) > 0xFFFF for c in text):
+        # CodeMirror 5 keeps only the low 16 bits of a key event's code
+        # point (🦀 U+1F980 arrives as U+F980, shown as 呂), and splitting
+        # the surrogate pair over two events drops it: no key event works.
+        return (
+            f"Typed, but the field reads {got!r}: the text has emoji or other "
+            "characters outside the Basic Multilingual Plane, which some editors "
+            "(CodeMirror 5) can't take as key events; type it with paste=true"
+        )
+    return (
+        f"{verb}, but the field reads {got!r}: the text went elsewhere "
+        "(focus did not reach this field), or the field consumed it and "
+        "cleared itself (e.g. a Go-to-folder box that navigates at once)"
+    )
+
+
 def _quartz_type_char(char: str, pid: int | None = None) -> None:
     """Inject a single Unicode character via CoreGraphics keyboard event."""
     c = char[:1]
@@ -876,12 +893,7 @@ class MacOSBackend(DesktopBackend):
             got = _ax_get(element, "AXValue")
             if isinstance(got, str) and not _same_text(got, text, secure=secure):
                 verb = "Pasted" if via == "paste" else "Typed"
-                return ActionResult(
-                    ok=False,
-                    error=f"{verb}, but the field reads {got!r}: the text went elsewhere "
-                    "(focus did not reach this field), or the field consumed it and "
-                    "cleared itself (e.g. a Go-to-folder box that navigates at once)",
-                )
+                return ActionResult(ok=False, error=_mismatch_error(verb, got, text))
             return ActionResult(ok=True)
         except Exception as e:
             return ActionResult(ok=False, error=f"Cannot set text: {e}")

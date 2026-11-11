@@ -1233,3 +1233,16 @@ def test_a_typed_emoji_sends_both_utf16_units():
         macos._quartz_type_char("🦀", pid=4242)
         macos._quartz_type_char("é", pid=4242)
     assert sent == [(2, "🦀"), (2, "🦀"), (1, "é"), (1, "é")]
+
+
+def test_a_mismatch_with_emoji_in_the_text_says_why():
+    """CodeMirror 5 truncates a key event's code point to 16 bits (🦀 reads
+    back as 呂), so no key event can type an emoji there. Say so, and point
+    at paste, instead of blaming focus."""
+    from bad_ass_mcp.backend.macos import _mismatch_error
+
+    msg = _mismatch_error("Typed", "cm 呂", "cm 🦀")
+    assert "emoji" in msg and "paste" in msg
+    plain = _mismatch_error("Typed", "", "hello")
+    assert "focus" in plain and "emoji" not in plain
+    assert "emoji" not in _mismatch_error("Pasted", "x", "🦀")
