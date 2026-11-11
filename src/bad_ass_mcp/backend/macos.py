@@ -109,11 +109,15 @@ def _ax_do(element: Any, action: str) -> bool:
     return AXUIElementPerformAction(element, action) == _kAXErrorSuccess
 
 
-def _quartz_key_press(keycode: int, flags: int = 0, pid: int | None = None) -> None:
+def _quartz_key_press(
+    keycode: int, flags: int = 0, pid: int | None = None, *, hid: bool = False
+) -> None:
     """Inject a key press/release pair via CoreGraphics.
 
     If pid is given, events are delivered directly to that process without
-    stealing focus from the user's current window.
+    stealing focus from the user's current window. hid=True posts at the
+    HID tap, the closest thing to a real keyboard (for out-of-process
+    panels, which pid-targeted keys never reach).
     """
     down = CGEventCreateKeyboardEvent(None, keycode, True)
     up = CGEventCreateKeyboardEvent(None, keycode, False)
@@ -124,8 +128,9 @@ def _quartz_key_press(keycode: int, flags: int = 0, pid: int | None = None) -> N
         CGEventPostToPid(pid, down)
         CGEventPostToPid(pid, up)
     else:
-        CGEventPost(kCGSessionEventTap, down)
-        CGEventPost(kCGSessionEventTap, up)
+        tap = kCGHIDEventTap if hid else kCGSessionEventTap
+        CGEventPost(tap, down)
+        CGEventPost(tap, up)
 
 
 def _quartz_button(button: str) -> tuple[int, int, int, int]:
@@ -824,7 +829,11 @@ class MacOSBackend(DesktopBackend):
             # pid: an NSOpenPanel runs out of process as a view service and
             # never sees pid-targeted keys (TextEdit's Open panel, Audition's
             # Import panel), while HID-level keys reach it.
-            _quartz_key_press(keycode, flags, pid=None)
+            _quartz_key_press(keycode, flags, pid=None, hid=True)
+            if previous is not None:
+                # Let the target handle the key before focus goes back: an
+                # Open panel never showed Go-to when we restored at once.
+                time.sleep(0.25)
             return ActionResult(ok=True)
         except Exception as e:
             return ActionResult(ok=False, error=str(e))
