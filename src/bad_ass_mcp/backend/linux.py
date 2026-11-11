@@ -889,6 +889,15 @@ class LinuxBackend(DesktopBackend):
         attempts.append(f"keystrokes: {r.error}")
         return ActionResult(ok=False, error=f"Option {value!r}: " + "; ".join(attempts))
 
+    def is_password(self, handle_id: str) -> bool | None:
+        node = self._resolve(handle_id)
+        try:
+            if (node.get_role_name() or "").lower() == "password text":
+                return True
+        except Exception:
+            pass
+        return super().is_password(handle_id)
+
     def get_value(self, handle_id: str) -> str | None:
         node = self._resolve(handle_id)
         try:

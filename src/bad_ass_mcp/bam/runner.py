@@ -603,6 +603,29 @@ class _Run:
             "clicks": int(step.get("clicks", 1)),
         }
 
+    def _password_gate(self, step: dict, phase: int, number: int) -> None:
+        """Refuse to type into a password field unless this machine's own
+        config allows it, for every app (true) or the named ones."""
+        try:
+            secret = self.b.is_password(step["handle"])
+        except Exception:
+            secret = None
+        if not secret:
+            return
+        allow = self.config.get("allow_password_fields", False)
+        if allow is True:
+            return
+        if isinstance(allow, list) and allow:
+            win = next((w for w in self.b.list_windows() if w.id == self.window), None)
+            if win is not None and any(win.matches(p) for p in allow):
+                return
+        raise ScriptFailure(
+            "password field: not allowed by this machine's config",
+            phase=phase,
+            step=number,
+            action="type",
+        )
+
     def _point_of(self, step: dict) -> tuple[float, float] | None:
         if step.get("action") == "click_at":
             return float(step["x"]), float(step["y"])
@@ -649,6 +672,9 @@ class _Run:
                 ):
                     end += 1
             chunk = sent[start : end + 1]
+            for offset, step in enumerate(chunk):
+                if step.get("action") == "type":
+                    self._password_gate(step, phase, base + start + offset + 1)
             results = self.b.run_sequence(chunk, stop_on_error=True)
             # Then check again: a person may have touched the machine while
             # that chunk ran, even if it sent no input itself.

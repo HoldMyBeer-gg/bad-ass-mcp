@@ -1059,6 +1059,13 @@ class MacOSBackend(DesktopBackend):
         attempts.append(f"keystrokes: {r.error}")
         return ActionResult(ok=False, error=f"Option {value!r}: " + "; ".join(attempts))
 
+    def is_password(self, handle_id: str) -> bool | None:
+        element = self._resolve(handle_id)
+        role = (_ax_get(element, "AXRole"), _ax_get(element, "AXSubrole"))
+        if "AXSecureTextField" in role:
+            return True
+        return super().is_password(handle_id)
+
     def get_value(self, handle_id: str) -> str | None:
         element = self._resolve(handle_id)
         raw = _ax_get(element, "AXValue")

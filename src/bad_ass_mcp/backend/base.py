@@ -263,6 +263,18 @@ class DesktopBackend(ABC):
             )
         return ActionResult(ok=True)
 
+    def is_password(self, handle_id: str) -> bool | None:
+        """Whether the element is a password field: True/False when the
+        backend can tell, None when it can't. Backends override this with
+        the platform's own flag; the fallback recognises a masked value."""
+        try:
+            value = self.get_value(handle_id)
+        except Exception:
+            return None
+        if isinstance(value, str) and value and set(value) <= {"•", "●", "*"}:
+            return True
+        return None
+
     @abstractmethod
     def get_value(self, handle_id: str) -> str | None:
         """Return current text/value/state of an element."""

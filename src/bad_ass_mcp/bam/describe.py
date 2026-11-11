@@ -7,6 +7,7 @@ line."""
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from .script import applies, expand, learn_descriptors, pick
@@ -181,6 +182,32 @@ def is_real_input(step: dict) -> bool:
         return parse_combo(str(step.get("key", ""))) is not None
     except ValueError:
         return False
+
+
+_SECRET_WORDS = re.compile(r"pass(word|code|phrase)|\bpass\b|token|secret|\bpin\b|api.?key", re.I)
+
+
+def secret_hints(script: dict, platform: str) -> list[str]:
+    """Learn labels that type steps write into and whose label or name looks
+    like a secret (password, passcode, token, secret, PIN, API key). Only an
+    early warning: the real check is at run time, on the field itself."""
+    hits: list[str] = []
+    for phase in script.get("phases", []):
+        if not applies(phase, platform):
+            continue
+        learn = phase.get("learn", {})
+        for step in phase.get("steps", []):
+            if step.get("action") != "type" or not applies(step, platform):
+                continue
+            label = step.get("target")
+            desc = learn.get(label, {}) if isinstance(learn, dict) else {}
+            name = desc.get("name") if isinstance(desc, dict) else None
+            if isinstance(name, dict):
+                name = name.get(platform)
+            words = f"{label} {name or ''}"
+            if label and _SECRET_WORDS.search(words) and label not in hits:
+                hits.append(label)
+    return hits
 
 
 def needs_foreground(script: dict, platform: str) -> bool:

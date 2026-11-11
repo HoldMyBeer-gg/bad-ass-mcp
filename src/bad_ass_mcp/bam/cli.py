@@ -250,6 +250,19 @@ def hands_off_notice(names: list[str], total: int, *, vm_running: bool = False) 
     return msg
 
 
+def _secret_names(scripts: list[Path], platform: str) -> list[str]:
+    from .describe import secret_hints
+
+    names = []
+    for p in scripts:
+        s = json.loads(Path(p).read_text(encoding="utf-8"))
+        if platform in s.get("platforms", [platform]):
+            hits = secret_hints(s, platform)
+            if hits:
+                names.append(f"{s.get('name') or Path(p).stem} ({', '.join(hits)})")
+    return names
+
+
 def _real_input_names(scripts: list[Path], platform: str) -> list[str]:
     from .describe import needs_foreground
 
@@ -281,6 +294,12 @@ def check_main(argv: list[str]) -> int:
         real = _real_input_names(scripts, here)
         if real:
             print(f"needs foreground on {here}: {', '.join(real)}")
+        secret = _secret_names(scripts, here)
+        if secret:
+            print(
+                "types into what looks like a password or secret (blocked unless this "
+                f"machine's config sets allow_password_fields): {', '.join(secret)}"
+            )
     return 1 if problems else 0
 
 
@@ -314,6 +333,13 @@ def main(argv: list[str]) -> int:
     notice = hands_off_notice(real, len(args.scripts), vm_running=bool(real) and vm_running())
     if notice:
         print(notice, file=sys.stderr)
+    secret = _secret_names(args.scripts, args.platform)
+    if secret:
+        print(
+            "Types into what looks like a password or secret (blocked unless this machine's "
+            f"config sets allow_password_fields): {', '.join(secret)}",
+            file=sys.stderr,
+        )
     color = use_color(sys.stdout)
     live = sys.stderr.isatty()
 
