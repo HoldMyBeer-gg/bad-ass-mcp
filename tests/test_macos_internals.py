@@ -1087,3 +1087,24 @@ def test_password_field_reading_bullets_counts_as_typed():
     assert _same_text("•" * 8, "hunter22", secure=True)
     assert not _same_text("•" * 7, "hunter22", secure=True)
     assert not _same_text("•" * 8, "hunter22")
+
+
+# ── NSWorkspace's app list only updates when the run loop runs ───────
+
+
+@_darwin
+def test_list_windows_pumps_the_run_loop_so_new_apps_appear():
+    """Verified on macOS 26: runningApplications() never showed Calculator,
+    launched after the call site's process started, until the run loop ran.
+    A long-lived MCP server missed every app launched after it started."""
+    from bad_ass_mcp.backend import macos
+
+    backend = macos.MacOSBackend()
+    pumped = []
+    with (
+        patch.object(macos, "_pump_run_loop", side_effect=lambda: pumped.append(1)),
+        patch.object(macos, "_cg_onscreen_windows", return_value=[]),
+        patch("time.sleep"),
+    ):
+        backend.list_windows()
+    assert pumped
