@@ -90,7 +90,7 @@ def _serialise_tree(root, byte_budget: int = _TREE_BYTE_BUDGET) -> dict:
     """
 
     def node_dict(el) -> dict:
-        return {
+        d = {
             "id": el.id,
             "role": el.role,
             "name": el.name,
@@ -98,6 +98,9 @@ def _serialise_tree(root, byte_budget: int = _TREE_BYTE_BUDGET) -> dict:
             "states": sorted(el.states),
             "children": [],
         }
+        if getattr(el, "truncated", False):
+            d["truncated_by_depth"] = True
+        return d
 
     # Per-node byte cost: the node's own JSON with no children, serialised the
     # SAME way get_tree emits the finished tree (compact, no spaces), so the
@@ -145,8 +148,14 @@ def get_tree(window_id: str, max_depth: int | None = None) -> str:
     interactive node is preserved. Very large pages are additionally capped
     to a byte budget so the result always fits the client: when that happens
     the root object carries "truncated": true and "dropped_nodes" (a count).
-    To see the cut content, pass max_depth (e.g. 8) to cap recursion depth, or
-    use find_elements() to target specific controls.
+    To see the cut content, pass max_depth to cap recursion depth, or use
+    find_elements() to target specific controls.
+
+    max_depth counts the nameless wrappers that pruning hides, and web
+    content (WebView2, WKWebView, Chromium) sits under several of them: a
+    cap below ~12 can stop above a page's content. A node whose children the
+    cap skipped carries "truncated_by_depth": true, so an empty "children"
+    there means "not walked", not "empty".
 
     Returned as a compact JSON string (not a nested object) so the client's
     result-size cap counts real content, not indentation whitespace; parse it

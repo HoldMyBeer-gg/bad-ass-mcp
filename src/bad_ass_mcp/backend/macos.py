@@ -417,6 +417,11 @@ class MacOSBackend(DesktopBackend):
                     handle.children.append(self._walk(child, depth + 1, max_depth, pid, budget))
                 except Exception:
                     pass
+        elif depth >= max_depth:
+            try:
+                handle.truncated = bool(self._ax_descendants(element, depth))
+            except Exception:
+                pass
         return handle
 
     def _ax_descendants(self, element: Any, depth: int) -> list[Any]:
