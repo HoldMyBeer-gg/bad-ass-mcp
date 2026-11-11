@@ -1400,7 +1400,36 @@ class WindowsBackend(DesktopBackend):
         except Exception as e:
             return ActionResult(ok=False, error=str(e))
 
+    def _press_combo(self, mods: tuple[str, ...], key: str, window_id: str | None) -> ActionResult:
+        """Chords need real input (PostMessage doesn't update the modifier
+        state an app reads), so the window must be in front."""
+        vk = _vk_for(key)
+        if vk is None and len(key) == 1:
+            scan = _user32.VkKeyScanW(ord(key))
+            vk = scan & 0xFF if scan != -1 and scan & 0xFF != 0xFF else None
+        if vk is None:
+            return ActionResult(ok=False, error=f"no virtual-key code for {key!r}")
+        if window_id:
+            pid = self._root_pid(int(window_id))
+            if pid and not self.bring_to_front(pid):
+                return ActionResult(
+                    ok=False, error="could not bring the window to the front for a key combination"
+                )
+        inputs = _combo_inputs(mods, vk)
+        sent = _user32.SendInput(len(inputs), inputs, ctypes.sizeof(_INPUT))
+        if sent != len(inputs):
+            return ActionResult(ok=False, error=f"SendInput sent {sent} of {len(inputs)} events")
+        return ActionResult(ok=True)
+
     def press_key(self, key: str, window_id: str | None = None) -> ActionResult:
+        from .base import parse_combo, platform_modifiers
+
+        try:
+            combo = parse_combo(key)
+        except ValueError as e:
+            return ActionResult(ok=False, error=str(e))
+        if combo:
+            return self._press_combo(platform_modifiers(combo[0], "windows"), combo[1], window_id)
         vk = _VK_CODES.get(key)
         hwnd = int(window_id) if window_id else None
         try:
@@ -1475,6 +1504,38 @@ def _until_populated(walk, timeout: float = 2.0):
         time.sleep(0.2)
         tree = walk()
     return tree
+
+
+_MODIFIER_VKS = {"ctrl": 0x11, "shift": 0x10, "alt": 0x12, "super": 0x5B}
+_KEY_UP = 0x0002
+
+
+def _vk_for(key: str) -> int | None:
+    """Virtual-key code for a named key, a letter or a digit. Other
+    characters go through VkKeyScanW at call time (layout-dependent)."""
+    vk = _VK_CODES.get(key)
+    if vk is not None:
+        return vk
+    if len(key) == 1 and key.isascii() and key.isalnum():
+        return ord(key.upper())
+    return None
+
+
+def _combo_inputs(mods: tuple[str, ...], vk: int):
+    """SendInput events for a chord: modifiers down in order, the key down
+    and up, then modifiers up in reverse."""
+    downs = [_MODIFIER_VKS[m] for m in mods]
+    seq = [(v, 0) for v in downs] + [(vk, 0), (vk, _KEY_UP)]
+    seq += [(v, _KEY_UP) for v in reversed(downs)]
+    inputs = (_INPUT * len(seq))()
+    for ev, (v, flags) in zip(inputs, seq, strict=True):
+        ev.type = _INPUT_KEYBOARD
+        ev.ki.wVk = v
+        ev.ki.wScan = 0
+        ev.ki.dwFlags = flags
+        ev.ki.time = 0
+        ev.ki.dwExtraInfo = 0
+    return inputs
 
 
 def _unicode_key_inputs(text: str):

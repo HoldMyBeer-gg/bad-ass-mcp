@@ -162,9 +162,22 @@ def phase_title(phase: dict, described: dict, n: int) -> str:
 
 def is_real_input(step: dict) -> bool:
     """Steps that go to whatever is in front or under the pointer rather than
-    to an element: keys without a window, click_at, drag."""
+    to an element: keys without a window, key combinations, click_at, drag."""
     a = step.get("action")
-    return a in ("click_at", "drag") or (a == "key" and "window_id" not in step)
+    if a in ("click_at", "drag"):
+        return True
+    if a != "key":
+        return False
+    if "window_id" not in step:
+        return True
+    # A combination is sent as real keystrokes (the target is raised first),
+    # with or without a window.
+    from ..backend.base import parse_combo
+
+    try:
+        return parse_combo(str(step.get("key", ""))) is not None
+    except ValueError:
+        return False
 
 
 def needs_foreground(script: dict, platform: str) -> bool:

@@ -498,10 +498,18 @@ def press_key(key: str, window_id: str | None = None) -> dict:
          'Home', 'End', 'PageUp', 'PageDown', 'BackSpace', or any single character.
     Useful for navigating combo box dropdowns, dismissing dialogs, etc.
 
+    Combinations: 'Cmd+A', 'Ctrl+Shift+G', 'Alt+F4', 'Cmd+Shift+G'. 'Cmd' is
+    the platform's shortcut key (Command on macOS, Ctrl on Windows/Linux), so
+    'Cmd+A' selects all everywhere; 'Super'/'Win' is the literal Windows key.
+    Combinations use real input, so the window is brought to the front.
+    On Linux they need X11 or an XWayland app.
+
     Pass window_id. Without it the key goes to whatever app is in front,
-    which is often your own terminal, and still returns ok. There are no
-    modifier combinations (Cmd/Ctrl+key) yet."""
+    which is often your own terminal, and still returns ok."""
     try:
+        from .backend.base import parse_combo
+
+        parse_combo(key)  # an unknown modifier fails here, before any input
         result = _backend().press_key(key, window_id)
         return {"ok": result.ok, "error": result.error}
     except Exception as e:
