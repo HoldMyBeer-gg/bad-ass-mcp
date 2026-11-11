@@ -105,7 +105,7 @@ class FakeBackend(DesktopBackend):
         self._resolve(handle_id)
         return self._bounds.get(handle_id)
 
-    def type_text(self, handle_id: str, text: str) -> ActionResult:
+    def type_text(self, handle_id: str, text: str, paste: bool = False) -> ActionResult:
         el = self._resolve(handle_id)
         if "editable" not in el.states:
             return ActionResult(ok=False, error=f"{handle_id} is not editable")

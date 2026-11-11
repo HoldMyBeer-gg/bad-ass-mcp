@@ -10,6 +10,7 @@ where a single process may own multiple windows.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import struct
 import time
@@ -92,6 +93,7 @@ _WM_KEYUP = 0x0101
 _WM_CHAR = 0x0102
 _WM_PASTE = 0x0302
 _CF_UNICODETEXT = 13
+_SMTO_ABORTIFHUNG = 0x0002
 
 # SendInput mouse flags (MOUSEEVENTF_*)
 _MOUSEEVENTF_MOVE = 0x0001
@@ -631,20 +633,6 @@ class WindowsBackend(DesktopBackend):
             return (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
         return None
 
-    def _clipboard_set(self, text: str) -> None:
-        """Copy text to the Windows clipboard via Win32 API."""
-        data = (text + "\0").encode("utf-16-le")
-        _user32.OpenClipboard(0)
-        try:
-            _user32.EmptyClipboard()
-            h = _kernel32.GlobalAlloc(0x0042, len(data))  # GMEM_MOVEABLE | GMEM_ZEROINIT
-            p = _kernel32.GlobalLock(h)
-            ctypes.memmove(p, data, len(data))
-            _kernel32.GlobalUnlock(h)
-            _user32.SetClipboardData(_CF_UNICODETEXT, h)
-        finally:
-            _user32.CloseClipboard()
-
     # ── DesktopBackend impl ───────────────────────────────────────────
 
     def list_windows(self) -> list[WindowInfo]:
@@ -810,7 +798,7 @@ class WindowsBackend(DesktopBackend):
         # send a real click at the element's center instead.
         return self._click_element_at(handle_id)
 
-    def type_text(self, handle_id: str, text: str) -> ActionResult:
+    def type_text(self, handle_id: str, text: str, paste: bool = False) -> ActionResult:
         """Each strategy is verified by reading the value back, and the next
         one runs if the text didn't stick: egui (accesskit) exposes a
         writable ValuePattern and accepts SetValue without raising, then
@@ -844,14 +832,26 @@ class WindowsBackend(DesktopBackend):
             for ch in text:
                 _user32.PostMessageW(hwnd, _WM_CHAR, ord(ch), 0)
 
-        def paste():
+        def paste_text():
             # Clipboard + WM_PASTE: standard Win32 edits, no modifier keys
             # (PostMessage doesn't update GetKeyState, so Ctrl+V would
-            # arrive as a bare 'V').
+            # arrive as a bare 'V'). Only when the caller asked for it; the
+            # text is kept out of clipboard history and cleared after.
             element.SetFocus()
             time.sleep(0.05)
-            self._clipboard_set(text)
-            _user32.PostMessageW(hwnd or _user32.GetForegroundWindow(), _WM_PASTE, 0, 0)
+            with _lent_clipboard(_Win32Clipboard(), text):
+                # Sent, not posted: the target has read the clipboard by the
+                # time this returns, so restoring can't race it.
+                result = ctypes.wintypes.DWORD()
+                _user32.SendMessageTimeoutW(
+                    hwnd or _user32.GetForegroundWindow(),
+                    _WM_PASTE,
+                    0,
+                    0,
+                    _SMTO_ABORTIFHUNG,
+                    1000,
+                    ctypes.byref(result),
+                )
 
         def keys():
             # Real key events to the focused field: what finally works on
@@ -863,10 +863,24 @@ class WindowsBackend(DesktopBackend):
             if sent != len(inputs):
                 raise RuntimeError(f"SendInput sent {sent} of {len(inputs)} events")
 
+        try:
+            password = bool(element.CurrentIsPassword)
+        except Exception:
+            password = False
+        password = password or _masked(read_back())
         return _first_verified(
             text,
-            [("SetValue", set_value), ("WM_CHAR", wm_char), ("paste", paste), ("keys", keys)],
-            read_back,
+            _typing_attempts(
+                [
+                    ("SetValue", set_value),
+                    ("WM_CHAR", wm_char),
+                    ("paste", paste_text),
+                    ("keys", keys),
+                ],
+                password=password,
+                paste=paste,
+            ),
+            _password_read_back(read_back, password=password),
         )
 
     def select_option(self, handle_id: str, value: str) -> ActionResult:
@@ -1565,6 +1579,91 @@ def _unicode_key_inputs(text: str):
     return inputs
 
 
+def _password_read_back(read_back, *, password: bool):
+    """Win32 and WinForms password boxes read back '' through UIA, whatever
+    they hold. For a password field that is "can't tell", not "empty":
+    report None so the first strategy that runs is trusted, instead of
+    every strategy typing the password again."""
+    if not password:
+        return read_back
+
+    def wrapped():
+        value = read_back()
+        return None if value == "" else value
+
+    return wrapped
+
+
+def _typing_attempts(attempts, *, password: bool, paste: bool):
+    """Paste runs only when the caller asked for it, and never for a
+    password: clipboard managers and Win+V history record whatever passes
+    through the clipboard."""
+    if paste and not password:
+        return list(attempts)
+    return [(n, fn) for n, fn in attempts if n != "paste"]
+
+
+@contextlib.contextmanager
+def _lent_clipboard(cb, text: str):
+    """Put `text` on the clipboard for the block, marked so clipboard
+    history, cloud sync and clipboard monitors skip it. Afterwards empty the
+    clipboard only if it still holds that entry (same sequence number).
+
+    The user's content is never read, saved or restored: a restore can't
+    know what changed in between, and a password manager that clears a
+    copied secret after a timeout would have its secret put back."""
+    if not cb.open():
+        raise RuntimeError("clipboard is busy")
+    try:
+        cb.empty()
+        cb.put(_CF_UNICODETEXT, (text + "\0").encode("utf-16-le"))
+        cb.put(cb.register("ExcludeClipboardContentFromMonitorProcessing"), b"\0")
+        cb.put(cb.register("CanIncludeInClipboardHistory"), struct.pack("<I", 0))
+        cb.put(cb.register("CanUploadToCloudClipboard"), struct.pack("<I", 0))
+    finally:
+        cb.close()
+    ours = cb.sequence()
+    try:
+        yield
+    finally:
+        if cb.sequence() == ours and cb.open():
+            try:
+                if cb.sequence() == ours:
+                    cb.empty()
+            finally:
+                cb.close()
+
+
+class _Win32Clipboard:
+    """The few clipboard calls _lent_clipboard needs, over user32."""
+
+    def open(self) -> bool:
+        for _ in range(10):
+            if _user32.OpenClipboard(0):
+                return True
+            time.sleep(0.02)
+        return False
+
+    def close(self) -> None:
+        _user32.CloseClipboard()
+
+    def sequence(self) -> int:
+        return int(_user32.GetClipboardSequenceNumber())
+
+    def empty(self) -> None:
+        _user32.EmptyClipboard()
+
+    def put(self, fmt: int, raw: bytes) -> None:
+        h = _kernel32.GlobalAlloc(0x0042, max(len(raw), 1))  # GMEM_MOVEABLE | ZEROINIT
+        p = _kernel32.GlobalLock(h)
+        _ct.memmove(p, raw, len(raw))
+        _kernel32.GlobalUnlock(h)
+        _user32.SetClipboardData(fmt, h)
+
+    def register(self, name: str) -> int:
+        return _user32.RegisterClipboardFormatW(name)
+
+
 def _declare_clipboard_types(kernel32, user32) -> None:
     """Pointer-sized types for the clipboard calls. ctypes defaults restype
     to C int, which truncates a 64-bit HGLOBAL or pointer, and the memmove
@@ -1577,6 +1676,9 @@ def _declare_clipboard_types(kernel32, user32) -> None:
     kernel32.GlobalUnlock.argtypes = (vp,)
     user32.SetClipboardData.restype = vp
     user32.SetClipboardData.argtypes = (_ct.c_uint, vp)
+    user32.GetClipboardSequenceNumber.restype = _ct.c_uint
+    user32.RegisterClipboardFormatW.restype = _ct.c_uint
+    user32.RegisterClipboardFormatW.argtypes = (_ct.c_wchar_p,)
 
 
 if _HAS_UIA:

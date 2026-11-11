@@ -2021,3 +2021,19 @@ def test_pointer_is_valid_on_click_in_the_schema():
         ],
     }
     assert validate_script(script) == []
+
+
+def test_paste_is_valid_on_type_in_the_schema():
+    from bad_ass_mcp.bam.validate import validate_script
+
+    script = {
+        "name": "p",
+        "platforms": ["linux"],
+        "phases": [
+            {
+                "learn": {"name": {"name": "Name"}},
+                "steps": [{"action": "type", "target": "name", "text": "x", "paste": True}],
+            }
+        ],
+    }
+    assert validate_script(script) == []

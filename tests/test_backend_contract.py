@@ -563,3 +563,21 @@ def test_a_window_wait_that_times_out_names_the_pattern(backend):
     [r] = backend.run_sequence([{"action": "wait_for_window", "pattern": "Nope", "timeout": 0.1}])
     assert not r["ok"]
     assert "timed out" in r["error"] and "Nope" in r["error"]
+
+
+def test_run_sequence_passes_the_paste_flag_to_type_text(backend):
+    seen = []
+    real = backend.type_text
+
+    def spy(handle_id, text, paste=False):
+        seen.append(paste)
+        return real(handle_id, text, paste=paste)
+
+    backend.type_text = spy
+    backend.run_sequence(
+        [
+            {"action": "type", "handle": "txt-name", "text": "a"},
+            {"action": "type", "handle": "txt-name", "text": "b", "paste": True},
+        ]
+    )
+    assert seen == [False, True]

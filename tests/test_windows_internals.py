@@ -568,3 +568,143 @@ def test_until_populated_gives_up_and_returns_the_empty_tree():
     empty = ElementHandle(id="r", role="pane", name="x")
     tree = _until_populated(lambda: empty, timeout=0.05)
     assert tree is empty
+
+
+# ── clipboard: paste only when asked, never read or restore ──────────
+
+
+class _FakeClipboard:
+    """Dict-backed stand-in for the Win32 clipboard calls. Reading the
+    user's content is a test failure: BAM must never save or restore it."""
+
+    def __init__(self, contents):
+        self.data = dict(contents)
+        self.names: dict[str, int] = {}
+        self.seq = 1
+        self.opened = 0
+
+    def open(self):
+        self.opened += 1
+        return True
+
+    def close(self):
+        self.opened -= 1
+
+    def formats(self):
+        raise AssertionError("read the user's clipboard")
+
+    def get(self, fmt):
+        raise AssertionError("read the user's clipboard")
+
+    def empty(self):
+        self.data.clear()
+        self.seq += 1
+
+    def put(self, fmt, raw):
+        self.data[fmt] = raw
+        self.seq += 1
+
+    def sequence(self):
+        return self.seq
+
+    def register(self, name):
+        return self.names.setdefault(name, 0xC000 + len(self.names))
+
+
+def test_lent_clipboard_marks_the_text_out_of_history_and_cloud():
+    from bad_ass_mcp.backend.windows import _CF_UNICODETEXT, _lent_clipboard
+
+    cb = _FakeClipboard({})
+    with _lent_clipboard(cb, "x"):
+        assert cb.data[_CF_UNICODETEXT] == "x\0".encode("utf-16-le")
+        by_name = {n: cb.data.get(f) for n, f in cb.names.items()}
+    assert "ExcludeClipboardContentFromMonitorProcessing" in by_name
+    assert by_name["CanIncludeInClipboardHistory"] == struct.pack("<I", 0)
+    assert by_name["CanUploadToCloudClipboard"] == struct.pack("<I", 0)
+    assert cb.opened == 0
+
+
+def test_lent_clipboard_empties_only_its_own_entry():
+    from bad_ass_mcp.backend.windows import _lent_clipboard
+
+    cb = _FakeClipboard({13: b"users"})
+    with _lent_clipboard(cb, "x"):
+        pass
+    assert cb.data == {}
+
+
+def test_lent_clipboard_leaves_a_newer_copy_alone():
+    # A password manager (or the user) put something there meanwhile:
+    # that is theirs now, so BAM does not touch it.
+    from bad_ass_mcp.backend.windows import _lent_clipboard
+
+    cb = _FakeClipboard({})
+    with _lent_clipboard(cb, "x"):
+        cb.data = {13: b"theirs"}
+        cb.seq += 1
+    assert cb.data == {13: b"theirs"}
+
+
+def test_lent_clipboard_cleans_up_when_the_paste_raises():
+    from bad_ass_mcp.backend.windows import _lent_clipboard
+
+    cb = _FakeClipboard({})
+    with pytest.raises(RuntimeError):
+        with _lent_clipboard(cb, "x"):
+            raise RuntimeError("boom")
+    assert cb.data == {}
+
+
+def test_paste_is_left_out_unless_asked_for_and_never_for_passwords():
+    from bad_ass_mcp.backend.windows import _typing_attempts
+
+    names = lambda xs: [n for n, _ in xs]  # noqa: E731
+    attempts = [("SetValue", 1), ("WM_CHAR", 2), ("paste", 3), ("keys", 4)]
+    assert names(_typing_attempts(attempts, password=False, paste=False)) == [
+        "SetValue",
+        "WM_CHAR",
+        "keys",
+    ]
+    assert names(_typing_attempts(attempts, password=False, paste=True)) == [
+        "SetValue",
+        "WM_CHAR",
+        "paste",
+        "keys",
+    ]
+    assert names(_typing_attempts(attempts, password=True, paste=True)) == [
+        "SetValue",
+        "WM_CHAR",
+        "keys",
+    ]
+
+
+def test_a_password_box_that_reads_empty_trusts_the_first_strategy():
+    """Win32/WinForms password boxes read back '' through UIA, never the
+    text or bullets. Treating that as 'wrong' ran every strategy: 'abcdef'
+    went in twice (12 bullets) and type_text still said it failed."""
+    from bad_ass_mcp.backend.windows import _first_verified, _password_read_back
+
+    field: list[str] = []
+    ran: list[str] = []
+
+    def strategy(name):
+        def fn():
+            ran.append(name)
+            field.append("abcdef")
+
+        return fn
+
+    read_back = _password_read_back(lambda: "", password=True)
+    r = _first_verified(
+        "abcdef", [("SetValue", strategy("SetValue")), ("keys", strategy("keys"))], read_back
+    )
+    assert r.ok and r.detail == "SetValue"
+    assert ran == ["SetValue"]
+
+
+def test_password_read_back_leaves_other_fields_and_masks_alone():
+    from bad_ass_mcp.backend.windows import _password_read_back
+
+    assert _password_read_back(lambda: "", password=False)() == ""
+    assert _password_read_back(lambda: "••••", password=True)() == "••••"
+    assert _password_read_back(lambda: None, password=True)() is None
