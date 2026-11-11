@@ -1010,3 +1010,80 @@ def test_paste_clicks_the_field_when_ax_focus_does_not_take():
     ):
         assert backend._paste_text(MagicMock(), "h", "x").ok
     assert clicks == ["h"]
+
+
+@_darwin
+def test_type_text_focuses_the_target_before_writing():
+    """In WKWebView the write went to whichever input had focus, so the
+    neighbouring field got the text too. Clicking the target first fixed it
+    (rusty-macos-crab, collab-gui wizard)."""
+    from bad_ass_mcp.backend import macos
+
+    backend = macos.MacOSBackend()
+    backend._handles["h"] = MagicMock()
+    backend._handle_pids["h"] = 4242
+    order: list[str] = []
+    state = {"focused": False, "value": ""}
+
+    def fake_ax_set(_el, attr, value):
+        order.append(f"set:{attr}")
+        if attr == "AXValue":
+            state["value"] = value
+        return True
+
+    def fake_ax_get(_el, attr):
+        if attr == "AXFocused":
+            return state["focused"]
+        if attr == "AXValue":
+            return state["value"]
+        return None
+
+    def fake_click(h):
+        order.append("click")
+        state["focused"] = True
+        return MagicMock(ok=True)
+
+    with (
+        patch.object(backend, "_resolve", return_value=backend._handles["h"]),
+        patch.object(backend, "_bring_to_front", return_value=None),
+        patch.object(backend, "_click_element_at", side_effect=fake_click),
+        patch.object(macos, "_ax_get", side_effect=fake_ax_get),
+        patch.object(macos, "_ax_set", side_effect=fake_ax_set),
+        patch.object(macos.time, "sleep"),
+    ):
+        assert backend.type_text("h", "mactest").ok
+    assert order == ["set:AXFocused", "click", "set:AXValue"]
+
+
+@_darwin
+def test_type_text_skips_the_click_when_ax_focus_takes():
+    from bad_ass_mcp.backend import macos
+
+    backend = macos.MacOSBackend()
+    backend._handles["h"] = MagicMock()
+    clicks: list = []
+    with (
+        patch.object(backend, "_resolve", return_value=backend._handles["h"]),
+        patch.object(backend, "_click_element_at", side_effect=lambda h: clicks.append(h)),
+        patch.object(
+            macos,
+            "_ax_get",
+            side_effect=lambda _e, a: (
+                True if a == "AXFocused" else ("x" if a == "AXValue" else None)
+            ),
+        ),
+        patch.object(macos, "_ax_set", return_value=True),
+        patch.object(macos.time, "sleep"),
+    ):
+        assert backend.type_text("h", "x").ok
+    assert clicks == []
+
+
+@_darwin
+def test_password_field_reading_bullets_counts_as_typed():
+    """A secure field reads back as bullets, never the text."""
+    from bad_ass_mcp.backend.macos import _same_text
+
+    assert _same_text("•" * 8, "hunter22", secure=True)
+    assert not _same_text("•" * 7, "hunter22", secure=True)
+    assert not _same_text("•" * 8, "hunter22")

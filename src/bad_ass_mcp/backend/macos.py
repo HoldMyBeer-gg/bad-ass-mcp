@@ -680,14 +680,41 @@ class MacOSBackend(DesktopBackend):
         # Unicode. Some editors (CodeMirror, Monaco, other contenteditable
         # widgets) report the set as successful but ignore it, since only
         # real input events reach them; read the value back to tell.
-        # Only a value equal to the text (give or take surrounding
-        # whitespace) counts: a WKWebView input once read back the old
-        # value with the text appended.
-        if _ax_set(element, "AXValue", text) and _same_text(_ax_get(element, "AXValue"), text):
-            return ActionResult(ok=True)
-        return self._paste_text(element, handle_id, text)
+        secure = "AXSecureTextField" in (
+            _ax_get(element, "AXRole"),
+            _ax_get(element, "AXSubrole"),
+        )
+        # Focus the target first. In WKWebView a write goes to whichever
+        # input has focus, so without this the neighbouring field got the
+        # text too. AXFocused is enough for native controls; web inputs can
+        # ignore it and need a real click (which needs the app in front).
+        previous = None
+        _ax_set(element, "AXFocused", True)
+        time.sleep(0.05)
+        if _ax_get(element, "AXFocused") is False:
+            pid = self._handle_pids.get(handle_id)
+            try:
+                previous = self._bring_to_front(pid) if pid else None
+            except RuntimeError as e:
+                return ActionResult(ok=False, error=f"Cannot type: {e}")
+            self._click_element_at(handle_id)
+            time.sleep(0.05)
+        try:
+            # Only a value equal to the text (give or take surrounding
+            # whitespace) counts: a WKWebView input once read back the old
+            # value with the text appended.
+            if _ax_set(element, "AXValue", text) and _same_text(
+                _ax_get(element, "AXValue"), text, secure=secure
+            ):
+                return ActionResult(ok=True)
+            return self._paste_text(element, handle_id, text, secure=secure)
+        finally:
+            if previous is not None:
+                self._set_frontmost(previous)
 
-    def _paste_text(self, element: Any, handle_id: str, text: str) -> ActionResult:
+    def _paste_text(
+        self, element: Any, handle_id: str, text: str, *, secure: bool = False
+    ) -> ActionResult:
         """Type by pasting: focus, put `text` on the clipboard, Cmd+V to the
         element's process (no focus stealing, no AppleScript), then put the
         user's clipboard back."""
@@ -720,11 +747,12 @@ class MacOSBackend(DesktopBackend):
             if saved.returncode == 0:
                 subprocess.run(["pbcopy"], input=saved.stdout, capture_output=True, timeout=5)
             got = _ax_get(element, "AXValue")
-            if isinstance(got, str) and not _same_text(got, text):
+            if isinstance(got, str) and not _same_text(got, text, secure=secure):
                 return ActionResult(
                     ok=False,
                     error=f"Pasted, but the field reads {got!r}: the text went elsewhere "
-                    "(focus did not reach this field)",
+                    "(focus did not reach this field), or the field consumed it and "
+                    "cleared itself (e.g. a Go-to-folder box that navigates at once)",
                 )
             return ActionResult(ok=True)
         except Exception as e:
@@ -1201,7 +1229,12 @@ def _ax_titles(ax_wins, name: str) -> tuple[str, ...]:
     return tuple(titles)
 
 
-def _same_text(value, text: str) -> bool:
+def _same_text(value, text: str, *, secure: bool = False) -> bool:
     """The field holds `text`, allowing for whitespace the control trims or
-    adds. Anything else, including the text appended to old content, isn't."""
-    return isinstance(value, str) and value.strip() == text.strip()
+    adds. Anything else, including the text appended to old content, isn't.
+    A secure (password) field reads back as one bullet per character."""
+    if not isinstance(value, str):
+        return False
+    if secure and value and set(value) <= {"•", "●", "*"}:
+        return len(value) == len(text)
+    return value.strip() == text.strip()
