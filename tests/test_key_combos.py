@@ -305,3 +305,27 @@ def test_macos_failed_raise_hands_focus_back():
         with pytest.raises(RuntimeError):
             backend._bring_to_front(4242)
     assert restored == [4242, 111]
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="needs PyObjC")
+def test_macos_combo_lets_the_target_handle_the_key_before_focus_goes_back():
+    """TextEdit's Open panel never showed Go-to: focus went back to iTerm
+    before the panel processed Cmd+Shift+G (rusty-macos-crab)."""
+    from bad_ass_mcp.backend import macos
+
+    backend = macos.MacOSBackend()
+    order = []
+    with (
+        patch.object(backend, "_pid_for_window", return_value=4242),
+        patch.object(backend, "_bring_to_front", return_value=777),
+        patch.object(backend, "_frontmost_pid", return_value=4242),
+        patch.object(backend, "_set_frontmost", side_effect=lambda pid: order.append("back")),
+        patch.object(macos, "_quartz_key_press", side_effect=lambda *a, **k: order.append(k)),
+        patch.object(macos.time, "sleep", side_effect=lambda s: order.append(f"sleep:{s}")),
+    ):
+        assert backend.press_key("Cmd+Shift+G", window_id="4242").ok
+    key = next(o for o in order if isinstance(o, dict))
+    assert key.get("hid") is True  # real hardware-level input
+    i_key, i_back = order.index(key), order.index("back")
+    settles = [o for o in order[i_key:i_back] if isinstance(o, str) and o.startswith("sleep:")]
+    assert settles and float(settles[0].split(":")[1]) >= 0.2
