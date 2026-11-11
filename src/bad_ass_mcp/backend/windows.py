@@ -920,7 +920,7 @@ class WindowsBackend(DesktopBackend):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             for w in self.list_windows():
-                if title_pattern.lower() in w.name.lower():
+                if w.matches(title_pattern):
                     return w
             time.sleep(0.1)
         return None

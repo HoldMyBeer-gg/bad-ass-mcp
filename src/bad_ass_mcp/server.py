@@ -58,8 +58,12 @@ def list_windows() -> list[dict]:
 
     Fields per entry:
       id, name, pid, focused, minimized
+      titles: top-level window titles where name is something else
+        (process name on macOS, AT-SPI app name on Linux).
       bounds: [x, y, width, height] in global screen coords (top-left
-        origin), or null when the platform can't report it. Use this to
+        origin), or null when the platform can't report it. On a Linux
+        Wayland session a native-Wayland app can't know its position, so
+        bounds are null unless it runs under XWayland. Use this to
         translate screenshot pixels to click_at coordinates.
       accessible: false signals the platform a11y tree has nothing for
         this window — find_elements / get_tree will return empty. Skip
@@ -160,7 +164,9 @@ def find_elements(
 ) -> list[dict]:
     """Find interactive elements by role and/or name.
     Returns element handles — pass the 'id' field to click/type_text/etc.
-    Common roles: button, combo box, text, entry, check box, menu item."""
+    Common roles: button, combo box, text, entry, check box, menu item.
+    name is an exact match, not a substring ("Load Listfile…" with its
+    ellipsis, "Export Folder" not "Export"); use get_tree to read names."""
     els = _backend().find_elements(window_id, role=role, name=name)
     return [
         {"id": e.id, "role": e.role, "name": e.name, "value": e.value, "states": sorted(e.states)}
@@ -230,7 +236,11 @@ def get_value(handle_id: str) -> dict:
 @mcp.tool()
 def wait_for_window(title_pattern: str, timeout: float = 5.0) -> dict:
     """Wait until a window matching title_pattern appears. Returns null on timeout.
-    Useful after triggering an action that opens a dialog."""
+    Useful after triggering an action that opens a dialog.
+
+    title_pattern is a case-insensitive substring (not a regex), matched
+    against the listed name and every top-level window title, so a window
+    title works on macOS (listed by process name) and Linux too."""
     w = _backend().wait_for_window(title_pattern, timeout)
     return w.__dict__ if w else {"error": f"Timeout: no window matching {title_pattern!r}"}
 

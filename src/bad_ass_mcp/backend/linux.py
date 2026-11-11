@@ -381,9 +381,16 @@ class LinuxBackend(DesktopBackend):
                 accessible = child_count > 0
                 bounds: tuple[int, int, int, int] | None = None
                 frames_have_content = False
+                titles: list[str] = []
                 for j in range(child_count):
                     frame = app.get_child_at_index(j)
                     ss = frame.get_state_set()
+                    try:
+                        title = frame.get_name()
+                        if title and title != name and title not in titles:
+                            titles.append(title)
+                    except Exception:
+                        pass
                     if ss.contains(Atspi.StateType.ACTIVE):
                         focused = True
                     if not ss.contains(Atspi.StateType.ICONIFIED):
@@ -420,6 +427,7 @@ class LinuxBackend(DesktopBackend):
                         minimized=minimized,
                         bounds=bounds,
                         accessible=accessible,
+                        titles=tuple(titles),
                     )
                 )
             except Exception:
@@ -508,9 +516,10 @@ class LinuxBackend(DesktopBackend):
 
     def list_windows(self) -> list[WindowInfo]:
         atspi = self._atspi_list_windows()
+        x11 = self._x11_list_windows()
         atspi_pids = {w.pid for w in atspi}
         # Supplement with top-level X11 windows whose process isn't in AT-SPI
-        extra = [w for w in self._x11_list_windows() if w.pid not in atspi_pids]
+        extra = [w for w in x11 if w.pid not in atspi_pids]
         # Webview processes build their a11y tree lazily — poke the
         # screen-reader flag and give them a moment to register, then fold
         # any newcomers into the AT-SPI side instead of stamping them
@@ -530,7 +539,20 @@ class LinuxBackend(DesktopBackend):
                     if waiting <= atspi_pids:
                         break
                 extra = [w for w in extra if w.pid not in atspi_pids]
+        if _is_wayland_session():
+            self._wayland_bounds(atspi, x11)
         return atspi + extra
+
+    @staticmethod
+    def _wayland_bounds(atspi: list[WindowInfo], x11: list[WindowInfo]) -> None:
+        """A native-Wayland client cannot know its global position, so AT-SPI
+        reports its frame at 0,0 (with the right size) and a crop or click
+        computed from that lands in the wrong place. Use the XWayland window
+        geometry when the app has one (real coordinates); otherwise report
+        bounds unknown rather than a wrong origin."""
+        real = {w.pid: w.bounds for w in x11 if w.bounds}
+        for w in atspi:
+            w.bounds = real.get(w.pid)
 
     def get_tree(self, window_id: str, *, max_depth: int | None = None) -> ElementHandle:
         app = self._find_app_waking(window_id)
@@ -836,7 +858,7 @@ class LinuxBackend(DesktopBackend):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             for w in self.list_windows():
-                if title_pattern.lower() in w.name.lower():
+                if w.matches(title_pattern):
                     return w
             time.sleep(0.1)
         return None
@@ -1192,7 +1214,9 @@ class LinuxBackend(DesktopBackend):
         # going through get_component(), which returns None on some
         # native-Wayland windows (Firefox on GTK-Wayland, notably) and takes
         # the whole fallback down with an AttributeError.
-        if app:
+        # Not on Wayland: there a native client.s frame extents start at 0,0
+        # whatever its real position, and a wrong crop is worse than none.
+        if app and not _is_wayland_session():
             for i in range(app.get_child_count()):
                 try:
                     frame = app.get_child_at_index(i)
@@ -1332,3 +1356,14 @@ class LinuxBackend(DesktopBackend):
             return ActionResult(ok=True)
         except Exception as e:
             return ActionResult(ok=False, error=str(e))
+
+
+def _is_wayland_session() -> bool:
+    """True on a Wayland session, where a11y SCREEN extents of native-Wayland
+    clients are window-relative. Mirrors the test in _display_backend."""
+    import os
+
+    session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
+    return session_type == "wayland" or (
+        session_type != "x11" and bool(os.environ.get("WAYLAND_DISPLAY"))
+    )

@@ -27,6 +27,16 @@ class WindowInfo:
     # raw immediate-mode toolkits without AccessKit. Note: egui *with* the
     # accesskit feature DOES surface here as accessible=True.
     accessible: bool = True
+    # Titles of the app's top-level windows, where `name` is something
+    # else: the process name on macOS, the AT-SPI application name on Linux
+    # (empty for egui/accesskit). Empty when `name` already is the title.
+    titles: tuple[str, ...] = ()
+
+    def matches(self, pattern: str) -> bool:
+        """Case-insensitive substring match against the name or any title,
+        so one pattern finds the same app on every platform."""
+        p = pattern.lower()
+        return any(p in (s or "").lower() for s in (self.name, *self.titles))
 
 
 @dataclass

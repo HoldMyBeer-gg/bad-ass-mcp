@@ -103,8 +103,9 @@ Three layers, later wins: the suite file (`--config`), a script's own
 
 | key | default | meaning |
 |---|---|---|
-| `window` | (required) | title substring of the app's main window |
+| `window` | (required) | substring of the app's main window, case-insensitive, or a per-platform object. Matched against the listed name (process name on macOS, title on Windows, AT-SPI app name on Linux) and every top-level window title, so the title works on all three |
 | `app` | none | launch command, string or list, or per-platform object; the run then drives only that process's windows (or ones that appeared after launch) |
+| `helpers` | none | list of other processes whose windows the run may drive, matched like `window` (per-platform allowed). For dialogs owned by a process that was running before the launch, e.g. `["xdg-desktop-portal"]` for file pickers on Linux |
 | `pid` | none | attach mode: drive only this process's windows. Without `app` or `pid`, two windows matching `window` is a failure, never a guess (it could be the user's own copy) |
 | `ready` | none | an element (`{"name": ..., "role": ...}`, per platform if needed) that exists only once the app is usable; waited for after the window appears, up to `launch_timeout`. Set it: windows often exist before their content (WebView2, WebKitGTK), and keys sent then are lost |
 | `launch_timeout` | 20 | seconds to wait for the window, then for `ready` |

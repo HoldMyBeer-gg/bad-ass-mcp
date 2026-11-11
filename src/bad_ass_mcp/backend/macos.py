@@ -558,6 +558,7 @@ class MacOSBackend(DesktopBackend):
             # until something is restored. Surfacing this lets callers either
             # un-minimize first or skip the entry instead of guessing.
             minimized = all(bool(_ax_get(w, "AXMinimized")) for w in ax_wins)
+            titles = _ax_titles(ax_wins, name)
             windows.append(
                 WindowInfo(
                     id=str(pid),
@@ -566,6 +567,7 @@ class MacOSBackend(DesktopBackend):
                     focused=(pid == active_pid),
                     minimized=minimized,
                     bounds=self._cg_primary_bounds_for_pid(pid),
+                    titles=titles,
                 )
             )
             seen_pids.add(pid)
@@ -615,6 +617,10 @@ class MacOSBackend(DesktopBackend):
                 # stamping accessible=False.
                 ax_wins = self._wake_ax_windows(pid)
             ax_accessible = bool(ax_wins)
+            titles = _ax_titles(ax_wins, owner)
+            cg_title = win.get("kCGWindowName") or ""
+            if cg_title and cg_title != owner and cg_title not in titles:
+                titles = (*titles, cg_title)
             windows.append(
                 WindowInfo(
                     id=str(pid),
@@ -623,6 +629,7 @@ class MacOSBackend(DesktopBackend):
                     focused=(pid == active_pid),
                     bounds=rect,
                     accessible=ax_accessible,
+                    titles=titles,
                 )
             )
             seen_pids.add(pid)
@@ -836,7 +843,7 @@ class MacOSBackend(DesktopBackend):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             for w in self.list_windows():
-                if title_pattern.lower() in w.name.lower():
+                if w.matches(title_pattern):
                     return w
             time.sleep(0.1)
         return None
@@ -1157,3 +1164,18 @@ class MacOSBackend(DesktopBackend):
             return ActionResult(ok=True)
         except Exception as e:
             return ActionResult(ok=False, error=str(e))
+
+
+def _ax_titles(ax_wins, name: str) -> tuple[str, ...]:
+    """Titles of an app's AX windows, minus any equal to its listed name.
+    macOS lists an app by process name, so this is what lets a script that
+    names the window title ("Rusty Demon") find it here as on Windows."""
+    titles: list[str] = []
+    for w in ax_wins:
+        try:
+            t = _ax_get(w, "AXTitle")
+        except Exception:
+            t = None
+        if isinstance(t, str) and t and t != name and t not in titles:
+            titles.append(t)
+    return tuple(titles)

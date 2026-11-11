@@ -9,8 +9,12 @@
       "type": "string"
     },
     "window": {
-      "type": "string",
-      "description": "Title substring of the app's main window."
+      "allOf": [
+        {
+          "$ref": "#/$defs/per_platform_string"
+        }
+      ],
+      "description": "Substring of the app's main window: matched against the listed name (process name on macOS, title on Windows, AT-SPI app name on Linux) and every top-level window title, case-insensitive. May be per-platform."
     },
     "app": {
       "anyOf": [
@@ -101,6 +105,68 @@
         }
       ],
       "description": "Launch command, string or argv list."
+    },
+    "helpers": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        {
+          "type": "object",
+          "description": "Per-platform value: macos / windows / linux (null = not on that platform).",
+          "properties": {
+            "macos": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "windows": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "linux": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "minProperties": 1
+        }
+      ],
+      "description": "Other processes whose windows the run may drive, matched like `window`. For dialogs owned by a process that runs before the launch, e.g. \"xdg-desktop-portal\" for file pickers on Linux."
     },
     "pid": {
       "type": "integer",

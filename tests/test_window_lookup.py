@@ -1,0 +1,304 @@
+"""Window lookup that works the same on every platform.
+
+A script names its window once ("Rusty Demon") and that has to find the
+app on macOS (where the listed name is the process, "rustydemon"), Windows
+(the title) and Linux (the AT-SPI app name, empty for egui/accesskit). So a
+pattern matches the listed name OR any top-level window title.
+
+Also: on a Wayland session a native-Wayland client cannot know its global
+position, so AT-SPI reports frame extents at 0,0. Bounds are reported only
+when they are known to be real (X11, or the app's XWayland window).
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from bad_ass_mcp.bam.runner import run_script
+from bad_ass_mcp.types import WindowInfo
+from tests.fake_backend import FakeBackend
+from tests.test_linux_internals import _make_backend
+
+CONFIG = {"step_timeout": 0.2, "launch_timeout": 0.5}
+
+
+def write(tmp_path, name, script):
+    p = tmp_path / f"{name}.json"
+    p.write_text(json.dumps({"name": name, "platforms": ["linux"], **script}))
+    return p
+
+
+# ── WindowInfo.matches ───────────────────────────────────────────────
+
+
+def test_pattern_matches_the_listed_name():
+    assert WindowInfo(id="1", name="Fake App", pid=1, focused=False).matches("fake")
+
+
+def test_pattern_matches_a_window_title_when_the_name_differs():
+    w = WindowInfo(
+        id="1", name="rustydemon", pid=1, focused=False, titles=("Rusty Demon — CASC Explorer",)
+    )
+    assert w.matches("Rusty Demon")
+    assert w.matches("rustydemon")
+    assert not w.matches("Dolphin")
+
+
+def test_pattern_matches_a_title_when_the_name_is_empty():
+    w = WindowInfo(id="1", name="", pid=1, focused=False, titles=("Rusty Demon — CASC Explorer",))
+    assert w.matches("rusty demon")
+
+
+# ── runner: the config window is found by title ──────────────────────
+
+
+class _NamedByProcess(FakeBackend):
+    """macOS-style: listed under the process name, title only in `titles`."""
+
+    def __init__(self, name="rustydemon"):
+        super().__init__()
+        self._name = name
+
+    def list_windows(self):
+        return [
+            WindowInfo(
+                id="fake-window-1",
+                name=self._name,
+                pid=9999,
+                focused=True,
+                titles=("Rusty Demon — CASC Explorer",),
+            )
+        ]
+
+
+def test_config_window_is_found_by_title_on_macos_style_listing(tmp_path):
+    script = write(tmp_path, "t", {"phases": []})
+    cfg = {**CONFIG, "window": "Rusty Demon"}
+    res = run_script(_NamedByProcess(), script, "linux", cfg, tmp_path / "out")
+    assert res["status"] == "PASS", res.get("failure")
+
+
+def test_config_window_is_found_by_title_when_the_app_name_is_empty(tmp_path):
+    script = write(tmp_path, "t", {"phases": []})
+    cfg = {**CONFIG, "window": "Rusty Demon"}
+    res = run_script(_NamedByProcess(name=""), script, "linux", cfg, tmp_path / "out")
+    assert res["status"] == "PASS", res.get("failure")
+
+
+def test_config_window_may_be_per_platform(tmp_path):
+    script = write(tmp_path, "t", {"phases": [{"name": "p", "checks": [{"windows": 1}]}]})
+    cfg = {**CONFIG, "window": {"linux": "Fake App", "windows": "Something Else"}}
+    res = run_script(FakeBackend(), script, "linux", cfg, tmp_path / "out")
+    assert res["status"] == "PASS", res.get("failure")
+
+
+def test_config_schema_accepts_a_per_platform_window():
+    from bad_ass_mcp.bam.validate import validate_config
+
+    assert validate_config({"window": {"macos": "rustydemon", "linux": "Rusty Demon"}}) == []
+
+
+# ── runner: helper processes (portal file dialogs) ───────────────────
+
+
+class _WithPortal(FakeBackend):
+    """The portal process exists before launch and owns the file dialog."""
+
+    def list_windows(self):
+        portal = WindowInfo(
+            id="portal",
+            name="xdg-desktop-portal-kde",
+            pid=4242,
+            focused=False,
+            titles=("Open File",),
+        )
+        return super().list_windows() + [portal]
+
+
+class _Proc:
+    pid = 9999
+
+    def poll(self):
+        return None
+
+    def terminate(self):
+        pass
+
+    def wait(self, timeout=None):
+        return 0
+
+
+def _launching(monkeypatch):
+    from bad_ass_mcp.bam import runner as runner_mod
+
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", lambda *a, **k: _Proc())
+
+
+def test_a_named_helper_process_window_can_be_driven(tmp_path, monkeypatch):
+    _launching(monkeypatch)
+    script = write(
+        tmp_path,
+        "portal",
+        {"phases": [{"name": "dialog", "window": "Open File", "learn": {}, "steps": []}]},
+    )
+    cfg = {**CONFIG, "window": "Fake App", "app": "fake-app", "helpers": ["xdg-desktop-portal"]}
+    res = run_script(_WithPortal(), script, "linux", cfg, tmp_path / "out")
+    assert res["status"] == "PASS", res.get("failure")
+
+
+def test_without_helpers_a_pre_existing_process_is_still_never_driven(tmp_path, monkeypatch):
+    _launching(monkeypatch)
+    script = write(
+        tmp_path,
+        "portal",
+        {"phases": [{"name": "dialog", "window": "Open File", "learn": {}, "steps": []}]},
+    )
+    cfg = {**CONFIG, "window": "Fake App", "app": "fake-app"}
+    res = run_script(_WithPortal(), script, "linux", cfg, tmp_path / "out")
+    assert res["status"] == "FAIL"
+    assert res["failure"]["action"] == "window"
+
+
+def test_config_schema_accepts_helpers():
+    from bad_ass_mcp.bam.validate import validate_config
+
+    assert validate_config({"window": "x", "helpers": ["xdg-desktop-portal"]}) == []
+    assert validate_config({"window": "x", "helpers": {"linux": ["xdg-desktop-portal"]}}) == []
+
+
+# ── Linux backend: titles and Wayland bounds ─────────────────────────
+
+
+def _atspi_app(name, pid, frame_title, extents):
+    frame = MagicMock()
+    frame.get_child_count.return_value = 3
+    ss = MagicMock()
+    ss.contains.return_value = False
+    frame.get_state_set.return_value = ss
+    frame.get_name.return_value = frame_title
+    ext = MagicMock(x=extents[0], y=extents[1], width=extents[2], height=extents[3])
+    frame.get_extents.return_value = ext
+    app = MagicMock()
+    app.get_name.return_value = name
+    app.get_process_id.return_value = pid
+    app.get_child_count.return_value = 1
+    app.get_child_at_index.return_value = frame
+    app.get_toolkit_name.return_value = "accesskit"
+    return app
+
+
+def _listed(backend, mod, app, *, session, x11=()):
+    env = {
+        "XDG_SESSION_TYPE": session,
+        "WAYLAND_DISPLAY": "wayland-0" if session == "wayland" else "",
+    }
+    desktop = MagicMock()
+    desktop.get_child_count.return_value = 1
+    desktop.get_child_at_index.return_value = app
+    with (
+        patch.dict("os.environ", env),
+        patch.object(mod.Atspi, "get_desktop", return_value=desktop),
+        patch.object(backend, "_x11_list_windows", return_value=list(x11)),
+    ):
+        return backend.list_windows()
+
+
+def test_linux_window_titles_come_from_its_frames():
+    backend, mod = _make_backend()
+    app = _atspi_app("", 77, "Rusty Demon — CASC Explorer", (410, 177, 1100, 700))
+    wins = _listed(backend, mod, app, session="x11")
+    assert wins[0].titles == ("Rusty Demon — CASC Explorer",)
+    assert wins[0].matches("Rusty Demon")
+
+
+def test_linux_x11_session_keeps_atspi_bounds():
+    backend, mod = _make_backend()
+    app = _atspi_app("rustydemon", 77, "Rusty Demon", (410, 177, 1100, 700))
+    wins = _listed(backend, mod, app, session="x11")
+    assert wins[0].bounds == (410, 177, 1100, 700)
+
+
+def test_linux_native_wayland_window_has_unknown_bounds():
+    """AT-SPI says 0,0 because the client can't know where it is. Saying
+    nothing beats a wrong origin that sends crops and clicks astray."""
+    backend, mod = _make_backend()
+    app = _atspi_app("rustydemon", 77, "Rusty Demon", (0, 0, 1100, 700))
+    wins = _listed(backend, mod, app, session="wayland")
+    assert wins[0].bounds is None
+
+
+def test_linux_xwayland_window_reports_its_real_bounds_on_wayland():
+    backend, mod = _make_backend()
+    app = _atspi_app("rustydemon", 77, "Rusty Demon", (0, 0, 1100, 700))
+    x11 = [
+        WindowInfo(id="77", name="Rusty Demon", pid=77, focused=False, bounds=(410, 177, 1100, 700))
+    ]
+    wins = _listed(backend, mod, app, session="wayland", x11=x11)
+    assert wins[0].bounds == (410, 177, 1100, 700)
+
+
+def test_linux_window_geometry_refuses_wayland_frame_extents():
+    """screenshot(window_id) crops to _window_geometry. With no XWayland
+    window, the AT-SPI frame fallback must not hand back a 0,0 origin."""
+    backend, mod = _make_backend()
+    app = _atspi_app("rustydemon", 77, "Rusty Demon", (0, 0, 1100, 700))
+    with (
+        patch.dict("os.environ", {"XDG_SESSION_TYPE": "wayland", "WAYLAND_DISPLAY": "wayland-0"}),
+        patch.object(backend, "_find_app", return_value=app),
+        patch.object(mod.subprocess, "check_output", side_effect=FileNotFoundError),
+    ):
+        assert backend._window_geometry("77") is None
+
+
+# ── macOS backend: titles from AXTitle ───────────────────────────────
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="needs PyObjC")
+def test_macos_window_titles_come_from_ax_windows():
+    from bad_ass_mcp.backend import macos
+    from bad_ass_mcp.backend.macos import MacOSBackend
+
+    backend = MacOSBackend()
+    app = MagicMock()
+    app.processIdentifier.return_value = 4321
+    app.localizedName.return_value = "rustydemon"
+    ws = MagicMock()
+    ws.runningApplications.return_value = [app]
+    ws.frontmostApplication.return_value = app
+    ax_win = object()
+
+    def fake_ax_get(el, attr):
+        if attr == "AXWindows":
+            return [ax_win]
+        if attr == "AXTitle" and el is ax_win:
+            return "Rusty Demon — CASC Explorer"
+        return None
+
+    with (
+        patch.object(macos, "NSWorkspace", MagicMock(sharedWorkspace=MagicMock(return_value=ws))),
+        patch.object(macos, "AXUIElementCreateApplication"),
+        patch.object(macos, "_ax_get", side_effect=fake_ax_get),
+        patch.object(macos, "_cg_onscreen_windows", return_value=[]),
+        patch.object(backend, "_cg_primary_bounds_for_pid", return_value=None),
+    ):
+        wins = backend.list_windows()
+    assert wins[0].name == "rustydemon"
+    assert wins[0].titles == ("Rusty Demon — CASC Explorer",)
+
+
+# ── every backend's wait_for_window matches titles too ───────────────
+
+
+@pytest.mark.parametrize("modname", ["linux", "macos", "windows"])
+def test_wait_for_window_uses_the_shared_matcher(modname):
+    import importlib
+
+    path = importlib.util.find_spec(f"bad_ass_mcp.backend.{modname}").origin
+    src = open(path, encoding="utf-8").read()
+    body = src[src.index("def wait_for_window") :]
+    body = body[: body.index("\n    def ", 10)]
+    assert ".matches(title_pattern)" in body

@@ -61,10 +61,6 @@ def _shell(cmd: str, env: dict[str, str], timeout: float = 60) -> subprocess.Com
     )
 
 
-def _matches(name: str, pattern: str) -> bool:
-    return pattern.lower() in (name or "").lower()
-
-
 class _Run:
     def __init__(self, backend, platform: str, config: dict, out_dir: Path, script: dict):
         self.b = backend
@@ -102,6 +98,8 @@ class _Run:
         """Windows the run may drive: the launched process (or a window that
         appeared after the launch, for apps started through a wrapper), the
         configured pid, or anything when neither is known."""
+        if self._helper(w):
+            return True
         if self.app_pid is not None:
             # Once the app's window is known, only its process counts: a
             # window another app opens mid-run is never driven.
@@ -110,12 +108,19 @@ class _Run:
             return True
         return w.pid == self.pid or (self.before is not None and w.id not in self.before)
 
+    def _helper(self, w) -> bool:
+        """A window of a named helper process (`helpers` in the config), such
+        as the xdg-desktop-portal that owns file dialogs on Linux: it runs
+        before the launch, so ownership by pid would never admit it."""
+        helpers = pick(self.config.get("helpers"), self.platform) or []
+        return any(w.matches(h) for h in helpers)
+
     def find_window(
         self, pattern: str, timeout: float, *, unique: bool = False, exclude: str | None = None
     ) -> str | None:
         deadline = time.monotonic() + timeout
         while True:
-            hits = [w for w in self.b.list_windows() if _matches(w.name, pattern) and self._ours(w)]
+            hits = [w for w in self.b.list_windows() if w.matches(pattern) and self._ours(w)]
             hits = [w for w in hits if w.id != exclude]
             if len(hits) > 1 and unique and self.pid is None:
                 raise ScriptFailure(
@@ -138,7 +143,7 @@ class _Run:
         an app exposing none counts as one."""
         n = 0
         for w in self.b.list_windows():
-            if not (_matches(w.name, pattern) and self._ours(w)):
+            if not (w.matches(pattern) and self._ours(w)):
                 continue
             if self.platform in ("linux", "macos"):
                 try:
@@ -206,7 +211,7 @@ class _Run:
             self.start_front = self.b.foreground_pid()
         except Exception:
             self.start_front = None
-        pattern = self.config.get("window")
+        pattern = pick(self.config.get("window"), self.platform)
         if not pattern:
             raise ScriptFailure("config has no 'window' title pattern")
         app = pick(self.config.get("app"), self.platform)
@@ -650,7 +655,7 @@ class _Run:
                 if not want_present and found:
                     raise ScriptFailure(f"expected absent: {_describe(desc)}", phase=phase)
             elif "windows" in c:
-                n = self.count_windows(self.config["window"])
+                n = self.count_windows(pick(self.config["window"], self.platform))
                 if n != int(c["windows"]):
                     raise ScriptFailure(
                         f"expected {c['windows']} window(s), found {n}", phase=phase
