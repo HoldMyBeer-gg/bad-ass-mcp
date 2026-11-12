@@ -53,10 +53,56 @@ class ScriptFailure(Exception):
         self.action = action
 
 
+def _is_wsl_launcher(path: str, system_root: str) -> bool:
+    r"""System32\bash.exe (and the WindowsApps alias) start WSL, where the
+    runner's environment and Windows paths don't arrive."""
+    p = os.path.normcase(os.path.abspath(path))
+    root = os.path.normcase(os.path.abspath(system_root))
+    for sub in ("system32", "syswow64", "sysnative"):
+        if p.startswith(os.path.join(root, sub) + os.sep):
+            return True
+    return os.path.normcase(os.path.join("microsoft", "windowsapps")) in p
+
+
+def _windows_bash(path_dirs: list[str], system_root: str) -> str | None:
+    r"""A Windows-native bash (Git Bash): the first bash.exe on PATH that
+    isn't WSL's launcher, else the one next to git.exe (Git for Windows
+    usually puts only Git\cmd on PATH). None if there is none."""
+    for d in path_dirs:
+        cand = os.path.join(d, "bash.exe")
+        if d and os.path.isfile(cand) and not _is_wsl_launcher(cand, system_root):
+            return cand
+    for d in path_dirs:
+        git = os.path.join(d, "git.exe")
+        if not (d and os.path.isfile(git)):
+            continue
+        # Git\cmd\git.exe, Git\bin\git.exe or Git\mingw64\bin\git.exe
+        here = Path(git).parent
+        for root in (here.parent, here.parent.parent):
+            for rel in (("usr", "bin", "bash.exe"), ("bin", "bash.exe")):
+                cand = root.joinpath(*rel)
+                if cand.is_file() and not _is_wsl_launcher(str(cand), system_root):
+                    return str(cand)
+    return None
+
+
 def _shell(cmd: str, env: dict[str, str], timeout: float = 60) -> subprocess.CompletedProcess:
-    # Scripts are written for a POSIX shell ($SMOKE, printf, grep). On Windows
-    # that means Git Bash or WSL's bash on PATH.
-    bash = shutil.which("bash")
+    # Scripts are written for a POSIX shell ($SMOKE, printf, grep). On
+    # Windows that means Git Bash; never WSL's bash, which doesn't get the
+    # runner's environment or understand its Windows paths.
+    if os.name == "nt":
+        bash = _windows_bash(
+            os.environ.get("PATH", "").split(os.pathsep),
+            os.environ.get("SystemRoot", r"C:\Windows"),
+        )
+        if bash is None:
+            raise ScriptFailure(
+                "shell: no Git Bash found (shell commands need a POSIX shell; "
+                "WSL's bash is skipped because $SMOKE and Windows paths don't "
+                "reach it). Install Git for Windows or put its bash.exe on PATH."
+            )
+    else:
+        bash = shutil.which("bash")
     args = [bash, "-c", cmd] if bash else cmd
     return subprocess.run(
         args,
