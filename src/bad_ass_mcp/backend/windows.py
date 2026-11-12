@@ -1019,6 +1019,32 @@ class WindowsBackend(DesktopBackend):
             time.sleep(0.1)
         return None
 
+    def _screen_rect_for(self, hwnd: int) -> tuple[int, int, int, int] | None:
+        """The visible frame to copy from the screen instead of PrintWindow,
+        or None to print the window as usual. Only while another window of
+        the same app is in front (its dialog): PrintWindow on rustydemon's
+        main window while its file dialog (an unowned window of the same
+        process) was still loading left the dialog's folder view on
+        "Working on it…" for good, with or without PW_RENDERFULLCONTENT.
+        The screen then shows the app, so the copy is what the user saw,
+        dialog included. Also only when the frame is wholly on the screen."""
+        front = _user32.GetForegroundWindow()
+        if not front or front == hwnd:
+            return None
+        if self.foreground_pid() != self._root_pid(hwnd):
+            return None
+        frame = _dwm_frame_bounds(hwnd)
+        if frame is None:
+            return None
+        x, y, w, h = frame
+        vx = _user32.GetSystemMetrics(_SM_XVIRTUALSCREEN)
+        vy = _user32.GetSystemMetrics(_SM_YVIRTUALSCREEN)
+        vw = _user32.GetSystemMetrics(_SM_CXVIRTUALSCREEN)
+        vh = _user32.GetSystemMetrics(_SM_CYVIRTUALSCREEN)
+        if x < vx or y < vy or x + w > vx + vw or y + h > vy + vh:
+            return None
+        return frame
+
     def screenshot(self, window_id: str | None = None, output_path: str | None = None) -> bytes:
         if window_id:
             hwnd = int(window_id)
@@ -1026,12 +1052,17 @@ class WindowsBackend(DesktopBackend):
                 raise ValueError(f"No on-screen window found for window_id {window_id!r}")
             if _user32.IsIconic(hwnd):
                 raise ValueError(f"Window {window_id!r} is minimized — restore it before capturing")
-            rect = ctypes.wintypes.RECT()
-            _user32.GetWindowRect(hwnd, ctypes.byref(rect))
-            left, top = rect.left, rect.top
-            width = rect.right - rect.left
-            height = rect.bottom - rect.top
+            from_screen = self._screen_rect_for(hwnd)
+            if from_screen:
+                left, top, width, height = from_screen
+            else:
+                rect = ctypes.wintypes.RECT()
+                _user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                left, top = rect.left, rect.top
+                width = rect.right - rect.left
+                height = rect.bottom - rect.top
         else:
+            from_screen = None
             # Full screen. PrintWindow on GetDesktopWindow() renders nothing
             # (solid black) under DWM, so the desktop path BitBlts from the
             # screen DC over the virtual-screen rectangle instead, which also
@@ -1044,12 +1075,13 @@ class WindowsBackend(DesktopBackend):
         if width <= 0 or height <= 0:
             raise ValueError(f"Window {window_id!r} has zero area ({width}x{height})")
 
-        hwnd_dc = _user32.GetWindowDC(hwnd) if hwnd else _user32.GetDC(None)
+        printed = hwnd and not from_screen
+        hwnd_dc = _user32.GetWindowDC(hwnd) if printed else _user32.GetDC(None)
         mem_dc = _gdi32.CreateCompatibleDC(hwnd_dc)
         bitmap = _gdi32.CreateCompatibleBitmap(hwnd_dc, width, height)
         old_bmp = _gdi32.SelectObject(mem_dc, bitmap)
 
-        if hwnd:
+        if printed:
             _user32.PrintWindow(hwnd, mem_dc, 2)  # PW_RENDERFULLCONTENT
         else:
             _gdi32.BitBlt(mem_dc, 0, 0, width, height, hwnd_dc, left, top, _SRCCOPY | _CAPTUREBLT)
@@ -1068,7 +1100,7 @@ class WindowsBackend(DesktopBackend):
         _gdi32.SelectObject(mem_dc, old_bmp)
         _gdi32.DeleteObject(bitmap)
         _gdi32.DeleteDC(mem_dc)
-        _user32.ReleaseDC(hwnd or 0, hwnd_dc)
+        _user32.ReleaseDC(hwnd if printed else 0, hwnd_dc)
 
         try:
             png = _bgra_to_png(width, height, buf.raw)
