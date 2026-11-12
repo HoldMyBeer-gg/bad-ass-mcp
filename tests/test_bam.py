@@ -2037,3 +2037,16 @@ def test_paste_is_valid_on_type_in_the_schema():
         ],
     }
     assert validate_script(script) == []
+
+
+class _NoVideo(FakeBackend):
+    def start_recording(self, window_id=None, fps=15):
+        raise RuntimeError("video recording isn't supported on a Wayland session")
+
+
+def test_a_recorder_that_cannot_start_does_not_fail_the_run(tmp_path):
+    script = write(tmp_path, "vid", {"phases": []})
+    r = run_script(_NoVideo(), script, "linux", {**CONFIG, "record_video": True}, tmp_path / "out")
+    assert r["status"] == "PASS", r
+    assert "video" not in r
+    assert "Wayland" in r["video_error"]

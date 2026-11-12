@@ -1325,6 +1325,14 @@ class LinuxBackend(DesktopBackend):
         import os
         import tempfile
 
+        if _is_wayland_session():
+            # x11grab would capture the XWayland root, which a Wayland
+            # compositor never draws into: an all-black video, even for an
+            # XWayland app. The same reason screenshots avoid `import`.
+            raise RuntimeError(
+                "video recording isn't supported on a Wayland session: x11grab "
+                "records only black frames there"
+            )
         handle = str(uuid.uuid4())
         video_path = os.path.join(tempfile.gettempdir(), f"bam-rec-{handle}.mp4")
 
