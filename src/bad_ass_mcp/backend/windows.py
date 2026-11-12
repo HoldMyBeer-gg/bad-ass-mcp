@@ -878,10 +878,11 @@ class WindowsBackend(DesktopBackend):
 
         def keys():
             # Real key events to the focused field: what finally works on
-            # egui/winit. Needs the window in the foreground.
+            # egui/winit. Needs the window in the foreground. Ctrl+A first,
+            # so the text replaces the content as SetValue would.
             element.SetFocus()
             time.sleep(0.05)
-            inputs = _unicode_key_inputs(text)
+            inputs = _replacing_key_inputs(text)
             sent = _user32.SendInput(len(inputs), inputs, ctypes.sizeof(_INPUT))
             if sent != len(inputs):
                 raise RuntimeError(f"SendInput sent {sent} of {len(inputs)} events")
@@ -1496,13 +1497,12 @@ class WindowsBackend(DesktopBackend):
 
 
 def _first_verified(text, attempts, read_back, settle: float = 0.15) -> ActionResult:
-    """Run (name, fn) attempts in order until the field reads exactly `text`,
-    or its starting content plus `text` (strategies that type append). A
-    field holding anything else, such as a half-typed attempt followed by a
-    full one, is a failure, never a pass. A strategy that raises is skipped.
+    """Run (name, fn) attempts in order until the field reads exactly `text`.
+    type_text replaces the content, as on macOS and Linux, so a field
+    holding anything else (its old content plus the text, or a half-typed
+    attempt followed by a full one) is a failure, never a pass. A strategy that raises is skipped.
     When read_back gives None (no readable value), the first attempt that
     ran is trusted. The winner is named in `detail`."""
-    start = read_back()
     tried: list[str] = []
     for name, fn in attempts:
         try:
@@ -1513,14 +1513,13 @@ def _first_verified(text, attempts, read_back, settle: float = 0.15) -> ActionRe
         if settle:
             time.sleep(settle)
         value = read_back()
-        if value is None or value == text or (start is not None and value == start + text):
+        if value is None or value == text:
             return ActionResult(ok=True, detail=name)
         if _masked(value) and not _masked(text):
             # A password field reads back one bullet per character, never
             # the text: judge by length, or it falls through to a strategy
             # that types the text a second time.
-            base = len(start) if start and _masked(start) else 0
-            if len(value) in (len(text), base + len(text)):
+            if len(value) == len(text):
                 return ActionResult(ok=True, detail=name)
         tried.append(f"{name}: accepted, but the field reads {value!r}")
     return ActionResult(ok=False, error="Text not set. Tried " + "; ".join(tried))
@@ -1599,6 +1598,17 @@ def _unicode_key_inputs(text: str):
             ev.ki.dwFlags = flags
             ev.ki.time = 0
             ev.ki.dwExtraInfo = 0
+    return inputs
+
+
+def _replacing_key_inputs(text: str):
+    """Ctrl+A, then `text` as Unicode key events: typed into a focused field,
+    the text replaces whatever it held instead of landing at the caret."""
+    select_all = _combo_inputs(("ctrl",), ord("A"))
+    typed = _unicode_key_inputs(text)
+    inputs = (_INPUT * (len(select_all) + len(typed)))()
+    for i, ev in enumerate([*select_all, *typed]):
+        inputs[i] = ev
     return inputs
 
 

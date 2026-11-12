@@ -2067,3 +2067,18 @@ def test_the_summary_says_when_video_was_skipped(tmp_path, capsys):
     print_summary(run_dir, color=False)
     out = capsys.readouterr().out
     assert "no video" in out and "Wayland" in out
+
+
+def test_SMOKE_is_absolute_when_the_results_folder_is_relative(tmp_path, monkeypatch):
+    """A relative $SMOKE breaks anything that resolves paths from another
+    folder: a native Save As dialog resolved a relative files path against
+    its own folder, so the file never landed in $SMOKE."""
+    from pathlib import Path
+
+    from bad_ass_mcp.bam.runner import _Run
+
+    monkeypatch.chdir(tmp_path)
+    run = _Run(FakeBackend(), "linux", CONFIG, Path("bam-results") / "01_x", {"phases": []})
+    smoke = Path(run.vars["SMOKE"])
+    assert smoke.is_absolute()
+    assert smoke == tmp_path / "bam-results" / "01_x" / "files"

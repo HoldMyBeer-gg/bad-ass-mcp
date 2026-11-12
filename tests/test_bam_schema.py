@@ -224,3 +224,18 @@ def test_run_refuses_invalid_scripts_before_touching_the_desktop(tmp_path, monke
     bad.write_text(json.dumps(one_phase(steps=[{"action": "clik"}])))
     assert cli.main([str(bad)]) == 2
     assert "unknown action 'clik'" in capsys.readouterr().out
+
+
+def test_shell_step_cmd_may_be_per_platform():
+    """The runner picks a per-platform cmd like any other step value; the
+    schema rejected it as 'should be a string'."""
+    s = one_phase(
+        name="p",
+        steps=[
+            {
+                "action": "shell",
+                "cmd": {"linux": 'test -s "$SMOKE/a.png"', "windows": "powershell.exe -c 1"},
+            }
+        ],
+    )
+    assert messages(validate_script(s)) == []
