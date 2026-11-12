@@ -204,9 +204,26 @@ class _Run:
         for entry in self.script.get("setup", []):
             if not applies(entry, self.platform) or "shell" not in entry:
                 continue
+            name = entry.get("save")
+            if name and self.config.get("allow_temp_saving_mfa_codes") is not True:
+                # A pairing or MFA code stands in for a person confirming;
+                # only this machine's own config may hand that to a script.
+                raise ScriptFailure(
+                    f"setup wants to save a code to ${name}: this machine's config must set "
+                    "allow_temp_saving_mfa_codes"
+                )
             r = _shell(entry["shell"], self.vars)
             if r.returncode != 0:
                 raise ScriptFailure(f"setup failed: {entry['shell']!r}: {r.stderr.strip()}")
+            if name:
+                value = r.stdout.strip()
+                if not value:
+                    raise ScriptFailure(
+                        f"setup saved nothing to ${name}: the command printed nothing"
+                    )
+                # Memory only, for this run; redacted from every output.
+                self.vars[name] = value
+                self.secret_values.add(value)
 
     def launch(self) -> None:
         # Where the user's focus was when the run began: it goes back there

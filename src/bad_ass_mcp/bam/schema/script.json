@@ -43,6 +43,11 @@
           "shell": {
             "type": "string"
           },
+          "save": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "description": "Save the command's trimmed output (a pairing or MFA code) as this variable for later steps ($name). Needs allow_temp_saving_mfa_codes in this machine's config; the value is never written to any output."
+          },
           "only": {
             "$ref": "#/$defs/only"
           },

@@ -231,7 +231,11 @@ def validate_script(script) -> list[Issue]:
 
 # Config keys a script may not set for itself: they widen what the runner
 # lets it do, so only the machine's own config can grant them.
-RUNNER_ONLY = ("allow_password_fields", "allow_secrets_in_plain_fields")
+RUNNER_ONLY = (
+    "allow_password_fields",
+    "allow_secrets_in_plain_fields",
+    "allow_temp_saving_mfa_codes",
+)
 
 
 def _runner_only_issues(script: dict) -> list[Issue]:
