@@ -42,6 +42,21 @@ def overlay(monkeypatch):
     return o
 
 
+class _Window(FakeBackend):
+    """FakeBackend with its window's top edge at `top`."""
+
+    def __init__(self, top=200):
+        super().__init__()
+        self.top = top
+
+    def list_windows(self):
+        import dataclasses
+
+        return [
+            dataclasses.replace(w, bounds=(100, self.top, 800, 600)) for w in super().list_windows()
+        ]
+
+
 ANNOTATE = {**CONFIG, "annotate": True, "demo_pace": 0, "annotate_lead": 0}
 
 
@@ -63,10 +78,10 @@ def _script(tmp_path, steps, name="ann", learn=None):
 
 def test_annotate_boxes_and_labels_each_step_with_a_target(tmp_path, overlay):
     script = _script(tmp_path, [{"action": "click", "target": "ok"}])
-    r = run_script(FakeBackend(), script, "linux", ANNOTATE, tmp_path / "out")
+    r = run_script(_Window(top=-100), script, "linux", ANNOTATE, tmp_path / "out")
     assert r["status"] == "PASS", r
     assert overlay.started == ["linux"]
-    assert overlay.sent[0] == {"box": [10.0, 10.0, 80.0, 30.0], "label": "1  click ok"}
+    assert overlay.sent[0] == {"box": [10.0, 10.0, 80.0, 30.0], "label": "1.1  click ok"}
     assert overlay.closed
 
 
@@ -87,7 +102,7 @@ def test_a_step_without_bounds_gets_its_label_at_the_window_corner(tmp_path, ove
     script = _script(tmp_path, [{"action": "key", "key": "ctrl+s"}])
     run_script(FakeBackend(), script, "linux", ANNOTATE, tmp_path / "out")
     # FakeBackend's window is at (100, 200).
-    assert overlay.sent[0] == {"text": [116.0, 216.0], "label": "1  key ctrl+s"}
+    assert overlay.sent[0] == {"text": [116.0, 216.0], "label": "1.1  key ctrl+s"}
 
 
 def test_typed_text_is_never_shown(tmp_path, overlay):
@@ -98,7 +113,7 @@ def test_typed_text_is_never_shown(tmp_path, overlay):
     )
     run_script(FakeBackend(), script, "linux", ANNOTATE, tmp_path / "out")
     assert all("hunter2" not in json.dumps(i) for i in overlay.sent)
-    assert overlay.sent[0]["label"] == "1  type name"
+    assert overlay.sent[0]["label"] == "1.1  type name"
 
 
 def test_a_drag_gets_an_arrow_from_start_to_end(tmp_path, overlay):
@@ -106,7 +121,7 @@ def test_a_drag_gets_an_arrow_from_start_to_end(tmp_path, overlay):
     run_script(FakeBackend(), script, "linux", ANNOTATE, tmp_path / "out")
     arrows = [i for i in overlay.sent if "arrow" in i]
     assert arrows[0]["arrow"] == [50.0, 25.0, 170.0, 25.0]
-    assert arrows[0]["label"] == "1  drag ok"
+    assert arrows[0]["label"] == "1.1  drag ok"
 
 
 def test_the_failing_step_gets_a_red_box_with_the_reason(tmp_path, overlay):
@@ -211,3 +226,64 @@ def test_start_overlay_refuses_wayland(monkeypatch):
     monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
     with pytest.raises(RuntimeError, match="Wayland"):
         overlay.start_overlay("linux")
+
+
+# ── polish from rusty-win-crab's Windows run ─────────────────────────
+
+
+def test_a_label_that_would_sit_above_the_window_goes_below_the_box(tmp_path, overlay):
+    """A File menu at the top of the window put its label on the title bar,
+    half outside the recorded region."""
+    script = _script(tmp_path, [{"action": "click", "target": "ok"}])
+    run_script(_Window(top=5), script, "linux", ANNOTATE, tmp_path / "out")
+    assert overlay.sent[0]["below"] is True
+
+
+def test_steps_are_numbered_phase_dot_step(tmp_path, overlay):
+    """Per-phase numbers restarting (1, 2, 1, 2, 3) read as repeats."""
+    script = write(
+        tmp_path,
+        "two",
+        {
+            "phases": [
+                {"learn": {"ok": {"name": "OK"}}, "steps": [{"action": "click", "target": "ok"}]},
+                {
+                    "learn": {"ok": {"name": "OK"}},
+                    "steps": [
+                        {"action": "click", "target": "ok"},
+                        {"action": "click", "target": "ok"},
+                    ],
+                },
+            ]
+        },
+    )
+    run_script(_Window(top=0), script, "linux", ANNOTATE, tmp_path / "out")
+    assert [i["label"].split()[0] for i in overlay.sent] == ["1.1", "2.1", "2.2"]
+
+
+def test_corner_labels_stack_instead_of_overlapping(tmp_path, overlay):
+    script = _script(
+        tmp_path,
+        [
+            {"action": "wait_for_element", "window_id": "$WINDOW", "name": "OK", "timeout": 1},
+            {"action": "sleep", "seconds": 0},
+            {"action": "key", "key": "a"},
+        ],
+    )
+    r = run_script(FakeBackend(), script, "linux", ANNOTATE, tmp_path / "out")
+    assert r["status"] == "PASS", r
+    ys = [i["text"][1] for i in overlay.sent]
+    assert len(set(ys)) == 3, overlay.sent
+
+
+def test_a_wait_says_what_it_waits_for(tmp_path, overlay):
+    script = _script(
+        tmp_path,
+        [
+            {"action": "wait_for_element", "window_id": "$WINDOW", "name": "OK", "timeout": 1},
+            {"action": "sleep", "seconds": 0.01},
+        ],
+    )
+    run_script(FakeBackend(), script, "linux", ANNOTATE, tmp_path / "out")
+    assert overlay.sent[0]["label"] == "1.1  wait for 'OK'"
+    assert overlay.sent[1]["label"] == "1.2  sleep 0.01 s"
