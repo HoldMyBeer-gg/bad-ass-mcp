@@ -766,3 +766,83 @@ def test_recording_region_falls_back_to_the_window_rect_without_dwm():
     cmd = spawned[0]
     assert cmd[cmd.index("-offset_x") + 1] == "93"
     assert cmd[cmd.index("-video_size") + 1] == "1214x806"
+
+
+# ── keys need the app in front; a hidden window can hold the foreground ──
+# With VMware Workstation open, the foreground fell to its invisible 0x0
+# helper window when the app under test closed. No raise method beat it,
+# and real keys went nowhere: type failed with "field reads ''" and no
+# word about why.
+
+
+@_win32
+def test_keys_raise_the_app_when_it_is_not_in_front():
+    from bad_ass_mcp.backend.windows import WindowsBackend
+
+    backend = WindowsBackend()
+    front = iter([999, 42])
+    with (
+        patch.object(backend, "foreground_pid", side_effect=lambda: next(front)),
+        patch.object(backend, "bring_to_front", return_value=True) as raised,
+    ):
+        backend._keys_reach(42)
+    raised.assert_called_once_with(42)
+
+
+@_win32
+def test_keys_fail_when_a_hidden_window_holds_the_foreground():
+    from bad_ass_mcp.backend.windows import WindowsBackend
+
+    backend = WindowsBackend()
+    with (
+        patch.object(backend, "foreground_pid", return_value=999),
+        patch.object(backend, "bring_to_front", return_value=False),
+        patch("bad_ass_mcp.backend.windows._foreground_is_hidden", return_value=True),
+        pytest.raises(RuntimeError) as e,
+    ):
+        backend._keys_reach(42)
+    assert "hidden window" in str(e.value)
+    assert "vmware" not in str(e.value).lower()
+
+
+@_win32
+def test_keys_fail_when_another_app_keeps_the_foreground():
+    from bad_ass_mcp.backend.windows import WindowsBackend
+
+    backend = WindowsBackend()
+    with (
+        patch.object(backend, "foreground_pid", return_value=999),
+        patch.object(backend, "bring_to_front", return_value=False),
+        patch("bad_ass_mcp.backend.windows._foreground_is_hidden", return_value=False),
+        pytest.raises(RuntimeError) as e,
+    ):
+        backend._keys_reach(42)
+    assert "another app" in str(e.value)
+
+
+@_win32
+def test_keys_check_is_skipped_when_the_app_is_unknown():
+    from bad_ass_mcp.backend.windows import WindowsBackend
+
+    backend = WindowsBackend()
+    with patch.object(backend, "bring_to_front") as raised:
+        backend._keys_reach(None)
+    raised.assert_not_called()
+
+
+def test_a_zero_size_or_invisible_window_counts_as_hidden():
+    from bad_ass_mcp.backend.windows import _hidden
+
+    assert _hidden(visible=False, width=800, height=600)
+    assert _hidden(visible=True, width=0, height=0)
+    assert not _hidden(visible=True, width=800, height=600)
+
+
+def test_the_keys_reason_reaches_the_type_error():
+    from bad_ass_mcp.backend.windows import _first_verified
+
+    def keys():
+        raise RuntimeError("the foreground is held by a hidden window")
+
+    r = _first_verified("x", [("keys", keys)], lambda: "", settle=0)
+    assert not r.ok and "hidden window" in r.error

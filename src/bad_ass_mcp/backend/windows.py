@@ -880,6 +880,7 @@ class WindowsBackend(DesktopBackend):
             # Real key events to the focused field: what finally works on
             # egui/winit. Needs the window in the foreground. Ctrl+A first,
             # so the text replaces the content as SetValue would.
+            self._keys_reach(self._root_pid(hwnd) if hwnd else None)
             element.SetFocus()
             time.sleep(0.05)
             inputs = _replacing_key_inputs(text)
@@ -1160,6 +1161,24 @@ class WindowsBackend(DesktopBackend):
 
     def foreground_pid(self) -> int | None:
         return self._root_pid(_user32.GetForegroundWindow())
+
+    def _keys_reach(self, pid: int | None) -> None:
+        """Real keys go to the foreground. Raise the app owning the field
+        if it isn't there; if something else keeps the foreground, raise
+        RuntimeError saying so instead of typing into it. The message never
+        names the other app."""
+        if pid is None or self.foreground_pid() == pid:
+            return
+        self.bring_to_front(pid)
+        if self.foreground_pid() == pid:
+            return
+        if _foreground_is_hidden():
+            raise RuntimeError(
+                "the foreground is held by a hidden window of another app and "
+                "the app can't be raised, so keys would go nowhere (an app "
+                "that grabs input, such as a VM, can do this)"
+            )
+        raise RuntimeError("another app keeps the foreground; keys would go there")
 
     def app_hung(self, pid: int) -> bool | None:
         # IsHungAppWindow: a top-level window that hasn't processed messages
@@ -1599,6 +1618,26 @@ def _unicode_key_inputs(text: str):
             ev.ki.time = 0
             ev.ki.dwExtraInfo = 0
     return inputs
+
+
+def _hidden(*, visible: bool, width: int, height: int) -> bool:
+    return not visible or width <= 0 or height <= 0
+
+
+def _foreground_is_hidden() -> bool:
+    """Whether the foreground window is invisible or has no size: a helper
+    window that can hold the foreground (and the keys) without showing."""
+    hwnd = _user32.GetForegroundWindow()
+    if not hwnd:
+        return False
+    r = ctypes.wintypes.RECT()
+    if not _user32.GetWindowRect(hwnd, ctypes.byref(r)):
+        return False
+    return _hidden(
+        visible=bool(_user32.IsWindowVisible(hwnd)),
+        width=r.right - r.left,
+        height=r.bottom - r.top,
+    )
 
 
 def _replacing_key_inputs(text: str):
