@@ -8,7 +8,8 @@ item for a moment before it fades:
     {"arrow": [fx, fy, tx, ty], "label": "2  drag split"}
     {"text": [x, y], "label": "3  key ctrl+s"}
 
-An item may add "hold" (seconds on screen) and "kind": "fail" (drawn red).
+An item may add "hold" (seconds on screen), "kind": "fail" (drawn red) and,
+for a box, "below": true (label under the box instead of above it).
 Coordinates are the backend's screen coordinates: physical pixels on
 Windows, points on macOS. The overlay exits when stdin closes.
 """

@@ -88,7 +88,7 @@ user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))  # per-monitor v2
 VX, VY = user32.GetSystemMetrics(76), user32.GetSystemMetrics(77)
 VW, VH = user32.GetSystemMetrics(78), user32.GetSystemMetrics(79)
 
-items: list[tuple] = []  # (expires_at, kind, coords, label, color)
+items: list[tuple] = []  # (expires_at, kind, coords, label, color, below)
 lock = threading.Lock()
 
 
@@ -116,13 +116,13 @@ def paint(hwnd) -> None:
     now = time.monotonic()
     with lock:
         live = [i for i in items if i[0] > now]
-    for _, kind, c, label, color in live:
+    for _, kind, c, label, color, below in live:
         pen = gdi32.CreatePen(0, 4, color)
         old_pen = gdi32.SelectObject(hdc, pen)
         if kind == "box":
             x, y, w, h = int(c[0]) - VX, int(c[1]) - VY, int(c[2]), int(c[3])
             gdi32.Rectangle(hdc, x - 4, y - 4, x + w + 4, y + h + 4)
-            tx, ty = x, y - 36
+            tx, ty = x, (y + h + 12 if below else y - 36)
         elif kind == "arrow":
             fx, fy = int(c[0]) - VX, int(c[1]) - VY
             ex, ey = int(c[2]) - VX, int(c[3]) - VY
@@ -172,7 +172,7 @@ def add(m: dict) -> None:
     for kind in ("box", "arrow", "text"):
         if kind in m:
             with lock:
-                items.append((until, kind, m[kind], label, color))
+                items.append((until, kind, m[kind], label, color, bool(m.get("below"))))
             return
 
 
