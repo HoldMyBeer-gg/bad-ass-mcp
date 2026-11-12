@@ -10,3 +10,6 @@ __pycache__/
 dist/
 build/
 .venv/
+
+# uv writes this on `uv run`; CI and releases use pip
+uv.lock
