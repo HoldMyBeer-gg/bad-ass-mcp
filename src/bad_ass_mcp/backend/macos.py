@@ -396,6 +396,7 @@ def _ax_name(element: Any) -> str:
       AXDescription     the accessibility description
       AXTitleUIElement  a separate element that labels this one (e.g. the
                         text beside a field); use its own title/value
+      AXValue           static text only: its words, what VoiceOver reads
       AXHelp            tooltip text
       AXRoleDescription a human phrase for the role ("close button") — the
                         weakest, only when nothing more specific labels it
@@ -411,6 +412,13 @@ def _ax_name(element: Any) -> str:
         linked = _ax_get(title_el, "AXTitle") or _ax_get(title_el, "AXValue")
         if linked:
             return str(linked)
+
+    # Static text has its words in AXValue (what VoiceOver reads). Only for
+    # static text: other roles' values are content, such as typed text.
+    if _ax_get(element, "AXRole") == "AXStaticText":
+        words = _ax_get(element, "AXValue")
+        if isinstance(words, str) and words.strip():
+            return words
 
     help_text = _ax_get(element, "AXHelp")
     if help_text:

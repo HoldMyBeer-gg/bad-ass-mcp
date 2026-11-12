@@ -1260,3 +1260,25 @@ def test_typed_text_goes_in_chunks_that_never_split_a_pair():
     for n, s in downs:
         assert n == len(s.encode("utf-16-le")) // 2 <= 20
         assert not ("\ud800" <= s[-1] <= "\udbff")
+
+
+def test_ax_name_of_static_text_is_its_words():
+    # WKWebView static text carries its words in AXValue (what VoiceOver
+    # reads); every one used to be named 'text' from AXRoleDescription.
+    el = {
+        "AXRole": "AXStaticText",
+        "AXRoleDescription": "text",
+        "AXValue": "No messages yet. Send one to say hello.",
+    }
+    assert _name_of(el) == "No messages yet. Send one to say hello."
+
+
+def test_ax_name_of_static_text_keeps_a_real_title():
+    el = {"AXRole": "AXStaticText", "AXDescription": "Status", "AXValue": "Connected"}
+    assert _name_of(el) == "Status"
+
+
+def test_ax_name_does_not_use_the_value_of_other_roles():
+    # A text field's value is what the user typed, not its label.
+    el = {"AXRole": "AXTextField", "AXValue": "hunter2"}
+    assert _name_of(el) == ""
