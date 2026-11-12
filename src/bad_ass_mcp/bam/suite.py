@@ -160,10 +160,11 @@ def run_suite(
                 entry["failure"] = result["failure"]
             else:
                 entry.pop("failure", None)
-            if "video_error" in result:
-                entry["video_error"] = result["video_error"]
-            else:
-                entry.pop("video_error", None)
+            for extra in ("video_error", "annotate_error"):
+                if extra in result:
+                    entry[extra] = result[extra]
+                else:
+                    entry.pop(extra, None)
             save()
             if result["status"] == "FAIL" and (
                 fail_fast is True or (fail_fast == "first_script" and idx == 0)
