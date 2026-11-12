@@ -903,7 +903,11 @@ def run_script(
             run.launch()
             run.start_watchdog()
             if config.get("record_video"):
-                recording = backend.start_recording(run.window)
+                # No video is a missing extra, not a failed run.
+                try:
+                    recording = backend.start_recording(run.window)
+                except Exception as e:
+                    result["video_error"] = str(e)
             run.run_phases()
             run.run_checks(script.get("checks", []), run.window)
             result["status"] = "MANUAL" if run.manual else "PASS"

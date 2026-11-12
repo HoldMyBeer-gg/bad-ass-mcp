@@ -290,3 +290,9 @@ on every OS; roles are platform-native, so give them only to disambiguate.
 Known backend differences (keys into WebView2, native `<select>` popups, the
 macOS menu bar) are listed in MarkTheCrab's `smoke/README.md` until they move
 here.
+
+**Video on Linux Wayland:** `--video` (`record_video`) isn't supported on a
+Wayland session, even for an XWayland app: ffmpeg's x11grab would record the
+XWayland root, which the compositor never draws into, so every frame is black.
+The run goes on without video and result.json carries `video_error`.
+Screenshots work (they go through the desktop's own tool, e.g. spectacle).

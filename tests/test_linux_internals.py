@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 # ── helpers ───────────────────────────────────────────────────────────
 
 
@@ -341,3 +343,17 @@ def test_phantom_child_chromium_stamped_inaccessible():
     wins = _list_with_fake_desktop(backend, mod, app)
 
     assert wins[0].accessible is False
+
+
+# ── video on Wayland (rusty-deck-crab, KDE Plasma) ───────────────────
+
+
+def test_recording_on_a_wayland_session_is_refused_not_black(monkeypatch):
+    """x11grab on a Wayland session records the XWayland root, which has no
+    composited content: an all-black run.mp4 that looked like it worked."""
+    b, linux = _make_backend()
+    monkeypatch.setattr(linux, "_is_wayland_session", lambda: True)
+    with patch.object(linux.subprocess, "Popen") as popen:
+        with pytest.raises(RuntimeError, match="Wayland"):
+            b.start_recording(None)
+    popen.assert_not_called()
