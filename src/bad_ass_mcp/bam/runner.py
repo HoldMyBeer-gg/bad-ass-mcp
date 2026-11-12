@@ -74,7 +74,9 @@ class _Run:
         self.config = config
         self.out = out_dir
         self.script = script
-        self.files = out_dir / "files"
+        # Absolute whatever --results is: a file dialog or a launched app
+        # resolves a relative path from its own folder, not ours.
+        self.files = out_dir.absolute() / "files"
         self.vars: dict[str, str] = {"SMOKE": str(self.files)}
         self.window: str | None = None
         self.proc: subprocess.Popen | None = None

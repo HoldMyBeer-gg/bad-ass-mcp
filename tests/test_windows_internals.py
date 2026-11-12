@@ -433,16 +433,20 @@ def test_type_text_rejects_a_doubled_partial_type():
     assert not r.ok
 
 
-def test_type_text_accepts_text_appended_to_existing_content():
+def test_type_text_fails_when_the_text_was_appended_to_existing_content():
+    """type_text replaces the field's content, as on macOS and Linux. A
+    field reading old content plus the text is a failure: a second search
+    in rustydemon read '*sylvanas*.m2interface/icons/...' and passed."""
     from bad_ass_mcp.backend.windows import _first_verified
 
-    state = {"value": "old "}
+    state = {"value": "*sylvanas*.m2"}
 
     def keys():
         state["value"] += "framexml"
 
     r = _first_verified("framexml", [("keys", keys)], lambda: state["value"], settle=0)
-    assert r.ok
+    assert not r.ok
+    assert "*sylvanas*.m2framexml" in r.error
 
 
 def test_type_text_says_which_strategy_worked():
@@ -532,7 +536,7 @@ def test_password_field_with_the_wrong_mask_length_is_not_a_pass():
     assert not r.ok
 
 
-def test_masked_append_counts_from_the_starting_mask():
+def test_masked_field_holding_old_mask_plus_the_text_is_not_a_pass():
     from bad_ass_mcp.backend.windows import _first_verified
 
     state = {"value": "•" * 3}
@@ -541,7 +545,23 @@ def test_masked_append_counts_from_the_starting_mask():
         state["value"] += "•" * 4
 
     r = _first_verified("abcd", [("keys", keys)], lambda: state["value"], settle=0)
-    assert r.ok
+    assert not r.ok
+
+
+def test_key_typing_selects_all_first_so_the_text_replaces_the_content():
+    """Real keys type at the caret. Ctrl+A goes first, so the field ends up
+    holding exactly the text, the way SetValue would leave it."""
+    from bad_ass_mcp.backend.windows import _replacing_key_inputs
+
+    ins = _replacing_key_inputs("Fx")
+    ctrl, a = 0x11, ord("A")
+    assert [(i.ki.wVk, i.ki.dwFlags) for i in ins[:4]] == [(ctrl, 0), (a, 0), (a, 2), (ctrl, 2)]
+    assert [(i.ki.wScan, i.ki.dwFlags) for i in ins[4:]] == [
+        (ord("F"), 0x4),
+        (ord("F"), 0x4 | 0x2),
+        (ord("x"), 0x4),
+        (ord("x"), 0x4 | 0x2),
+    ]
 
 
 # ── get_tree on a WebView2 window that hasn't built its tree yet ─────

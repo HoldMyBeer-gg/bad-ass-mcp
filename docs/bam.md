@@ -245,7 +245,7 @@ Three layers, later wins: the suite file (`--config`), a script's own
   `$target` then works in any step field and shell command.
 - **Shell steps:** `{"action": "shell", "cmd": "..."}` runs a command between
   steps (for `only`-gated platform glue like xdotool); a non-zero exit fails
-  the script at that step.
+  the script at that step. `cmd` may be a per-platform object.
 - **Runner-only keys** (`note`, `confirm`, `verified`, `covers`, `notes`,
   `variables_note`) are ignored
   by the runner and kept for people.

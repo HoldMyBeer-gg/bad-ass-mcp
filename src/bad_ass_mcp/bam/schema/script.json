@@ -864,7 +864,7 @@
                 "const": "shell"
               },
               "cmd": {
-                "type": "string"
+                "$ref": "#/$defs/per_platform_string"
               }
             },
             "additionalProperties": false,
