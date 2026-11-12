@@ -28,6 +28,9 @@ from .describe import (
 )
 from .script import applies, build_steps, expand, learn_descriptors, pick
 
+_MARK_HOLD = 1.6  # seconds the overlay shows a mark (its default)
+_LABEL_ROOM = 36  # a label's height above a box, with its gap
+
 
 class ScriptFailure(Exception):
     def __init__(
@@ -97,6 +100,7 @@ class _Run:
         self.progress = None  # callable(phase_number) after each phase
         self.overlay = None  # annotations, when `annotate` is on and one started
         self.marked: list[float] | None = None  # the running step's box, for a fail mark
+        self.corner_until: list[float] = []  # when each label at the window corner fades
 
     # ── windows ───────────────────────────────────────────────────────
     def _ours(self, w) -> bool:
@@ -527,7 +531,7 @@ class _Run:
                 target=self.targets.get(step.get("handle")),
                 bounds=bounds,
             )
-            self.annotate(step, i + 1, bounds)
+            self.annotate(step, phase, i + 1, bounds)
             self.check_user(phase, i + 1)
             plain_click = (
                 step.get("action") == "click"
@@ -553,29 +557,54 @@ class _Run:
                 time.sleep(pace)
 
     # ── annotations ───────────────────────────────────────────────────
-    def _window_corner(self) -> list[float] | None:
+    def _window_bounds(self) -> tuple | None:
         try:
             for w in self.b.list_windows():
                 if w.id == self.window and w.bounds:
-                    return [float(w.bounds[0]) + 16, float(w.bounds[1]) + 16]
+                    return tuple(float(v) for v in w.bounds)
         except Exception:
             pass
         return None
 
-    def annotate(self, step: dict, n: int, bounds: list[float] | None) -> None:
-        """Box and label the step about to run ("N  action target"): an
-        arrow for a drag, the window's corner for a step with no target.
-        Typed text is never shown."""
+    def _window_corner(self) -> list[float] | None:
+        """The window's top-left corner, below any corner label still on
+        screen, so labels in quick succession stack instead of overlapping."""
+        wb = self._window_bounds()
+        if not wb:
+            return None
+        now = time.monotonic()
+        self.corner_until = [t for t in self.corner_until if t > now]
+        slot = len(self.corner_until)
+        self.corner_until.append(now + _MARK_HOLD)
+        return [wb[0] + 16, wb[1] + 16 + slot * 34]
+
+    @staticmethod
+    def _mark_words(step: dict, target: str | None) -> str:
+        action = step.get("action")
+        if action == "wait_for_element":
+            what = step.get("name") or step.get("role") or "element"
+            return f"wait for {what!r}"
+        if action == "wait_for_window":
+            return f"wait for window {step.get('pattern')!r}"
+        if action == "sleep":
+            return f"sleep {float(step.get('seconds', 0)):g} s"
+        words = f"{action}" + (f" {target}" if target else "")
+        if action == "key" and step.get("key"):
+            words += f" {step['key']}"
+        elif action == "select" and step.get("value") is not None:
+            words += f" {step['value']}"
+        return words
+
+    def annotate(self, step: dict, phase: int, n: int, bounds: list[float] | None) -> None:
+        """Mark the step about to run ("phase.step  action target"): a box
+        over its target, an arrow for a drag, the window's corner for a step
+        with no target. Typed text is never shown."""
         self.marked = bounds
         if self.overlay is None:
             return
         action = step.get("action")
         target = self.targets.get(step.get("handle") or step.get("from_handle"))
-        label = f"{n}  {action}" + (f" {target}" if target else "")
-        if action == "key" and step.get("key"):
-            label += f" {step['key']}"
-        elif action == "select" and step.get("value") is not None:
-            label += f" {step['value']}"
+        label = f"{phase}.{n}  {self._mark_words(step, target)}"
         item: dict | None = None
         if action == "drag":
             try:
@@ -586,6 +615,9 @@ class _Run:
                 item = {"arrow": [float(v) for v in ends], "label": label, "hold": 2.2}
         elif bounds:
             item = {"box": bounds, "label": label}
+            wb = self._window_bounds()
+            if wb and bounds[1] - _LABEL_ROOM < wb[1]:
+                item["below"] = True  # above the box would be on the title bar
         if item is None:
             corner = self._window_corner()
             if corner:

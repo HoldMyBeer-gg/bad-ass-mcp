@@ -36,7 +36,7 @@ from Foundation import NSAttributedString, NSMakeRect, NSObject, NSTimer, NSUnio
 
 HOLD = 1.6
 inbox: queue.Queue = queue.Queue()
-items: list[tuple] = []  # (expires_at, kind, coords, label, fail)
+items: list[tuple] = []  # (expires_at, kind, coords, label, fail, below)
 OX = OY = 0.0  # AX point + (OX, OY) = view point
 
 
@@ -80,7 +80,7 @@ class OverlayView(NSView):
 
     def drawRect_(self, rect):
         now = time.monotonic()
-        for _, kind, c, label, fail in [i for i in items if i[0] > now]:
+        for _, kind, c, label, fail, below in [i for i in items if i[0] > now]:
             (RED if fail else EMBER).set()
             if kind == "box":
                 x, y, w, h = c[0] + OX, c[1] + OY, c[2], c[3]
@@ -89,7 +89,7 @@ class OverlayView(NSView):
                 )
                 p.setLineWidth_(3)
                 p.stroke()
-                tx, ty = x - 4, y - 32
+                tx, ty = x - 4, (y + h + 10 if below else y - 32)
             elif kind == "arrow":
                 fx, fy, ex, ey = c[0] + OX, c[1] + OY, c[2] + OX, c[3] + OY
                 p = NSBezierPath.bezierPath()
@@ -124,7 +124,14 @@ class Ticker(NSObject):
             for kind in ("box", "arrow", "text"):
                 if kind in m:
                     items.append(
-                        (until, kind, m[kind], str(m.get("label", "")), m.get("kind") == "fail")
+                        (
+                            until,
+                            kind,
+                            m[kind],
+                            str(m.get("label", "")),
+                            m.get("kind") == "fail",
+                            bool(m.get("below")),
+                        )
                     )
                     changed = True
                     break
