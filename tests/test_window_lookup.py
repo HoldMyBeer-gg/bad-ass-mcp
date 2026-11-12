@@ -462,3 +462,115 @@ def test_linux_wait_for_window_still_returns_a_genuinely_x11_only_window():
     assert w is not None and w.accessible is False
     # Bounded by time (Kali measured ~3 s when it was 15 polls).
     assert time.monotonic() - started < 1.0
+
+
+# ── a helper process is not one of its own windows ───────────────────────────
+# The portal is listed whether or not a dialog is open. `no_window` must count
+# the windows it shows, not the process, or it can never pass against a helper.
+
+
+def _el(role, name="", children=()):
+    from bad_ass_mcp.types import ElementHandle
+
+    return ElementHandle(id=f"{role}-{name}", role=role, name=name, children=list(children))
+
+
+class _PortalProcess(FakeBackend):
+    """Lists the portal as an application; `dialog_role` is the role of the
+    dialog it currently shows (None: no dialog open)."""
+
+    dialog_role: str | None = None
+
+    def list_windows(self):
+        portal = WindowInfo(
+            id="portal", name="xdg-desktop-portal-kde", pid=4242, focused=False, titles=()
+        )
+        return super().list_windows() + [portal]
+
+    def get_tree(self, window_id, *, max_depth=None):
+        if window_id != "portal":
+            return super().get_tree(window_id, max_depth=max_depth)
+        kids = [_el(self.dialog_role, "Save")] if self.dialog_role else []
+        return _el("application", "xdg-desktop-portal-kde", kids)
+
+
+def _no_window_run(tmp_path, monkeypatch, backend):
+    _launching(monkeypatch)
+    script = write(
+        tmp_path,
+        "closed",
+        {"phases": [], "checks": [{"no_window": "xdg-desktop-portal-kde"}]},
+    )
+    cfg = {**CONFIG, "window": "Fake App", "app": "fake-app", "helpers": ["xdg-desktop-portal"]}
+    return run_script(backend, script, "linux", cfg, tmp_path / "out")
+
+
+def test_no_window_passes_when_a_helper_process_shows_no_dialog(tmp_path, monkeypatch):
+    res = _no_window_run(tmp_path, monkeypatch, _PortalProcess())
+    assert res["status"] == "PASS", res.get("failure")
+
+
+@pytest.mark.parametrize("role", ["dialog", "file chooser", "frame"])
+def test_no_window_fails_while_a_helper_process_shows_a_dialog(tmp_path, monkeypatch, role):
+    backend = _PortalProcess()
+    backend.dialog_role = role
+    res = _no_window_run(tmp_path, monkeypatch, backend)
+    assert res["status"] == "FAIL"
+    assert "unexpected window" in res["failure"]["reason"]
+
+
+# ── failure evidence comes from the window the phase ran in ──────────────────
+
+
+class _DialogNoScreenshot(_PortalProcess):
+    """A dialog whose screenshot can't be taken (as for a portal window on
+    Wayland), so no fail.png is written for it."""
+
+    dialog_role = "dialog"
+
+    def list_windows(self):
+        wins = super().list_windows()
+        wins[-1] = WindowInfo(
+            id="portal", name="xdg-desktop-portal-kde", pid=4242, focused=False, titles=("Save",)
+        )
+        return wins
+
+    def screenshot(self, window_id=None, output_path=None):
+        if window_id == "portal":
+            raise RuntimeError("no screenshot for this window")
+        return super().screenshot(window_id, output_path)
+
+    def learn_layout(self, window_id, descriptors):
+        if window_id == "portal":
+            return {k: None for k in descriptors}
+        return super().learn_layout(window_id, descriptors)
+
+
+def test_the_failure_tree_is_the_dialogs_even_without_a_screenshot(tmp_path, monkeypatch):
+    _launching(monkeypatch)
+    script = write(
+        tmp_path,
+        "dialog-fails",
+        {
+            "phases": [
+                {
+                    "name": "save",
+                    "window": "xdg-desktop-portal-kde",
+                    "learn": {"missing": {"name": "not there"}},
+                    "steps": [],
+                }
+            ]
+        },
+    )
+    cfg = {
+        **CONFIG,
+        "window": "Fake App",
+        "app": "fake-app",
+        "helpers": ["xdg-desktop-portal"],
+        "step_timeout": 0.1,
+    }
+    out = tmp_path / "out"
+    res = run_script(_DialogNoScreenshot(), script, "linux", cfg, out)
+    assert res["status"] == "FAIL"
+    tree = json.loads((out / "tree.json").read_text())
+    assert tree["name"] == "xdg-desktop-portal-kde", tree["name"]
