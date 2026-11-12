@@ -581,3 +581,56 @@ def test_run_sequence_passes_the_paste_flag_to_type_text(backend):
         ]
     )
     assert seen == [False, True]
+
+
+# ── recordings play in browsers (rusty-macos-crab, November 11th) ─────
+
+
+def _web_playable(cmd: list[str]) -> None:
+    """H.264 4:2:0 with the moov atom up front: what browsers and QuickTime
+    play. Without -pix_fmt, libx264 kept the capture's 4:4:4 (gdigrab) or
+    4:2:2 (avfoundation), and the bam-site gallery showed only a poster."""
+    assert cmd[cmd.index("-c:v") + 1] == "libx264"
+    assert cmd[cmd.index("-pix_fmt") + 1] == "yuv420p"
+    assert cmd[cmd.index("-movflags") + 1] == "+faststart"
+    assert cmd.index("-pix_fmt") < len(cmd) - 1  # an output option, before the path
+
+
+def _capture(backend):
+    seen = []
+    backend._recordings = {}
+    backend._spawn_recorder = lambda cmd, path: seen.append(cmd) or ("p", path)
+    return seen
+
+
+def test_windows_recording_is_web_playable():
+    from unittest.mock import patch
+
+    from bad_ass_mcp.backend import windows as w
+
+    b = object.__new__(w.WindowsBackend)
+    seen = _capture(b)
+    b._window_rect = lambda hwnd: (0, 0, 800, 600)
+    with patch.object(w, "_dwm_frame_bounds", lambda hwnd: None):
+        b.start_recording("1")
+    _web_playable(seen[0])
+
+
+def test_macos_recording_is_web_playable():
+    from bad_ass_mcp.backend import macos as m
+
+    b = object.__new__(m.MacOSBackend)
+    seen = _capture(b)
+    b._avfoundation_screen_device = lambda: "1"
+    b.start_recording(None)
+    _web_playable(seen[0])
+
+
+def test_linux_recording_is_web_playable(monkeypatch):
+    from tests.test_linux_internals import _make_backend
+
+    b, lx = _make_backend()
+    seen = _capture(b)
+    monkeypatch.setattr(lx, "_is_wayland_session", lambda: False)
+    b.start_recording(None)
+    _web_playable(seen[0])

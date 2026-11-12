@@ -353,6 +353,29 @@ class DesktopBackend(ABC):
         raise ValueError(f"output_path must end with .gif or .mp4 (got {output_path!r})")
 
     @staticmethod
+    def _h264_output(video_path: str) -> list[str]:
+        """The encode every recording ends with: H.264 in 4:2:0 with the moov
+        atom up front, which browsers and QuickTime play. Left alone, libx264
+        keeps the capture's chroma (4:4:4 from gdigrab, 4:2:2 from
+        avfoundation) and the file shows only a poster in a browser. 4:2:0
+        needs even dimensions; every backend evens its crop."""
+        return [
+            "-t",
+            "1800",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-crf",
+            "23",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            video_path,
+        ]
+
+    @staticmethod
     def _spawn_recorder(cmd: list[str], video_path: str) -> tuple:
         """Start an ffmpeg capture and fail fast if it dies immediately.
 

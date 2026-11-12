@@ -1099,15 +1099,7 @@ class WindowsBackend(DesktopBackend):
         cmd += [
             "-i",
             "desktop",
-            "-t",
-            "1800",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "ultrafast",
-            "-crf",
-            "23",
-            video_path,
+            *self._h264_output(video_path),
         ]
 
         self._recordings[handle] = self._spawn_recorder(cmd, video_path)
