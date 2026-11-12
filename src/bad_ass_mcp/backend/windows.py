@@ -84,6 +84,29 @@ except (ImportError, AttributeError, OSError):
 
 # ── Win32 constants ──────────────────────────────────────────────────
 
+_DWMWA_EXTENDED_FRAME_BOUNDS = 9
+
+
+def _dwm_frame_bounds(hwnd: int) -> tuple[int, int, int, int] | None:
+    """The visible frame (x, y, width, height) from DWM. GetWindowRect on
+    Windows 10/11 also counts the invisible resize border (about 7 px left,
+    right and bottom), which a screen recording would show as a strip of
+    whatever is behind the window."""
+    try:
+        rect = ctypes.wintypes.RECT()
+        hr = ctypes.windll.dwmapi.DwmGetWindowAttribute(
+            ctypes.wintypes.HWND(hwnd),
+            _DWMWA_EXTENDED_FRAME_BOUNDS,
+            ctypes.byref(rect),
+            ctypes.sizeof(rect),
+        )
+    except Exception:
+        return None
+    if hr != 0 or rect.right <= rect.left or rect.bottom <= rect.top:
+        return None
+    return (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
+
+
 _SPI_GETSCREENREADERRUNNING = 0x0046
 _SPI_SETSCREENREADERRUNNING = 0x0047
 _SPIF_SENDCHANGE = 0x0002
@@ -1066,7 +1089,7 @@ class WindowsBackend(DesktopBackend):
         cmd = ["ffmpeg", "-y", "-f", "gdigrab", "-framerate", str(fps)]
 
         if window_id:
-            geom = self._window_rect(int(window_id))
+            geom = _dwm_frame_bounds(int(window_id)) or self._window_rect(int(window_id))
             if geom:
                 x, y, w, h = geom
                 w -= w % 2
