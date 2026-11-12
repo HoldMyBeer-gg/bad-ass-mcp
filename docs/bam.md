@@ -216,6 +216,12 @@ Three layers, later wins: the suite file (`--config`), a script's own
   `allow_secrets_in_plain_fields`; then, from that step on, the run keeps no
   screenshots (phase proofs, fail.png) and no video. Keychain and Credential
   Manager sources are planned.
+- **Codes from setup:** a setup entry `{"shell": "...", "save": "code"}`
+  saves the command's trimmed output (a pairing or MFA code) as `$code` for
+  later steps. It needs `allow_temp_saving_mfa_codes: true` in this machine's
+  config (runner-only; without it the command isn't run). The value is kept
+  in memory for the run and shown as ••• in every output; an empty output
+  fails setup. Screenshots stay on, since such a code is single-use.
 - **Checks:** `present`, `absent` (by name/role), `windows: n` (windows matching
   the config's `window`), `no_window: "<title>"`, `shell` (exit 0),
   `manual` (reported for a human; the script ends `MANUAL`).
