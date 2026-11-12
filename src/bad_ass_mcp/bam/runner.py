@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from ..backend.base import last_injected_at
+from ..overlay import start_overlay
 from .describe import (
     describe_checks,
     describe_phase,
@@ -94,6 +95,8 @@ class _Run:
         self.user_stopped = False
         self.before: set[str] | None = None
         self.progress = None  # callable(phase_number) after each phase
+        self.overlay = None  # annotations, when `annotate` is on and one started
+        self.marked: list[float] | None = None  # the running step's box, for a fail mark
 
     # ── windows ───────────────────────────────────────────────────────
     def _ours(self, w) -> bool:
@@ -502,7 +505,7 @@ class _Run:
         return found
 
     def run_steps(self, sent: list[dict], meta: list[dict], phase: int) -> None:
-        if not self.config.get("demo"):
+        if not (self.config.get("demo") or self.config.get("annotate")):
             self._run_chunked(sent, meta, phase)
             return
         # Demo mode: one step at a time, logged with its target's bounds, with
@@ -524,6 +527,7 @@ class _Run:
                 target=self.targets.get(step.get("handle")),
                 bounds=bounds,
             )
+            self.annotate(step, i + 1, bounds)
             self.check_user(phase, i + 1)
             plain_click = (
                 step.get("action") == "click"
@@ -544,8 +548,73 @@ class _Run:
                     )
             else:
                 self._run_chunked([step], [meta[i]], phase, base=i)
+            self.marked = None
             if pace:
                 time.sleep(pace)
+
+    # ── annotations ───────────────────────────────────────────────────
+    def _window_corner(self) -> list[float] | None:
+        try:
+            for w in self.b.list_windows():
+                if w.id == self.window and w.bounds:
+                    return [float(w.bounds[0]) + 16, float(w.bounds[1]) + 16]
+        except Exception:
+            pass
+        return None
+
+    def annotate(self, step: dict, n: int, bounds: list[float] | None) -> None:
+        """Box and label the step about to run ("N  action target"): an
+        arrow for a drag, the window's corner for a step with no target.
+        Typed text is never shown."""
+        self.marked = bounds
+        if self.overlay is None:
+            return
+        action = step.get("action")
+        target = self.targets.get(step.get("handle") or step.get("from_handle"))
+        label = f"{n}  {action}" + (f" {target}" if target else "")
+        if action == "key" and step.get("key"):
+            label += f" {step['key']}"
+        elif action == "select" and step.get("value") is not None:
+            label += f" {step['value']}"
+        item: dict | None = None
+        if action == "drag":
+            try:
+                ends = self.b._drag_ends(step)
+            except Exception:
+                ends = None
+            if isinstance(ends, tuple):
+                item = {"arrow": [float(v) for v in ends], "label": label, "hold": 2.2}
+        elif bounds:
+            item = {"box": bounds, "label": label}
+        if item is None:
+            corner = self._window_corner()
+            if corner:
+                item = {"text": corner, "label": label}
+        if item is None:
+            return
+        self.overlay.send(item)
+        lead = float(self.config.get("annotate_lead", 0.4))
+        if lead:
+            time.sleep(lead)  # let a viewer see the mark before the step acts
+
+    def annotate_failure(self, reason: str, hold_for_video: bool) -> None:
+        """A red mark on the step that failed (or the window's corner when
+        the failure wasn't at a step), kept long enough for the video."""
+        if self.overlay is None:
+            return
+        label = f"✗ {reason}"
+        if len(label) > 120:
+            label = label[:119] + "…"
+        if self.marked:
+            item = {"box": self.marked, "label": label}
+        else:
+            corner = self._window_corner()
+            if not corner:
+                return
+            item = {"text": corner, "label": label}
+        self.overlay.send({**self.redact(item), "kind": "fail", "hold": 4})
+        if hold_for_video:
+            time.sleep(1.5)
 
     def check_user(self, phase: int, number: int) -> None:
         """Stop if a person used the keyboard or mouse since our own last
@@ -902,6 +971,12 @@ def run_script(
             run.setup()
             run.launch()
             run.start_watchdog()
+            if config.get("annotate"):
+                # Like video: no overlay is a missing extra, not a failed run.
+                try:
+                    run.overlay = start_overlay(platform)
+                except Exception as e:
+                    result["annotate_error"] = str(e)
             if config.get("record_video"):
                 # No video is a missing extra, not a failed run.
                 try:
@@ -912,6 +987,7 @@ def run_script(
             run.run_checks(script.get("checks", []), run.window)
             result["status"] = "MANUAL" if run.manual else "PASS"
         except ScriptFailure as f:
+            run.annotate_failure(f.reason, hold_for_video=recording is not None)
             if not (out_dir / "fail.png").exists():
                 run.fail_evidence(run.window)
             result["status"] = "FAIL"
@@ -926,6 +1002,7 @@ def run_script(
                 if v is not None
             }
         except Exception as e:  # a bug in the script or the backend, not the app
+            run.annotate_failure(f"{type(e).__name__}: {e}", hold_for_video=recording is not None)
             run.fail_evidence(run.window)
             result["status"] = "FAIL"
             result["failure"] = {"reason": f"{type(e).__name__}: {e}"}
@@ -956,6 +1033,8 @@ def run_script(
                         Path(path).unlink()
                 except Exception:
                     pass
+            if run.overlay is not None:
+                run.overlay.close()
             run.teardown()
         result["phases"] = run.phase_log
         final = describe_checks(script.get("checks", []), platform)

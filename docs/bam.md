@@ -67,10 +67,12 @@ create the venv with `--system-site-packages`.
 ```
 bad-ass-mcp run PATH... [--config bam.json] [--results DIR] [--platform P]
                 [--resume] [--fail-fast [first_script]] [--retries N]
-                [--video [on_failure]] [--no-screenshots] [--commit SHA]
+                [--video [on_failure]] [--annotate] [--no-screenshots] [--commit SHA]
 ```
 
 - `PATH`: script files, or folders of `*.json` scripts (run in name order).
+- `--annotate`: box and label each step on screen as it runs (see `annotate`
+  below); with `--video` the boxes are in the recording.
 - Exit status 1 if any script failed.
 - On a terminal: a progress bar counted in phases (TMS9928A colours, the Coleco
   Adam's palette), then one line per script with its duration and failure
@@ -123,6 +125,8 @@ Three layers, later wins: the suite file (`--config`), a script's own
 | `screenshot_proof` | true | screenshot after every phase |
 | `demo` | false | demo mode (first pieces): steps run one at a time with a pause, clicks go through the real pointer at the element's centre so they show on video, and each step is logged with its target's bounds in `timeline.json` |
 | `demo_pace` | 0.8 | seconds to pause after each step in demo mode |
+| `annotate` | false | draw each step on screen as it runs, in demo mode: a box over the target with "N  action target", an arrow for a drag, the label at the window's corner for a step with no target (a key press), and a red box with the reason on the step that failed. Typed text is never shown. The overlay is a click-through, never-focused window of its own: clicks and hit tests reach the app under it, it isn't listed as a window, and BAM's window screenshots leave it out, while video of the screen shows it. Windows and macOS; elsewhere the run goes on without it and result.json carries `annotate_error` |
+| `annotate_lead` | 0.4 | seconds a step's box is on screen before the step acts |
 | `record_video` | false | `true`, or `"on_failure"` to keep only failing runs |
 | `fail_fast` | false | `true`, or `"first_script"` (stop only if the first script fails) |
 | `retries` | 0 | rerun a failing script; a later pass is marked "passed on attempt N" |
@@ -296,3 +300,7 @@ Wayland session, even for an XWayland app: ffmpeg's x11grab would record the
 XWayland root, which the compositor never draws into, so every frame is black.
 The run goes on without video and result.json carries `video_error`.
 Screenshots work (they go through the desktop's own tool, e.g. spectacle).
+
+**Annotations on Linux:** `annotate` isn't supported on Linux yet. On Wayland
+an app can't place a click-through window over other apps at all; X11 would
+need an override-redirect window with an empty input shape, not built yet.

@@ -371,6 +371,13 @@
       "type": "number",
       "minimum": 0
     },
+    "annotate": {
+      "type": "boolean"
+    },
+    "annotate_lead": {
+      "type": "number",
+      "minimum": 0
+    },
     "record_video": {
       "enum": [
         true,

@@ -99,6 +99,8 @@ def print_summary(run_dir: Path, *, color: bool = False) -> None:
             line += f"\n         {s['failure'].get('reason', '')}"
         if s.get("video_error"):
             line += f"\n         no video: {s['video_error']}"
+        if s.get("annotate_error"):
+            line += f"\n         no annotations: {s['annotate_error']}"
         print(line)
     totals = run.get("totals", {})
     words = {
@@ -156,6 +158,11 @@ def parse(argv: list[str]) -> argparse.Namespace:
     ap.add_argument("--resume", action="store_true", help="continue the last run on this commit")
     ap.add_argument("--fail-fast", nargs="?", const="true", choices=["true", "first_script"])
     ap.add_argument("--video", nargs="?", const="true", choices=["true", "on_failure"])
+    ap.add_argument(
+        "--annotate",
+        action="store_true",
+        help="box and label each step on screen as it runs (implies demo pacing)",
+    )
     ap.add_argument("--retries", type=int)
     ap.add_argument("--no-screenshots", action="store_true", help="no proof screenshot per phase")
     args = ap.parse_args(argv)
@@ -167,6 +174,8 @@ def parse(argv: list[str]) -> argparse.Namespace:
         o["fail_fast"] = True if args.fail_fast == "true" else args.fail_fast
     if args.video:
         o["record_video"] = True if args.video == "true" else args.video
+    if args.annotate:
+        o["annotate"] = True
     if args.retries is not None:
         o["retries"] = args.retries
     if args.no_screenshots:
