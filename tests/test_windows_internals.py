@@ -846,3 +846,84 @@ def test_the_keys_reason_reaches_the_type_error():
 
     r = _first_verified("x", [("keys", keys)], lambda: "", settle=0)
     assert not r.ok and "hidden window" in r.error
+
+
+# ── screenshot of a window while the app's dialog is in front ───────
+# PrintWindow on rustydemon's main window while its file dialog (rfd: an
+# unowned top-level window of the same process; the main window stays
+# enabled) was still loading left the dialog on "Working on it…" for good:
+# its Open button never became a splitbutton. With PW_RENDERFULLCONTENT or
+# without. When another window of the same app is in front, the target is
+# copied from the screen instead.
+
+
+def _shot_backend(*, front="dialog", frame=(100, 100, 400, 300)):
+    """front: 'dialog' (another window of the app), 'target' (the window
+    itself) or 'other' (another app)."""
+    from bad_ass_mcp.backend.windows import WindowsBackend
+
+    backend = WindowsBackend()
+    user32, gdi32 = MagicMock(), MagicMock()
+    user32.IsWindow.return_value = 1
+    user32.IsIconic.return_value = 0
+    user32.GetForegroundWindow.return_value = 1234 if front == "target" else 5678
+
+    def window_rect(_hwnd, ref):
+        r = ref._obj
+        r.left, r.top, r.right, r.bottom = 93, 100, 507, 407
+
+    user32.GetWindowRect.side_effect = window_rect
+    user32.GetSystemMetrics.side_effect = lambda i: {76: 0, 77: 0, 78: 1920, 79: 1080}[i]
+    patches = [
+        patch("bad_ass_mcp.backend.windows._user32", user32),
+        patch("bad_ass_mcp.backend.windows._gdi32", gdi32),
+        patch("bad_ass_mcp.backend.windows._dwm_frame_bounds", return_value=frame),
+        patch("bad_ass_mcp.backend.windows._bgra_to_png", return_value=b"png"),
+        patch.object(backend, "foreground_pid", return_value=8 if front == "other" else 7),
+        patch.object(backend, "_root_pid", return_value=7),
+    ]
+    return backend, user32, gdi32, patches
+
+
+def _shoot(backend, patches):
+    import contextlib
+
+    with contextlib.ExitStack() as stack:
+        for p in patches:
+            stack.enter_context(p)
+        backend.screenshot("1234")
+
+
+@_win32
+def test_window_behind_its_own_dialog_is_copied_from_the_screen_not_printed():
+    backend, user32, gdi32, patches = _shot_backend(front="dialog")
+    _shoot(backend, patches)
+    user32.PrintWindow.assert_not_called()
+    args = gdi32.BitBlt.call_args.args
+    assert args[1:5] == (0, 0, 400, 300)  # the visible frame's size
+    assert args[6:8] == (100, 100)  # from the frame's screen position
+
+
+@_win32
+def test_window_in_front_is_still_printed():
+    backend, user32, gdi32, patches = _shot_backend(front="target")
+    _shoot(backend, patches)
+    user32.PrintWindow.assert_called_once()
+    gdi32.BitBlt.assert_not_called()
+
+
+@_win32
+def test_window_behind_another_app_is_printed_as_before():
+    """The screen would show the other app, so keep PrintWindow."""
+    backend, user32, gdi32, patches = _shot_backend(front="other")
+    _shoot(backend, patches)
+    user32.PrintWindow.assert_called_once()
+    gdi32.BitBlt.assert_not_called()
+
+
+@_win32
+def test_window_partly_off_screen_is_printed_as_before():
+    backend, user32, gdi32, patches = _shot_backend(frame=(1800, 100, 400, 300))
+    _shoot(backend, patches)
+    user32.PrintWindow.assert_called_once()
+    gdi32.BitBlt.assert_not_called()
