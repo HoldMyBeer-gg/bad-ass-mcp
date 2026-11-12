@@ -93,7 +93,8 @@ bam-results/<time>_<commit>_<platform>/
                         checks (final), failure {phase, step, action, reason}
                         (action "learn"/"window": failed before the phase's steps)
     phase-N.png         proof screenshot after each phase (screenshot_proof)
-    fail.png, tree.json screen and pruned accessibility tree at a failure
+    fail.png, tree.json screen and pruned accessibility tree at a failure, of the
+                        window the failing phase ran in (a dialog, if it named one)
     timeline.json       timestamped phases (and, in demo mode, every step with its
                         target's bounds): the input for captions and highlights
     run.mp4             with --video
@@ -233,6 +234,10 @@ Three layers, later wins: the suite file (`--config`), a script's own
   an almost empty tree for a moment during a view change. `absent` is read
   once, so an empty moment can make it pass early: follow a transition with a
   `present` check on the new view before an `absent` check on the old one.
+- **Helper processes and `no_window`:** a process named in `helpers` (the
+  file-dialog portal on Linux) is listed all the time, dialog or not. For
+  such a process `windows` and `no_window` count the dialogs it has open, so
+  `{"no_window": "xdg-desktop-portal"}` passes once the dialog is closed.
 - **Null windows:** a per-platform `window` (or a `wait_for_window` step's
   `pattern`) that is `null` for this platform runs the phase in the main window
   and skips the wait. GTK dialogs, for example, live inside the app's window.

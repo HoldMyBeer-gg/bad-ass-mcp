@@ -32,6 +32,11 @@ _MARK_HOLD = 1.6  # seconds the overlay shows a mark (its default)
 _LABEL_ROOM = 36  # a label's height above a box, with its gap
 
 
+# Top-level roles a helper process shows a dialog under: AT-SPI `dialog` (Qt),
+# `file chooser` (GTK), `frame` and `alert`; AX `window` and `sheet`.
+_HELPER_WINDOW_ROLES = ("frame", "window", "dialog", "file chooser", "alert", "sheet")
+
+
 class ScriptFailure(Exception):
     def __init__(
         self,
@@ -99,6 +104,7 @@ class _Run:
         self.own_until = time.monotonic() + 0.5  # grace: the Enter key-up that started us
         self.user_stopped = False
         self.before: set[str] | None = None
+        self.evidence_taken = False  # fail.png / tree.json written for this failure
         self.progress = None  # callable(phase_number) after each phase
         self.overlay = None  # annotations, when `annotate` is on and one started
         self.marked: list[float] | None = None  # the running step's box, for a fail mark
@@ -151,18 +157,24 @@ class _Run:
         """Windows matching `pattern` that this run may drive. The Linux and
         macOS backends list one entry per application, so there the app's
         top-level window children are counted (AT-SPI `frame`, AX `window`);
-        an app exposing none counts as one."""
+        an app exposing none counts as one.
+
+        A helper process (`helpers` in the config) is the exception. It is
+        listed whether or not it shows anything, so it counts only for the
+        dialogs it has open, and none means none."""
         n = 0
         for w in self.b.list_windows():
             if not (w.matches(pattern) and self._ours(w)):
                 continue
             if self.platform in ("linux", "macos"):
+                helper = self._helper(w)
+                roles = _HELPER_WINDOW_ROLES if helper else ("frame", "window")
                 try:
                     tree = self.b.get_tree(w.id, max_depth=1)
-                    frames = [c for c in tree.children if c.role in ("frame", "window")]
+                    frames = [c for c in tree.children if c.role in roles]
                 except Exception:
                     frames = []
-                n += max(1, len(frames))
+                n += len(frames) if helper else max(1, len(frames))
             else:
                 n += 1
         return n
@@ -928,6 +940,13 @@ class _Run:
                 self.manual.append(c["manual"])
 
     def fail_evidence(self, window: str | None) -> None:
+        # Once per failure, from the window it happened in. The script-level
+        # handler calls this again with the main window as a fallback; without
+        # the guard it would replace a dialog's tree whenever the dialog's
+        # screenshot could not be taken.
+        if self.evidence_taken:
+            return
+        self.evidence_taken = True
         self.shot("fail.png", window)
         self.dump_tree(window)
 
@@ -1022,8 +1041,7 @@ def run_script(
             result["status"] = "MANUAL" if run.manual else "PASS"
         except ScriptFailure as f:
             run.annotate_failure(f.reason, hold_for_video=recording is not None)
-            if not (out_dir / "fail.png").exists():
-                run.fail_evidence(run.window)
+            run.fail_evidence(run.window)
             result["status"] = "FAIL"
             result["failure"] = {
                 k: v
