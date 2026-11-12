@@ -49,14 +49,14 @@ RED = _color(0.88, 0.19, 0.19)
 LABEL_BG = _color(0.11, 0.11, 0.13, 0.85)
 
 
-def _label(text: str, x: float, y: float) -> None:
+def _label(text: str, x: float, y: float, fail: bool = False) -> None:
     attrs = {
         NSFontAttributeName: NSFont.boldSystemFontOfSize_(15),
         NSForegroundColorAttributeName: NSColor.whiteColor(),
     }
     s = NSAttributedString.alloc().initWithString_attributes_(text, attrs)
     size = s.size()
-    LABEL_BG.setFill()
+    (RED if fail else LABEL_BG).setFill()
     NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
         NSMakeRect(x - 6, y - 3, size.width + 12, size.height + 6), 5, 5
     ).fill()
@@ -106,7 +106,7 @@ class OverlayView(NSView):
             else:
                 tx, ty = c[0] + OX, c[1] + OY
             if label:
-                _label(label, tx, max(ty, 4))
+                _label(label, tx, max(ty, 4), fail)
 
 
 class Ticker(NSObject):

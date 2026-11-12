@@ -92,11 +92,11 @@ items: list[tuple] = []  # (expires_at, kind, coords, label, color)
 lock = threading.Lock()
 
 
-def _label(hdc, text: str, x: int, y: int) -> None:
+def _label(hdc, text: str, x: int, y: int, bg_color: int = LABEL_BG) -> None:
     r = wt.RECT(x, y, x + 2000, y + 40)
     user32.DrawTextW(hdc, text, -1, ctypes.byref(r), DT_SINGLELINE | DT_NOPREFIX | DT_CALCRECT)
     pad = wt.RECT(r.left - 6, r.top - 3, r.right + 6, r.bottom + 3)
-    bg = gdi32.CreateSolidBrush(LABEL_BG)
+    bg = gdi32.CreateSolidBrush(bg_color)
     user32.FillRect(hdc, ctypes.byref(pad), bg)
     gdi32.DeleteObject(bg)
     gdi32.SetTextColor(hdc, WHITE)
@@ -140,7 +140,7 @@ def paint(hwnd) -> None:
         gdi32.SelectObject(hdc, old_pen)
         gdi32.DeleteObject(pen)
         if label:
-            _label(hdc, label, tx, max(ty, 4))
+            _label(hdc, label, tx, max(ty, 4), RED if color == RED else LABEL_BG)
     gdi32.SelectObject(hdc, old_font)
     gdi32.DeleteObject(font)
     gdi32.SelectObject(hdc, old_brush)
