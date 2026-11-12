@@ -1381,7 +1381,7 @@ class MacOSBackend(DesktopBackend):
                 h -= h % 2
                 cmd += ["-vf", f"crop={w}:{h}:{x}:{y}"]
 
-        cmd += ["-t", "1800", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", video_path]
+        cmd += self._h264_output(video_path)
 
         self._recordings[handle] = self._spawn_recorder(cmd, video_path)
         return handle
