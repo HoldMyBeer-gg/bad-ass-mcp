@@ -251,6 +251,12 @@ Three layers, later wins: the suite file (`--config`), a script's own
 - **Shell steps:** `{"action": "shell", "cmd": "..."}` runs a command between
   steps (for `only`-gated platform glue like xdotool); a non-zero exit fails
   the script at that step. `cmd` may be a per-platform object.
+- **Which shell:** `setup`, `teardown` and check `shell` entries and shell
+  steps run in `bash -c`, so write them for a POSIX shell. On Windows that
+  is Git Bash: the first `bash.exe` on PATH that isn't WSL's launcher
+  (`System32ash.exe`), else the one beside `git.exe`. WSL's bash is never
+  used, since `$SMOKE` and Windows paths don't reach it; with no Git Bash,
+  the entry fails and says so.
 - **Runner-only keys** (`note`, `confirm`, `verified`, `covers`, `notes`,
   `variables_note`) are ignored
   by the runner and kept for people.

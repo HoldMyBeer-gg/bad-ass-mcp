@@ -2082,3 +2082,63 @@ def test_SMOKE_is_absolute_when_the_results_folder_is_relative(tmp_path, monkeyp
     smoke = Path(run.vars["SMOKE"])
     assert smoke.is_absolute()
     assert smoke == tmp_path / "bam-results" / "01_x" / "files"
+
+
+# ── Windows: shell steps never land in WSL ───────────────────────────
+# System32\bash.exe is WSL's launcher. When it came first on PATH (as in a
+# PowerShell session), setup shell entries ran inside WSL: $SMOKE didn't
+# cross the boundary and a Windows path wouldn't resolve there anyway, so
+# `printf ... > "$SMOKE/smoke.keys"` failed.
+
+
+def _exe(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"")
+    return path
+
+
+def _win_layout(tmp_path):
+    root = tmp_path / "Windows"
+    wsl = _exe(root / "System32" / "bash.exe")
+    apps = _exe(
+        tmp_path / "Users" / "u" / "AppData" / "Local" / "Microsoft" / "WindowsApps" / "bash.exe"
+    )
+    git_bash = _exe(tmp_path / "Git" / "usr" / "bin" / "bash.exe")
+    git_cmd = _exe(tmp_path / "Git" / "cmd" / "git.exe")
+    return root, wsl, apps, git_bash, git_cmd
+
+
+def test_windows_bash_skips_the_wsl_launcher_for_git_bash(tmp_path):
+    from bad_ass_mcp.bam.runner import _windows_bash
+
+    root, wsl, apps, git_bash, _ = _win_layout(tmp_path)
+    path = [str(wsl.parent), str(apps.parent), str(git_bash.parent)]
+    assert _windows_bash(path, system_root=str(root)) == str(git_bash)
+
+
+def test_windows_bash_finds_git_bash_from_git_on_path(tmp_path):
+    """Git for Windows usually puts only Git/cmd on PATH."""
+    from bad_ass_mcp.bam.runner import _windows_bash
+
+    root, wsl, _, git_bash, git_cmd = _win_layout(tmp_path)
+    path = [str(wsl.parent), str(git_cmd.parent)]
+    assert _windows_bash(path, system_root=str(root)) == str(git_bash)
+
+
+def test_windows_bash_is_none_when_only_wsl_is_there(tmp_path):
+    from bad_ass_mcp.bam.runner import _windows_bash
+
+    root, wsl, apps, _, _ = _win_layout(tmp_path)
+    assert _windows_bash([str(wsl.parent), str(apps.parent)], system_root=str(root)) is None
+
+
+def test_shell_on_windows_without_bash_says_so(monkeypatch):
+    """No silent fallback into WSL, and none into cmd.exe either: a POSIX
+    command there fails with a confusing error."""
+    from bad_ass_mcp.bam import runner
+
+    monkeypatch.setattr(runner.os, "name", "nt")
+    monkeypatch.setattr(runner, "_windows_bash", lambda *a, **k: None)
+    with pytest.raises(runner.ScriptFailure) as e:
+        runner._shell("printf hi", {})
+    assert "Git Bash" in str(e.value)
