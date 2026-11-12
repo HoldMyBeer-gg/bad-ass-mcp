@@ -708,3 +708,41 @@ def test_password_read_back_leaves_other_fields_and_masks_alone():
     assert _password_read_back(lambda: "", password=False)() == ""
     assert _password_read_back(lambda: "••••", password=True)() == "••••"
     assert _password_read_back(lambda: None, password=True)() is None
+
+
+# ── recording region: the visible frame, not the resize border ───────
+
+
+def test_recording_region_is_the_visible_frame_not_the_resize_border():
+    """rusty-win-crab, November 11th: GetWindowRect on Windows 11 includes the
+    invisible ~7 px resize border, so the video showed a strip of whatever
+    sat behind the window. The DWM extended frame bounds are the visible
+    frame."""
+    from bad_ass_mcp.backend import windows as w
+
+    backend = object.__new__(w.WindowsBackend)
+    backend._recordings = {}
+    backend._window_rect = lambda hwnd: (93, 100, 1214, 807)
+    spawned = []
+    backend._spawn_recorder = lambda cmd, path: spawned.append(cmd)
+    with patch.object(w, "_dwm_frame_bounds", lambda hwnd: (100, 100, 1200, 800), create=True):
+        backend.start_recording("42")
+    cmd = spawned[0]
+    assert cmd[cmd.index("-offset_x") + 1] == "100"
+    assert cmd[cmd.index("-offset_y") + 1] == "100"
+    assert cmd[cmd.index("-video_size") + 1] == "1200x800"
+
+
+def test_recording_region_falls_back_to_the_window_rect_without_dwm():
+    from bad_ass_mcp.backend import windows as w
+
+    backend = object.__new__(w.WindowsBackend)
+    backend._recordings = {}
+    backend._window_rect = lambda hwnd: (93, 100, 1214, 807)
+    spawned = []
+    backend._spawn_recorder = lambda cmd, path: spawned.append(cmd)
+    with patch.object(w, "_dwm_frame_bounds", lambda hwnd: None, create=True):
+        backend.start_recording("42")
+    cmd = spawned[0]
+    assert cmd[cmd.index("-offset_x") + 1] == "93"
+    assert cmd[cmd.index("-video_size") + 1] == "1214x806"
