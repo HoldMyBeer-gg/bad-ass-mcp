@@ -97,6 +97,8 @@ def print_summary(run_dir: Path, *, color: bool = False) -> None:
             line += f"  [attempt {s['attempts']}]"
         if s.get("failure"):
             line += f"\n         {s['failure'].get('reason', '')}"
+        if s.get("video_error"):
+            line += f"\n         no video: {s['video_error']}"
         print(line)
     totals = run.get("totals", {})
     words = {

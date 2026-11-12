@@ -2050,3 +2050,20 @@ def test_a_recorder_that_cannot_start_does_not_fail_the_run(tmp_path):
     assert r["status"] == "PASS", r
     assert "video" not in r
     assert "Wayland" in r["video_error"]
+
+
+def test_the_summary_says_when_video_was_skipped(tmp_path, capsys):
+    from bad_ass_mcp.bam.cli import print_summary
+
+    script = write(tmp_path, "vid", {"phases": []})
+    run_dir = run_suite(
+        _NoVideo(),
+        [script],
+        "linux",
+        {**CONFIG, "record_video": True},
+        tmp_path / "results",
+        commit="abc",
+    )
+    print_summary(run_dir, color=False)
+    out = capsys.readouterr().out
+    assert "no video" in out and "Wayland" in out
