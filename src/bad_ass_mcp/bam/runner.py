@@ -56,12 +56,14 @@ class ScriptFailure(Exception):
 def _is_wsl_launcher(path: str, system_root: str) -> bool:
     r"""System32\bash.exe (and the WindowsApps alias) start WSL, where the
     runner's environment and Windows paths don't arrive."""
-    p = os.path.normcase(os.path.abspath(path))
-    root = os.path.normcase(os.path.abspath(system_root))
+    # Windows paths are case-insensitive; lower() rather than normcase(),
+    # which does nothing off Windows (where the tests also run).
+    p = os.path.abspath(path).lower()
+    root = os.path.abspath(system_root).lower()
     for sub in ("system32", "syswow64", "sysnative"):
         if p.startswith(os.path.join(root, sub) + os.sep):
             return True
-    return os.path.normcase(os.path.join("microsoft", "windowsapps")) in p
+    return os.path.join("microsoft", "windowsapps") in p
 
 
 def _windows_bash(path_dirs: list[str], system_root: str) -> str | None:
