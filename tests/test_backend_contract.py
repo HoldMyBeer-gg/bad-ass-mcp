@@ -186,7 +186,7 @@ def test_wait_for_element_missing_state_returns_none(backend):
 
 # ── wait_for_text ─────────────────────────────────────────────────────
 #
-# Michael, 2026-11-14: "We have wait_for_element, right? Would
+# The maintainer, 2026-11-14: "We have wait_for_element, right? Would
 # wait_for_text(el, text) work?" A script that types into a busy app and
 # reads the field straight back races the app; waiting on the value is
 # the public form of the settle loop type_text grew in #41.
@@ -222,7 +222,7 @@ def test_wait_for_text_can_refind_the_element_and_match_a_pattern(backend):
     """A status bar is replaced, not edited: egui gives the new text a new
     node and the old handle keeps the old text for good. So the wait can
     take a locator instead of a handle and re-find the element each poll.
-    Michael: 'in the case of "Opened" we can't know the path so "^Opened"
+    The maintainer: 'in the case of "Opened" we can't know the path so "^Opened"
     should be enough.' A button has no value, so its name is the text."""
     got = backend.wait_for_text(window_id=FAKE_WINDOW_ID, role="button", pattern="^O", timeout=0.5)
     assert got == "OK"
