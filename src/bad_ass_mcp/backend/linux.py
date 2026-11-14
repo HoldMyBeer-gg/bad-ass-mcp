@@ -726,16 +726,18 @@ class LinuxBackend(DesktopBackend):
             return result
         # A busy app applies keystrokes after the call returns (rustydemon
         # reading an archive over sshfs showed '*.me' for '*.mesh'), so give
-        # the readback up to a second to settle, as select_option does.
+        # the readback time to settle, as select_option does: a second, plus
+        # 25 ms per character, since a 36-character query took 0.99 s there.
         got = self._read_text(self._resolve(handle_id))
-        deadline = time.monotonic() + 1.0
+        window = 1.0 + 0.025 * len(text)
+        deadline = time.monotonic() + window
         while got is not None and not _landed(got, text) and time.monotonic() < deadline:
             time.sleep(0.05)
             got = self._read_text(self._resolve(handle_id))
         if got is not None and not _landed(got, text):
             if got and text.startswith(got):
                 why = (
-                    "only a prefix of the text arrived within 1 s "
+                    f"only a prefix of the text arrived within {window:.1f} s "
                     "(the app applies keys slowly, or dropped some)"
                 )
             else:

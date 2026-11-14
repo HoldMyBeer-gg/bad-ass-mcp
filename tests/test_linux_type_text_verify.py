@@ -88,7 +88,7 @@ def test_the_failure_names_what_the_field_reads():
 # after the keystrokes, before a busy app had applied them all.
 
 
-def _settling(backend, mod, reads):
+def _settling(backend, mod, reads, text="*.mesh"):
     """type_text with the readback returning `reads` in turn (the last one
     repeats), with sleep stubbed and the clock advancing 0.1 s per look."""
     node = _field("")
@@ -105,7 +105,7 @@ def _settling(backend, mod, reads):
         patch("time.sleep"),
         patch("time.monotonic", side_effect=lambda: next(ticks)),
     ):
-        return backend.type_text("h", "*.mesh")
+        return backend.type_text("h", text)
 
 
 def test_a_slow_app_that_catches_up_within_a_second_is_ok():
@@ -120,7 +120,7 @@ def test_a_prefix_that_never_completes_says_only_that_much_arrived():
         r = _settling(backend, mod, ["*.me"])
     assert not r.ok
     assert "reads '*.me'" in r.error
-    assert "only a prefix" in r.error
+    assert "only a prefix of the text arrived within 1.1 s" in r.error
     assert "Wayland" not in r.error
 
 
@@ -132,3 +132,13 @@ def test_the_wayland_hint_is_given_only_on_a_wayland_session():
         off = _settling(backend, mod, [""])
     assert not on.ok and "Wayland" in on.error
     assert not off.ok and "Wayland" not in off.error
+
+
+def test_the_wait_grows_with_the_length_of_the_text():
+    """Kali's 36-character query settled in 0.99 s, at the edge of a fixed
+    1 s window. The window is 1 s plus 25 ms per character, so 40 characters
+    get 2 s: a readback that completes after 1.5 s is still ok."""
+    backend, mod = _make_backend()
+    text = "a" * 40
+    r = _settling(backend, mod, [text[:7]] * 15 + [text], text=text)
+    assert r.ok
