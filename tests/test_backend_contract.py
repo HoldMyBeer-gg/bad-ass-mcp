@@ -184,6 +184,89 @@ def test_wait_for_element_missing_state_returns_none(backend):
     assert el is None
 
 
+# ── wait_for_text ─────────────────────────────────────────────────────
+#
+# Michael, 2026-11-14: "We have wait_for_element, right? Would
+# wait_for_text(el, text) work?" A script that types into a busy app and
+# reads the field straight back races the app; waiting on the value is
+# the public form of the settle loop type_text grew in #41.
+
+
+def test_wait_for_text_returns_the_value_once_it_matches(backend):
+    assert backend.wait_for_text("combo-size", "Medium", timeout=0.5) == "Medium"
+
+
+def test_wait_for_text_waits_for_a_late_value(backend):
+    import threading
+
+    threading.Timer(0.15, lambda: backend._values.__setitem__("txt-name", "late")).start()
+    assert backend.wait_for_text("txt-name", "late", timeout=1.0) == "late"
+
+
+def test_wait_for_text_times_out_to_none(backend):
+    assert backend.wait_for_text("txt-name", "never", timeout=0.2) is None
+
+
+def test_wait_for_text_can_match_a_substring(backend):
+    backend._values["txt-name"] = "Opened: /games/x (anbs) | root=MPK"
+    assert backend.wait_for_text("txt-name", "root=MPK", timeout=0.2, contains=True)
+    assert backend.wait_for_text("txt-name", "root=MPK", timeout=0.2) is None
+
+
+def test_wait_for_text_compares_unicode_in_nfc(backend):
+    backend._values["txt-name"] = "caf\u00e9"  # one code point
+    assert backend.wait_for_text("txt-name", "cafe\u0301", timeout=0.2) == "caf\u00e9"
+
+
+def test_wait_for_text_can_refind_the_element_and_match_a_pattern(backend):
+    """A status bar is replaced, not edited: egui gives the new text a new
+    node and the old handle keeps the old text for good. So the wait can
+    take a locator instead of a handle and re-find the element each poll.
+    Michael: 'in the case of "Opened" we can't know the path so "^Opened"
+    should be enough.' A button has no value, so its name is the text."""
+    got = backend.wait_for_text(window_id=FAKE_WINDOW_ID, role="button", pattern="^O", timeout=0.5)
+    assert got == "OK"
+    assert (
+        backend.wait_for_text(window_id=FAKE_WINDOW_ID, role="button", pattern="^Z", timeout=0.2)
+        is None
+    )
+
+
+def test_wait_for_text_by_locator_sees_a_late_value(backend):
+    import threading
+
+    threading.Timer(0.15, lambda: backend._values.__setitem__("txt-name", "late")).start()
+    got = backend.wait_for_text(
+        window_id=FAKE_WINDOW_ID, role="text", name="Name", text="late", timeout=1.0
+    )
+    assert got == "late"
+
+
+def test_run_sequence_wait_for_text(backend):
+    ok, late = backend.run_sequence(
+        [
+            {"action": "wait_for_text", "handle": "combo-size", "text": "Medium", "timeout": 0.5},
+            {"action": "wait_for_text", "handle": "txt-name", "text": "never", "timeout": 0.2},
+        ],
+        stop_on_error=False,
+    )
+    assert ok["ok"] is True and ok["value"] == "Medium"
+    assert late["ok"] is False
+    assert "never" in late["error"] and "reads ''" in late["error"]
+    (r,) = backend.run_sequence(
+        [
+            {
+                "action": "wait_for_text",
+                "window_id": FAKE_WINDOW_ID,
+                "role": "button",
+                "pattern": "^O",
+                "timeout": 0.3,
+            }
+        ]
+    )
+    assert r["ok"] is True and r["value"] == "OK"
+
+
 # ── screenshot ────────────────────────────────────────────────────────
 
 

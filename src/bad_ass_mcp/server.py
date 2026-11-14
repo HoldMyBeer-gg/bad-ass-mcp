@@ -287,6 +287,54 @@ def wait_for_element(
     }
 
 
+@mcp.tool()
+def wait_for_text(
+    handle_id: str | None = None,
+    text: str | None = None,
+    pattern: str | None = None,
+    contains: bool = False,
+    timeout: float = 5.0,
+    window_id: str | None = None,
+    role: str | None = None,
+    name: str | None = None,
+) -> dict:
+    """Wait until an element reads `text`, contains it (contains=true), or
+    matches the regex `pattern` ("^Opened": starts with Opened, when the
+    rest is unknown). Compares whitespace-trimmed, NFC-normalised text.
+
+    Pass handle_id for a field whose value changes in place (a search box
+    after type_text; get_value straight away still shows a prefix on a busy
+    app). Pass window_id plus role and/or name for a label or status bar:
+    toolkits like egui replace such a node when its text changes, so the old
+    handle keeps the old text, and the element is re-found on every poll. An
+    element without a value is read by its name.
+
+    Returns {ok, value}; on timeout {ok: false, error} with what was read."""
+    b = _backend()
+    value = b.wait_for_text(
+        handle_id,
+        text,
+        pattern=pattern,
+        contains=contains,
+        timeout=timeout,
+        window_id=window_id,
+        role=role,
+        name=name,
+    )
+    if value is not None:
+        return {"ok": True, "value": value}
+    step = {
+        "handle": handle_id,
+        "text": text,
+        "pattern": pattern,
+        "contains": contains,
+        "window_id": window_id,
+        "role": role,
+        "name": name,
+    }
+    return {"ok": False, "error": "Timeout: " + b._wait_for_text_error(step, timeout)}
+
+
 def _png_dimensions(data: bytes) -> tuple[int, int] | None:
     """Read width/height from a PNG IHDR chunk without decoding the image.
 
@@ -500,6 +548,10 @@ def run_sequence(steps: list, stop_on_error: bool = True) -> list:
       {"action": "sleep",            "seconds": 0.15}
       {"action": "wait_for_element", "window_id": "...", "role": "...",
                                      "name": "...", "state": "...", "timeout": 5.0}
+      {"action": "wait_for_text",    "handle": "...", "text": "...", "timeout": 5.0,
+                                     "contains": false, "pattern": null}
+                                     (or "window_id" + "role"/"name" instead of
+                                     "handle": re-found each poll, for labels)
       {"action": "wait_for_window",  "pattern": "...", "timeout": 5.0}
 
     Returns a list of per-step results. Stops at first failure unless

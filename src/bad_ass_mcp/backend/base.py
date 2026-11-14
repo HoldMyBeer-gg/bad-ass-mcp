@@ -295,6 +295,86 @@ class DesktopBackend(ABC):
     ) -> ElementHandle | None:
         """Poll until a matching element exists and optionally has the given state."""
 
+    def wait_for_text(
+        self,
+        handle_id: str | None = None,
+        text: str | None = None,
+        *,
+        pattern: str | None = None,
+        contains: bool = False,
+        timeout: float = 5.0,
+        window_id: str | None = None,
+        role: str | None = None,
+        name: str | None = None,
+    ) -> str | None:
+        """Poll until an element reads `text` (whitespace aside, Unicode
+        compared in NFC), contains it, or matches the regex `pattern`
+        (re.search, so "^Opened" means "starts with Opened"). Returns the
+        text that matched, or None on timeout.
+
+        Give a handle for a field whose value changes in place (a search
+        box after type_text; read straight away a busy app still shows a
+        prefix). Give window_id plus role/name for a label or status bar:
+        egui replaces such a node when its text changes, and the old
+        handle keeps the old text for good, so the element is re-found
+        each poll. An element without a value is read by its name."""
+        import re
+
+        want = _nfc(text) if text is not None else None
+        rx = re.compile(pattern) if pattern else None
+
+        def matches(value: str) -> bool:
+            got = _nfc(value)
+            if rx is not None:
+                return rx.search(got) is not None
+            if want is None:
+                return False
+            return (want in got) if contains else (got == want)
+
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while True:
+            for value in self._texts_of(handle_id, window_id, role, name):
+                if matches(value):
+                    return value
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.1)
+
+    def _wait_for_text_error(self, step: dict, timeout: float) -> str:
+        now = self._texts_of(
+            step.get("handle"), step.get("window_id"), step.get("role"), step.get("name")
+        )
+        return _wait_for_text_error_text(step, timeout, now)
+
+    def _texts_of(
+        self, handle_id: str | None, window_id: str | None, role: str | None, name: str | None
+    ) -> list[str]:
+        """What wait_for_text compares: the handle's value, or the value (else
+        name) of every element the locator finds right now."""
+        if handle_id is not None:
+            try:
+                value = self.get_value(handle_id)
+            except Exception:
+                return []
+            return [str(value)] if value is not None else []
+        if window_id is None:
+            return []
+        out: list[str] = []
+        try:
+            found = self.find_elements(window_id, role=role, name=name)
+        except Exception:
+            return []
+        for el in found:
+            try:
+                value = self.get_value(el.id)
+            except Exception:
+                value = None
+            if value is None:
+                value = el.name
+            if value is not None:
+                out.append(str(value))
+        return out
+
     @abstractmethod
     def screenshot(self, window_id: str | None = None, output_path: str | None = None) -> bytes:
         """Capture PNG bytes of a window, or the full screen if window_id is None.
@@ -588,6 +668,10 @@ class DesktopBackend(ABC):
           {"action": "sleep",            "seconds": 0.1}
           {"action": "wait_for_element", "window_id": "...", "role": null,
                                          "name": null, "state": null, "timeout": 5.0}
+          {"action": "wait_for_text",    "handle": "...", "text": "...", "timeout": 5.0,
+                                         "contains": false, "pattern": null}  → value once
+                                         it reads so; or "window_id" + "role"/"name" in
+                                         place of "handle", re-found each poll (labels)
           {"action": "wait_for_window",  "pattern": "...", "timeout": 5.0}
 
         Returns a list of per-step result dicts with at least {step, action, ok}.
@@ -682,6 +766,22 @@ class DesktopBackend(ABC):
                         entry["error"] = (
                             f"timed out after {timeout:g}s waiting for {wanted or 'an element'}"
                         )
+                elif action == "wait_for_text":
+                    timeout = float(step.get("timeout", 5.0))
+                    contains = bool(step.get("contains", False))
+                    value = self.wait_for_text(
+                        step.get("handle"),
+                        step.get("text"),
+                        pattern=step.get("pattern"),
+                        contains=contains,
+                        timeout=timeout,
+                        window_id=step.get("window_id"),
+                        role=step.get("role"),
+                        name=step.get("name"),
+                    )
+                    entry.update(ok=value is not None, value=value)
+                    if value is None:
+                        entry["error"] = self._wait_for_text_error(step, timeout)
                 elif action == "wait_for_window":
                     timeout = float(step.get("timeout", 5.0))
                     w = self.wait_for_window(step["pattern"], timeout)
@@ -756,3 +856,23 @@ def platform_modifiers(mods: tuple[str, ...], platform: str) -> tuple[str, ...]:
     else:
         mapped = {"ctrl" if m == "cmd" else m for m in mods}
     return tuple(m for m in _MODIFIER_ORDER if m in mapped)
+
+
+def _wait_for_text_error_text(step: dict, timeout: float, now: list[str]) -> str:
+    want = step.get("pattern") or step.get("text")
+    verb = "match" if step.get("pattern") else ("contain" if step.get("contains") else "read")
+    if step.get("handle") is not None:
+        reads = f"it reads {now[0] if now else ''!r}"
+    elif now:
+        reads = "found " + ", ".join(repr(v[:60]) for v in now[:3])
+    else:
+        reads = "no element matched the locator"
+    return f"timed out after {timeout:g}s waiting for the field to {verb} {want!r}; {reads}"
+
+
+def _nfc(value: str) -> str:
+    """Trimmed, NFC-normalised text, so "é" typed as e + combining acute
+    matches "é" stored as one code point."""
+    import unicodedata
+
+    return unicodedata.normalize("NFC", value).strip()

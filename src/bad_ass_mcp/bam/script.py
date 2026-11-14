@@ -68,6 +68,7 @@ def build_steps(
     *,
     timeout_scale: float = 1.0,
     secrets: dict[str, str] | None = None,
+    specs: dict[str, dict] | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """run_sequence steps for this platform, plus per-step runner metadata
     ({"expect", "save"}) aligned by index. `timeout_scale` stretches every
@@ -101,8 +102,21 @@ def build_steps(
         ):
             if key in step:
                 s[field] = handles[step[key]]
+        if s.get("action") == "wait_for_text" and step.get("target") in (specs or {}):
+            # A replaced label (egui status bar) keeps its old text on the
+            # old handle, so the wait re-finds the element each poll by
+            # the learn spec instead of holding the handle.
+            spec = specs[step["target"]]
+            s.pop("handle", None)
+            s["window_id"] = window_id
+            for k in ("name", "role"):
+                if k in spec:
+                    s[k] = expand(pick(spec[k], platform), env)
         if timeout_scale != 1:
-            if s.get("action") in ("wait_for_element", "wait_for_window") and "timeout" in s:
+            if (
+                s.get("action") in ("wait_for_element", "wait_for_window", "wait_for_text")
+                and "timeout" in s
+            ):
                 s["timeout"] = s["timeout"] * timeout_scale
             if s.get("action") == "sleep" and "seconds" in s:
                 s["seconds"] = s["seconds"] * timeout_scale

@@ -167,6 +167,17 @@ Three layers, later wins: the suite file (`--config`), a script's own
 - **Values:** a `get_value` step may `"save": "x"`; a later `"expect": "$x"` (or a
   literal) must match, or the script fails at that step. `"expect_not": "$x"`
   is the opposite: the value must have changed.
+- **Waiting on a value:** `{"action": "wait_for_text", "target": "box", "text":
+  "crab", "timeout": 5}` polls the element until it reads the text (whitespace
+  trimmed, Unicode compared in NFC). `"contains": true` passes once the value
+  contains it; `"pattern": "^Opened"` instead of `text` matches a regular
+  expression, for a status line whose rest (a path, a count) the script can't
+  know. A `get_value` + `expect` right after `type` reads once and can catch a
+  busy app mid-keystroke; this waits. The target is re-found on every poll
+  from its learn entry, because a label whose text changed is a new element
+  in egui and the old handle keeps the old text. An element with no value is
+  read by its name. `$x` in `text` reads a saved value. The report line is
+  `“Box” reads "crab"`, `contains "..."` or `matches "^Opened"`.
 - **Drags:** `{"action": "drag", "from_target": "a", "to_target": "b"}` drags
   between two learned elements (their centers); `"dx"` / `"dy"` instead of
   `to_target` drags from the element by that many pixels (a splitter).

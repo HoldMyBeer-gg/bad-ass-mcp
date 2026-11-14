@@ -304,6 +304,7 @@
             "drag",
             "sleep",
             "wait_for_element",
+            "wait_for_text",
             "wait_for_window",
             "shell"
           ],
@@ -749,6 +750,70 @@
             "additionalProperties": false,
             "required": [
               "seconds"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "wait_for_text"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "only": {
+                "$ref": "#/$defs/only"
+              },
+              "note": {
+                "$ref": "#/$defs/note"
+              },
+              "confirm": {
+                "$ref": "#/$defs/note"
+              },
+              "action": {
+                "const": "wait_for_text"
+              },
+              "target": {
+                "type": "string",
+                "description": "A label from this phase's learn block."
+              },
+              "text": {
+                "$ref": "#/$defs/per_platform_string",
+                "description": "What the element must read (or contain). $name reads a saved value."
+              },
+              "pattern": {
+                "$ref": "#/$defs/per_platform_string",
+                "description": "A regular expression the text must match (re.search): \"^Opened\" for a status line whose rest is unknown. Instead of text."
+              },
+              "contains": {
+                "type": "boolean",
+                "description": "Pass once the value contains the text, instead of equalling it."
+              },
+              "timeout": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "target"
+            ],
+            "anyOf": [
+              {
+                "required": [
+                  "text"
+                ]
+              },
+              {
+                "required": [
+                  "pattern"
+                ]
+              }
             ]
           }
         },

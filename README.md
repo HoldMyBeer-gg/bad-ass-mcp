@@ -38,6 +38,7 @@ Actions fire on control objects directly, so the target window doesn't need focu
 | `get_value` | Get the current value or text of an element |
 | `wait_for_window` | Wait until a window matching a pattern appears |
 | `wait_for_element` | Wait until an element exists and optionally has a given state |
+| `wait_for_text` | Wait until an element reads a text, contains it, or matches a regex such as `^Opened`; by handle, or re-found each poll by role and name for labels |
 | `screenshot` | Capture a PNG (write to `output_path` or return base64) |
 | `start_recording` | Start recording the screen (or a specific window) |
 | `stop_recording` | Stop recording and export as GIF (short clips) or MP4 (long sessions, no re-encode) |
