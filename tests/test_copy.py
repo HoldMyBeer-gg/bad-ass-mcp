@@ -21,6 +21,6 @@ def test_no_em_dashes(path):
     hits = [
         f"{path.relative_to(ROOT)}:{n}: {line.strip()}"
         for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
-        if "—" in line
+        if EM_DASH in line
     ]
     assert not hits, "\n".join(hits)
