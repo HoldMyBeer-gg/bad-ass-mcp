@@ -60,7 +60,7 @@ def test_bgra_to_png_1x1_pixel():
 
 def test_bgra_to_png_rejects_empty():
     """0-width or 0-height should produce minimal valid PNG or empty bytes."""
-    # We don't require a specific error — just don't crash
+    # We don't require a specific error, just no crash
     try:
         result = _bgra_to_png(0, 0, b"")
         assert isinstance(result, bytes)
@@ -208,7 +208,7 @@ def test_stop_recording_rejects_unknown_handle():
 
 @_win32
 def test_wake_chromium_failed_wake_stays_false():
-    """A failed wake must keep reporting False on later calls — returning
+    """A failed wake must keep reporting False on later calls: returning
     True for merely-attempted PIDs flips accessible=true on the second
     list_windows even though the tree never populated."""
     from bad_ass_mcp.backend.windows import WindowsBackend

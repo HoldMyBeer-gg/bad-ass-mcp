@@ -81,7 +81,7 @@ def test_result_stays_within_budget():
     size = len(json.dumps(out))
 
     # The marker fields add a little, but we stay in the same ballpark as the
-    # budget — nowhere near the unbounded ~full-tree size.
+    # budget, nowhere near the unbounded ~full-tree size.
     assert size < 5_000 * 1.2
 
 

@@ -4,7 +4,7 @@
 
 *Every other tool needs a browser or a vision model. This one reads what the OS already knows.*
 
-A cross-platform MCP server for desktop GUI automation — driven by accessibility APIs, not screenshots.
+A cross-platform MCP server for desktop GUI automation, driven by accessibility APIs, not screenshots.
 
 Works with Claude, Codex, Gemini, Ollama, or any OpenAI-compatible client that supports MCP.
 
@@ -15,7 +15,7 @@ Works with Claude, Codex, Gemini, Ollama, or any OpenAI-compatible client that s
 
 Most AI desktop automation tools work by taking screenshots and asking a vision model "what do you see?" That's slow, expensive, and fragile.
 
-Every major OS exposes a structured accessibility tree — the same one used by screen readers — that describes every button, text field, combo box, and menu in every running application. **bad-ass-mcp** speaks that language directly.
+Every major OS exposes a structured accessibility tree, the same one used by screen readers, that describes every button, text field, combo box, and menu in every running application. **bad-ass-mcp** speaks that language directly.
 
 - **macOS**: AXUIElement via PyObjC
 - **Linux**: AT-SPI2 via `gi.repository.Atspi`
@@ -31,7 +31,7 @@ Actions fire on control objects directly, so the target window doesn't need focu
 | `get_tree` | Full accessibility tree for a window as nested JSON |
 | `find_elements` | Find elements by role and/or name |
 | `click` | Click / invoke an element (foreground-independent); `button="right"`, `clicks=2`; falls back to a real click at the element's center |
-| `click_at` | Click at absolute screen coordinates — fallback for webview/canvas UI; takes `button` and `clicks` |
+| `click_at` | Click at absolute screen coordinates. Fallback for webview/canvas UI; takes `button` and `clicks` |
 | `drag` | Drag-and-drop with real pointer events, between coordinates or element handles |
 | `type_text` | Type text into a field (SetValue → EditableText → key injection) |
 | `select_option` | Select an option in a combo box or list (a11y items → SetValue → keystrokes), verified by reading the value back |
@@ -42,7 +42,7 @@ Actions fire on control objects directly, so the target window doesn't need focu
 | `start_recording` | Start recording the screen (or a specific window) |
 | `stop_recording` | Stop recording and export as GIF (short clips) or MP4 (long sessions, no re-encode) |
 | `learn_layout` | Resolve semantic names → live handle IDs (one call per session) |
-| `run_sequence` | Execute a list of actions server-side — no per-action round-trips |
+| `run_sequence` | Execute a list of actions server-side, no per-action round-trips |
 
 ## Field notes: when the tree isn't enough
 
@@ -62,7 +62,7 @@ Observed driving large native apps (a game editor, a DAW) on Windows:
 ## Webviews: waking lazy accessibility trees
 
 Chromium-based apps (Electron, CEF, and every Chromium browser) have a
-full accessibility tree — they just don't *build* it until an assistive
+full accessibility tree. They just don't *build* it until an assistive
 technology announces itself. Until then the window looks canvas-only:
 `get_tree` returns nothing and screenshot-clicking is the only option.
 
@@ -88,7 +88,7 @@ re-probes before giving up:
   VoiceOver sets, watched by plain Chrome/CEF). The attribute set only
   succeeds on apps that support it, so it's a free no-op elsewhere.
 - **Windows**: sets the system `SPI_SETSCREENREADERRUNNING` flag, then
-  queries the `Chrome_RenderWidgetHostHWND` child window — Chromium
+  queries the `Chrome_RenderWidgetHostHWND` child window: Chromium
   hangs its DOM tree off that renderer child, not the top-level HWND
   (which only shows empty panes). `get_tree` / `find_elements` are
   routed through the renderer child automatically.
@@ -96,7 +96,7 @@ re-probes before giving up:
 One wake attempt per process per server run. If `list_windows` still
 reports `accessible: false` after this, the window is genuinely
 canvas-only (custom OpenGL/Vulkan surface, immediate-mode toolkit
-without AccessKit) — fall back to `screenshot` + `click_at`.
+without AccessKit). Fall back to `screenshot` + `click_at`.
 
 The tradeoff: a woken app spends some memory/CPU maintaining its tree,
 which is exactly why Chromium lazy-loads it. The wake targets the app
@@ -111,7 +111,7 @@ session-global, but only a11y-aware apps respond, and only on demand).
 # macOS
 pip install 'bad-ass-mcp[macos]'
 
-# Linux — install system PyGObject + AT-SPI bindings first, then:
+# Linux: install system PyGObject + AT-SPI bindings first, then:
 pip install bad-ass-mcp
 
 # Windows
@@ -131,7 +131,7 @@ sudo pacman -S python-gobject at-spi2-core xdotool xorg-xprop imagemagick
 sudo dnf install python3-gobject at-spi2-core xdotool xprop ImageMagick
 ```
 
-Then make sure AT-SPI is enabled (most desktop environments — GNOME, KDE, XFCE — have it on by default):
+Then make sure AT-SPI is enabled (most desktop environments, GNOME, KDE and XFCE among them, have it on by default):
 
 ```bash
 # Check

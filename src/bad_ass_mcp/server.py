@@ -2,7 +2,7 @@ from __future__ import annotations
 
 # Trust model: this server runs over stdio and assumes the MCP client (e.g. Claude)
 # is fully trusted. There is no authentication. Do not expose this server over a
-# network socket or to untrusted processes — the AX/AT-SPI permissions it holds
+# network socket or to untrusted processes: the AX/AT-SPI permissions it holds
 # grant control over every application on the desktop.
 import json
 import platform
@@ -23,7 +23,7 @@ mcp = FastMCP("bad-ass-mcp")
 # the caller knows to narrow with max_depth or find_elements.
 #
 # get_tree returns a COMPACT JSON string, not a dict. FastMCP serialises a
-# returned dict with pydantic_core.to_json(..., indent=2) — that hardcoded
+# returned dict with pydantic_core.to_json(..., indent=2), and that hardcoded
 # indent inflates a compact tree ~2.4x, so a dict measured at 40 KB landed at
 # 96 KB on the wire and overflowed anyway. Returning a pre-serialised compact
 # string sidesteps the framework's indenting entirely, so the byte budget
@@ -66,11 +66,11 @@ def list_windows() -> list[dict]:
         bounds are null unless it runs under XWayland. Use this to
         translate screenshot pixels to click_at coordinates.
       accessible: false signals the platform a11y tree has nothing for
-        this window — find_elements / get_tree will return empty. Skip
+        this window, so find_elements / get_tree will return empty. Skip
         those tools and use screenshot + click_at directly. Chromium-family
-        windows (Electron/CEF) get an automatic wake poke first — their
+        windows (Electron/CEF) get an automatic wake poke first: their
         lazy a11y trees are enabled and re-probed before this is stamped
-        false — so a false here means genuinely canvas-only: custom
+        false. So a false here means genuinely canvas-only: custom
         OpenGL/Vulkan surfaces, raw immediate-mode toolkits without an
         AccessKit adapter. (egui+accesskit surfaces as accessible=true.)"""
     return [w.__dict__ for w in _backend().list_windows()]
@@ -174,7 +174,7 @@ def find_elements(
     name: str | None = None,
 ) -> list[dict]:
     """Find interactive elements by role and/or name.
-    Returns element handles — pass the 'id' field to click/type_text/etc.
+    Returns element handles; pass the 'id' field to click/type_text/etc.
     Common roles: button, combo box, text, entry, check box, menu item.
     name is an exact match, not a substring ("Load Listfile…" with its
     ellipsis, "Export Folder" not "Export"); use get_tree to read names."""
@@ -208,7 +208,7 @@ def click(handle_id: str, button: str = "left", clicks: int = 1) -> dict:
 
 @mcp.tool()
 def type_text(handle_id: str, text: str, paste: bool = False) -> dict:
-    """Type text into a field. Uses native SetValue — foreground-independent.
+    """Type text into a field. Uses native SetValue, which is foreground-independent.
     Falls back to key injection if the element doesn't support SetValue.
 
     SetValue REPLACES the field's content. A window matched by title can be
@@ -292,7 +292,7 @@ def _png_dimensions(data: bytes) -> tuple[int, int] | None:
 
     PNG layout: 8-byte signature, then IHDR chunk (length=13, type='IHDR',
     width u32 BE at offset 16, height u32 BE at offset 20). 24 bytes is
-    enough to answer the question — cheaper than spawning sips.
+    enough to answer the question, cheaper than spawning sips.
     """
     if len(data) < 24 or data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
         return None
@@ -303,11 +303,11 @@ def _png_dimensions(data: bytes) -> tuple[int, int] | None:
 
 @mcp.tool()
 def screenshot(window_id: str | None = None, output_path: str | None = None) -> dict:
-    """Capture a screenshot as PNG. Last resort — prefer accessibility tools.
+    """Capture a screenshot as PNG. Last resort; prefer accessibility tools.
 
     Pass window_id to crop to a specific window, or omit for full screen.
     Pass output_path (e.g. '/tmp/shot.png') to write the PNG to disk and get
-    back {ok, path, width, height} — strongly preferred for any real-window
+    back {ok, path, width, height}. Strongly preferred for any real-window
     capture, since base64-inline screenshots routinely overflow the response
     token budget. Without output_path, returns {ok, data, width, height}
     with base64-encoded PNG bytes.
@@ -317,7 +317,7 @@ def screenshot(window_id: str | None = None, output_path: str | None = None) -> 
     point size to recover the scale factor for coordinate math.
 
     Errors with {ok: False, error: ...} if window_id is given but the window
-    cannot be located — does NOT silently fall back to a full-desktop capture.
+    cannot be located. Does NOT silently fall back to a full-desktop capture.
 
     Caveat on Linux/KWin: per-window capture crops a full-screen shot to the
     target window's rectangle, because the KDE compositor won't let
@@ -367,16 +367,16 @@ def click_at(
     button: "left" (default), "right" (context menus) or "middle".
     clicks: 1 (default) or 2 for a real double-click.
 
-    Fallback for when accessibility-based clicking can't reach a target —
+    Fallback for when accessibility-based clicking can't reach a target:
     webview content (Tauri/Electron/CEF), custom-drawn UI, OpenGL/canvas, etc.
 
     Delivery is system-global (kCGHIDEventTap on macOS) so the click actually
-    reaches webviews — this was a regression in the first version, which used
+    reaches webviews. This was a regression in the first version, which used
     PID-targeted delivery that silently no-op'd on webview content while
     still returning ok. The cost is that the click affects whatever window
     is at (x, y), so make sure the target window is on top first.
 
-    window_id is advisory only — the call cannot verify delivery, just that
+    window_id is advisory only: the call cannot verify delivery, just that
     the events were posted."""
     try:
         result = _backend().click_at(x, y, window_id, button=button, clicks=clicks)
@@ -406,7 +406,7 @@ def drag(
     find_elements or get_tree); a handle is resolved to its on-screen
     center. You can mix: a handle on one end and coordinates on the other.
 
-    For drop targets that have no accessibility path — editors that only
+    For drop targets that have no accessibility path, editors that only
     accept drops from another panel, list reordering, sliders. Delivery is
     system-global, so both ends must be visible and the window on top."""
     be = _backend()
@@ -484,7 +484,7 @@ def learn_layout(window_id: str, descriptors: dict) -> dict:
 
 @mcp.tool()
 def run_sequence(steps: list, stop_on_error: bool = True) -> list:
-    """Execute a list of actions server-side in a single call — no round-trips.
+    """Execute a list of actions server-side in a single call, no round-trips.
 
     Each step is a dict with an "action" key plus action-specific fields:
       {"action": "click",            "handle": "..."}

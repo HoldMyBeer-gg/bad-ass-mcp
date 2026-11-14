@@ -4,7 +4,7 @@ Uses Microsoft UI Automation (UIA) via comtypes for accessibility tree
 access and element interaction, with ctypes for Win32 window enumeration,
 key injection, and GDI-based screenshots.
 
-Window IDs are HWNDs (window handles), not PIDs — more precise on Windows
+Window IDs are HWNDs (window handles), not PIDs, more precise on Windows
 where a single process may own multiple windows.
 """
 
@@ -199,7 +199,7 @@ _WS_EX_NOACTIVATE = 0x08000000
 _GWL_STYLE = -16
 _GWL_EXSTYLE = -20
 
-# DWM cloaked attribute — filters Store apps, virtual-desktop hidden windows
+# DWM cloaked attribute: filters Store apps, virtual-desktop hidden windows
 _DWMWA_CLOAKED = 14
 
 # UIA pattern IDs
@@ -367,7 +367,7 @@ class WindowsBackend(DesktopBackend):
     # Chromium nests real content deep. get_tree() reroutes to the
     # Chrome_RenderWidgetHostHWND renderer child, which starts the DOM
     # shallower than the top-level HWND, so a shallow cap bit less here than
-    # on macOS — but it was still fragile for deep pages. 60 clears real
+    # on macOS, but it was still fragile for deep pages. 60 clears real
     # trees; _WALK_MAX_NODES bounds a runaway/cyclic walk regardless of depth.
     _WALK_MAX_DEPTH = 60
     _WALK_MAX_NODES = 20000
@@ -407,7 +407,7 @@ class WindowsBackend(DesktopBackend):
         return buf.value == "Chrome_WidgetWin_1"
 
     def _find_renderer_hwnd(self, hwnd: int) -> int | None:
-        """Find the Chrome_RenderWidgetHostHWND child — the actual DOM UIA root."""
+        """Find the Chrome_RenderWidgetHostHWND child, the actual DOM UIA root."""
         renderer = None
 
         @ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
@@ -449,7 +449,7 @@ class WindowsBackend(DesktopBackend):
             return cached
         self._wake_results[pid] = False
 
-        # Set the system-wide screen reader flag (idempotent — only done once)
+        # Set the system-wide screen reader flag (idempotent, only done once)
         if not self._screen_reader_flag_set:
             try:
                 _user32.SystemParametersInfoW(
@@ -470,7 +470,7 @@ class WindowsBackend(DesktopBackend):
             return False
 
         # Wait up to 2s for Chromium to build the a11y tree.
-        # Check subtree, not just direct children — some browsers (Vivaldi)
+        # Check subtree, not just direct children; some browsers (Vivaldi)
         # wrap the entire DOM under a single unnamed group element.
         deadline = time.monotonic() + 2.0
         while time.monotonic() < deadline:
@@ -497,7 +497,7 @@ class WindowsBackend(DesktopBackend):
         if element is None:
             raise StaleHandleError(f"Unknown handle: {handle_id!r}")
         try:
-            element.CurrentControlType  # live probe — throws if element is gone
+            element.CurrentControlType  # live probe, throws if element is gone
         except Exception as exc:
             # Only evict on UIA_E_ELEMENTNOTAVAILABLE or non-COM exceptions
             hresult = getattr(exc, "hresult", None)
@@ -505,7 +505,7 @@ class WindowsBackend(DesktopBackend):
                 del self._handles[handle_id]
                 self._handle_hwnds.pop(handle_id, None)
                 raise StaleHandleError(f"Handle {handle_id!r} is stale (widget gone)")
-            # Other COM errors are transient — keep the handle
+            # Other COM errors are transient; keep the handle
         return element
 
     def _to_handle(self, element: Any, hwnd: int | None = None) -> ElementHandle:
@@ -693,7 +693,7 @@ class WindowsBackend(DesktopBackend):
                 _user32.GetWindowRect(hwnd, ctypes.byref(rect))
                 if (rect.right - rect.left) < 50 or (rect.bottom - rect.top) < 50:
                     return True
-                # DWM cloaked check — filters Store app ghosts & virtual-desktop windows
+                # DWM cloaked check: filters Store app ghosts & virtual-desktop windows
                 try:
                     cloaked = ctypes.c_int(0)
                     ctypes.windll.dwmapi.DwmGetWindowAttribute(
@@ -781,7 +781,7 @@ class WindowsBackend(DesktopBackend):
         if button != "left" or clicks != 1:
             # No UIA pattern expresses a right- or double-click; go physical.
             return self._click_element_at(handle_id, button=button, clicks=clicks)
-        # InvokePattern — buttons, links, menu items
+        # InvokePattern: buttons, links, menu items
         try:
             pat = element.GetCurrentPattern(_UIA_InvokePatternId)
             if pat:
@@ -790,7 +790,7 @@ class WindowsBackend(DesktopBackend):
                 return ActionResult(ok=True)
         except Exception:
             pass
-        # TogglePattern — checkboxes, toggle buttons
+        # TogglePattern: checkboxes, toggle buttons
         try:
             pat = element.GetCurrentPattern(_UIA_TogglePatternId)
             if pat:
@@ -799,7 +799,7 @@ class WindowsBackend(DesktopBackend):
                 return ActionResult(ok=True)
         except Exception:
             pass
-        # ExpandCollapsePattern — tree nodes, combo boxes
+        # ExpandCollapsePattern: tree nodes, combo boxes
         try:
             pat = element.GetCurrentPattern(_UIA_ExpandCollapsePatternId)
             if pat:
@@ -808,7 +808,7 @@ class WindowsBackend(DesktopBackend):
                 return ActionResult(ok=True)
         except Exception:
             pass
-        # SelectionItemPattern — list items, tab items
+        # SelectionItemPattern: list items, tab items
         try:
             pat = element.GetCurrentPattern(_UIA_SelectionItemPatternId)
             if pat:
@@ -916,7 +916,7 @@ class WindowsBackend(DesktopBackend):
            list is dropped down.
         2. ValuePattern.SetValue on the combo itself. Works on some combos,
            silently does nothing on others (observed on the same dialog).
-        3. Real click to focus + type the item text + Return — the only
+        3. Real click to focus + type the item text + Return, the only
            strategy that worked every time on Win32 COMBOBOX controls.
 
         A strategy that returns without error but leaves the control reading
@@ -1051,7 +1051,7 @@ class WindowsBackend(DesktopBackend):
             if not _user32.IsWindow(hwnd):
                 raise ValueError(f"No on-screen window found for window_id {window_id!r}")
             if _user32.IsIconic(hwnd):
-                raise ValueError(f"Window {window_id!r} is minimized — restore it before capturing")
+                raise ValueError(f"Window {window_id!r} is minimized; restore it before capturing")
             from_screen = self._screen_rect_for(hwnd)
             if from_screen:
                 left, top, width, height = from_screen
@@ -1428,7 +1428,7 @@ class WindowsBackend(DesktopBackend):
         button: str = "left",
         clicks: int = 1,
     ) -> ActionResult:
-        # window_id accepted for API parity but ignored — SendInput is global,
+        # window_id accepted for API parity but ignored; SendInput is global,
         # same as Quartz CGEvent on macOS and xdotool on Linux.
         if button not in _MOUSE_BUTTON_FLAGS:
             return ActionResult(ok=False, error=f"Unknown button {button!r}")
@@ -1529,14 +1529,14 @@ class WindowsBackend(DesktopBackend):
         hwnd = int(window_id) if window_id else None
         try:
             if hwnd:
-                # PostMessage to target HWND — foreground-independent
+                # PostMessage to target HWND, foreground-independent
                 if vk is not None:
                     _user32.PostMessageW(hwnd, _WM_KEYDOWN, vk, _make_lparam(vk))
                     _user32.PostMessageW(hwnd, _WM_KEYUP, vk, _make_lparam(vk, True))
                 else:
                     _user32.PostMessageW(hwnd, _WM_CHAR, ord(key[:1]), 0)
             else:
-                # No target — use keybd_event for the foreground window
+                # No target: use keybd_event for the foreground window
                 if vk is None:
                     vk = _user32.VkKeyScanW(ord(key[:1])) & 0xFF
                 scan = _user32.MapVirtualKeyW(vk, 0) & 0xFF

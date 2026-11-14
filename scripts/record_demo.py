@@ -37,7 +37,7 @@ entry_id = els[0].id
 print(f"Editor entry: {entry_id}")
 
 print()
-print("Click inside the MarkTheCrab editor now — recording starts in 3 seconds...")
+print("Click inside the MarkTheCrab editor now. Recording starts in 3 seconds...")
 for i in (3, 2, 1):
     print(f"  {i}...")
     time.sleep(1)
@@ -82,7 +82,7 @@ diagram = (
 steps = [
     {"action": "type", "handle": entry_id, "text": preamble},
     {"action": "sleep", "seconds": 0.5},
-    # Mermaid fence — triggers CodeMirror code-block DOM mutations (D-Bus flood).
+    # Mermaid fence: triggers CodeMirror code-block DOM mutations (D-Bus flood).
     # The 3.5s sleep lets the AT-SPI event queue drain before the next injection.
     {"action": "type", "handle": entry_id, "text": "```mermaid"},
     {"action": "sleep", "seconds": 3.5},

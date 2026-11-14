@@ -1,5 +1,5 @@
 """
-Regression tests for LinuxBackend key injection — run on all platforms
+Regression tests for LinuxBackend key injection, run on all platforms
 (no AT-SPI or X11 required; all subprocess calls are mocked).
 """
 
@@ -227,7 +227,7 @@ def test_find_app_waking_retries_after_wake():
 
 
 def test_find_app_waking_no_wake_for_names():
-    """Non-numeric window ids (app names) can't be woken — return None fast."""
+    """Non-numeric window ids (app names) can't be woken: return None fast."""
     backend, _mod = _make_backend()
 
     with (

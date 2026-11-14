@@ -67,7 +67,7 @@ def test_ax_value_to_rect_returns_none_for_garbage():
 
 
 def test_ax_value_to_rect_returns_none_for_cgpoint_only():
-    # CGPoint string has no w:/h: fields — must not return a partial match
+    # CGPoint string has no w:/h: fields, so it must not return a partial match
     class _Point:
         def __str__(self) -> str:
             return "<AXValue> {value = x:5.0 y:10.0 type = kAXValueCGPointType}"
@@ -136,7 +136,7 @@ def test_ax_name_uses_specific_role_description():
 
 
 def test_ax_name_skips_role_description_that_echoes_role():
-    # "button" for a button adds nothing over the role field — drop it.
+    # "button" for a button adds nothing over the role field, so drop it.
     el = {"AXRole": "AXButton", "AXRoleDescription": "button"}
     assert _name_of(el) == ""
 
@@ -319,7 +319,7 @@ def test_find_app_element_falls_back_to_cg_when_nsworkspace_lags():
 @_darwin
 def test_find_app_element_returns_none_when_pid_has_no_ax_windows():
     """If AXUIElementCreateApplication(pid) succeeds but the app has no
-    AXWindows, the element is for a dead/AX-less PID — return None instead
+    AXWindows, the element is for a dead/AX-less PID: return None instead
     of handing back a useless element."""
     from bad_ass_mcp.backend.macos import MacOSBackend
 
@@ -405,7 +405,7 @@ def test_pid_for_window_falls_back_to_cg_when_nsworkspace_misses():
     # The bug this guards against: in a long-running daemon, NSWorkspace's
     # runningApplications() snapshot can lag for apps that started after server
     # init (Tauri/Electron especially). _pid_for_window must still resolve the
-    # PID via CGWindowList — same backfill list_windows() already trusts.
+    # PID via CGWindowList, the same backfill list_windows() already trusts.
     from bad_ass_mcp.backend.macos import MacOSBackend
 
     backend = MacOSBackend()
@@ -478,7 +478,7 @@ def test_stop_recording_accepts_valid_gif_path():
     try:
         backend.stop_recording("h", dst_path)
     except RuntimeError:
-        pass  # expected — ffmpeg rejects empty file
+        pass  # expected: ffmpeg rejects empty file
     finally:
         for p in (src_path, dst_path):
             try:
@@ -492,7 +492,7 @@ def test_stop_recording_accepts_valid_gif_path():
 
 @_darwin
 def test_wake_ax_windows_pokes_manual_accessibility_first():
-    """AXManualAccessibility succeeding must short-circuit — the
+    """AXManualAccessibility succeeding must short-circuit: the
     AXEnhancedUserInterface fallback has window-animation side effects."""
     from bad_ass_mcp.backend.macos import MacOSBackend
 
@@ -519,7 +519,7 @@ def test_wake_ax_windows_pokes_manual_accessibility_first():
 @_darwin
 def test_wake_ax_windows_noop_when_attrs_unsupported():
     """Apps without a Chromium-style wake attribute (games, GL canvases)
-    must return immediately — no poll loop, no sleep."""
+    must return immediately: no poll loop, no sleep."""
     from bad_ass_mcp.backend.macos import MacOSBackend
 
     backend = MacOSBackend()
@@ -564,7 +564,7 @@ def test_wake_ax_windows_once_per_pid():
 def test_walk_descends_past_chromium_group_nesting():
     """Chromium (Vivaldi et al.) buries its web area ~13+ levels below the
     app root, deeper with GPU-composited pages. A shallow max_depth returned
-    a hollow husk of empty AXGroups — get_tree looked broken while
+    a hollow husk of empty AXGroups, so get_tree looked broken while
     find_elements (uncapped) saw everything. Pin that the walk reaches a
     node deeper than the old 12-level cap so that regression can't return.
     """
@@ -607,7 +607,7 @@ def test_walk_descends_past_chromium_group_nesting():
 @_darwin
 def test_walk_respects_node_budget():
     """The node budget must bound a wide/pathological tree regardless of
-    depth — a runaway or cyclic tree can't exhaust memory."""
+    depth, so a runaway or cyclic tree can't exhaust memory."""
     from bad_ass_mcp.backend.macos import MacOSBackend
     from bad_ass_mcp.types import ElementHandle
 
@@ -636,7 +636,7 @@ def test_walk_respects_node_budget():
 @_darwin
 def test_find_app_element_wakes_lazy_webview():
     """PID fallback: AXWindows empty on first probe, but a successful wake
-    means the element is real — return it instead of None."""
+    means the element is real: return it instead of None."""
     from bad_ass_mcp.backend.macos import MacOSBackend
 
     backend = MacOSBackend()

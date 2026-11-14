@@ -271,7 +271,7 @@ class LinuxBackend(DesktopBackend):
 
         Chromium-family apps and WebKitGTK build their AT-SPI tree lazily and
         only materialise it when this flag says an assistive tech is
-        listening. Returns True the first time the flag transitions to on —
+        listening. Returns True the first time the flag transitions to on,
         i.e. when a re-probe wait is worthwhile. Already-on (apps registered
         at launch, or will as soon as they see it) and D-Bus-unavailable both
         return False.
@@ -442,7 +442,7 @@ class LinuxBackend(DesktopBackend):
     def _x11_list_windows(self) -> list[WindowInfo]:
         """Discover top-level X11 windows for processes not in the AT-SPI tree.
 
-        Uses _NET_CLIENT_LIST (window manager's client list — excludes panels,
+        Uses _NET_CLIENT_LIST (window manager's client list, which excludes panels,
         tooltips, and other unmanaged windows) so the result stays tidy.
         Covers Tauri / Electron / Qt apps that don't register with AT-SPI.
         """
@@ -525,7 +525,7 @@ class LinuxBackend(DesktopBackend):
         atspi_pids = {w.pid for w in atspi}
         # Supplement with top-level X11 windows whose process isn't in AT-SPI
         extra = [w for w in x11 if w.pid not in atspi_pids]
-        # Webview processes build their a11y tree lazily — poke the
+        # Webview processes build their a11y tree lazily; poke the
         # screen-reader flag and give them a moment to register, then fold
         # any newcomers into the AT-SPI side instead of stamping them
         # accessible=false forever.
@@ -799,7 +799,7 @@ class LinuxBackend(DesktopBackend):
                 self._xtest(["type", "--delay", "10", text])
                 return ActionResult(ok=True)
         except FileNotFoundError:
-            pass  # xdotool not available — fall through
+            pass  # xdotool not available, fall through
         except Exception:
             pass
         if not native:
@@ -833,9 +833,9 @@ class LinuxBackend(DesktopBackend):
                 )
                 return ActionResult(ok=True)
         except FileNotFoundError:
-            pass  # xdotool not available — fall through to AT-SPI
+            pass  # xdotool not available, fall through to AT-SPI
         except Exception:
-            pass  # xwid lookup failed or xdotool error — fall through
+            pass  # xwid lookup failed or xdotool error, fall through
         try:
             # AT-SPI keyboard injection as last resort. generate_keyboard_event
             # uses XTest under the hood so it goes to the X11-focused window.
@@ -979,7 +979,7 @@ class LinuxBackend(DesktopBackend):
         wayland_display = os.environ.get("WAYLAND_DISPLAY", "")
         if session_type == "x11" or (not wayland_display and session_type != "wayland"):
             return "x11"
-        # Wayland session — probe for KWin. qdbus is cheap and the KWin object
+        # Wayland session: probe for KWin. qdbus is cheap and the KWin object
         # is only present when the KWin compositor is running.
         try:
             r = subprocess.run(
@@ -1022,7 +1022,7 @@ class LinuxBackend(DesktopBackend):
                 )
             return
         raise RuntimeError(
-            "Screenshot is not supported on this Wayland compositor yet — "
+            "Screenshot is not supported on this Wayland compositor yet; "
             "only X11 and KWin (KDE Plasma) are implemented. "
             f"XDG_SESSION_TYPE={os.environ.get('XDG_SESSION_TYPE', '')!r}"
         )
@@ -1052,14 +1052,14 @@ class LinuxBackend(DesktopBackend):
                             for j in range(child_count)
                         ):
                             raise ValueError(
-                                f"Window for {window_id!r} is minimized — "
+                                f"Window for {window_id!r} is minimized; "
                                 "restore it before capturing"
                             )
                     except ValueError:
                         raise
                     except Exception:
                         pass
-                # Resolve geometry — works for AT-SPI apps and non-AX apps
+                # Resolve geometry; works for AT-SPI apps and non-AX apps
                 # (Tauri/Electron) via the xdotool PID fallback in _window_geometry.
                 geom = self._window_geometry(window_id)
                 if geom is None and app is not None and _is_wayland_session():
@@ -1070,7 +1070,7 @@ class LinuxBackend(DesktopBackend):
                     )
                 if geom is None:
                     raise ValueError(
-                        f"Window {window_id!r} not found — pass None for a full-desktop capture"
+                        f"Window {window_id!r} not found; pass None for a full-desktop capture"
                     )
 
             backend = self._display_backend()
@@ -1130,7 +1130,7 @@ class LinuxBackend(DesktopBackend):
                     from PIL import Image
                 except ImportError as e:
                     raise RuntimeError(
-                        "Pillow is required for per-window screenshots on KWin — "
+                        "Pillow is required for per-window screenshots on KWin; "
                         "install with `pip install Pillow`"
                     ) from e
                 with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as fs:
@@ -1143,7 +1143,7 @@ class LinuxBackend(DesktopBackend):
                         # the same coord system. True for 1x displays (Steam
                         # Deck docked at 1080p). On HiDPI Wayland the captured
                         # PNG may be at physical resolution while AT-SPI
-                        # reports logical — the crop will land on the wrong
+                        # reports logical, so the crop will land on the wrong
                         # region. Fix when we have a HiDPI test rig.
                         img.crop((x, y, x + w, y + h)).save(target, "PNG")
                 finally:
@@ -1246,7 +1246,7 @@ class LinuxBackend(DesktopBackend):
         Handles non-AT-SPI apps (Tauri, Electron, Qt) by treating window_id as
         a raw PID when the AT-SPI lookup returns nothing.
         """
-        # Try xdotool first — reliable across toolkits and HiDPI setups
+        # Try xdotool first: reliable across toolkits and HiDPI setups
         app = self._find_app(window_id)
         pid = app.get_process_id() if app else None
         # Non-AT-SPI fallback: interpret window_id directly as a PID
@@ -1303,7 +1303,7 @@ class LinuxBackend(DesktopBackend):
                     return (x, y, w, h)
             except Exception:
                 pass
-        # Fall back to AT-SPI frame extents. Match _atspi_list_windows —
+        # Fall back to AT-SPI frame extents. Match _atspi_list_windows:
         # calling get_extents() directly on the frame is more reliable than
         # going through get_component(), which returns None on some
         # native-Wayland windows (Firefox on GTK-Wayland, notably) and takes
@@ -1454,7 +1454,7 @@ class LinuxBackend(DesktopBackend):
                 try:
                     xwid = self._find_xwid(app.get_process_id())
                     if xwid:
-                        # Pass the key name directly — xdotool speaks X11 keysym names
+                        # Pass the key name directly; xdotool speaks X11 keysym names
                         # natively (Return, F1, ctrl+a, etc.). The _KEY_SYMS filter is
                         # only for the AT-SPI fallback path below.
                         #
@@ -1467,7 +1467,7 @@ class LinuxBackend(DesktopBackend):
                             self._xtest(["key", key])
                             return ActionResult(ok=True)
                         except FileNotFoundError:
-                            pass  # xdotool not available — fall through to AT-SPI
+                            pass  # xdotool not available, fall through to AT-SPI
                 except Exception:
                     pass
         try:

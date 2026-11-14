@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "bad-ass-mcp"
 dynamic = ["version"]
-description = "Cross-platform desktop GUI automation MCP — accessibility tree first, vision as last resort"
+description = "Cross-platform desktop GUI automation MCP: accessibility tree first, vision as last resort"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]

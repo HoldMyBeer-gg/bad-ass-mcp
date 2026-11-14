@@ -11,7 +11,7 @@ _MAX_SEQUENCE_RUNTIME = 300.0  # seconds
 
 # Roles that carry no semantic meaning of their own: pure layout/grouping
 # containers. Chromium buries real content under long chains of these, which
-# is why an unpruned get_tree on a busy page runs to ~1.9 MB — mostly empty
+# is why an unpruned get_tree on a busy page runs to ~1.9 MB, mostly empty
 # AXGroups. A wrapper is prunable only if it is one of these roles AND has no
 # name, no value, and no interactive/meaningful state; its children graft up
 # to its parent so nothing real is lost.
@@ -230,7 +230,7 @@ class DesktopBackend(ABC):
         it, type the item text (Win32/Qt/Cocoa combos do incremental search
         on typed characters), press Return to commit, then read the value
         back. Used when the a11y item search finds nothing and SetValue
-        silently fails — both happen on stock Win32 droplists."""
+        silently fails; both happen on stock Win32 droplists."""
         center = self._element_center(handle_id)
         if center is None:
             return ActionResult(ok=False, error="Element reports no screen bounds")
@@ -300,7 +300,7 @@ class DesktopBackend(ABC):
         """Capture PNG bytes of a window, or the full screen if window_id is None.
 
         If output_path is given, the PNG is written to disk and the returned
-        bytes may be empty — the server layer returns the path instead.
+        bytes may be empty; the server layer returns the path instead.
         Implementations should raise ValueError if window_id is given but the
         target window cannot be located (rather than falling back to a full
         desktop capture)."""
@@ -316,7 +316,7 @@ class DesktopBackend(ABC):
         """Click at absolute screen coordinates.
 
         Foreground-independent fallback for when accessibility-based clicking
-        isn't available — webview content, custom-drawn UI, etc. Backends that
+        isn't available: webview content, custom-drawn UI, etc. Backends that
         can scope events to a specific process should use window_id to do so.
 
         button: "left" | "right" | "middle". clicks: 1 or 2 (double-click)."""
@@ -332,7 +332,7 @@ class DesktopBackend(ABC):
         duration: float = 0.3,
     ) -> ActionResult:
         """Press at (from_x, from_y), move to (to_x, to_y) over `duration`
-        seconds, release. Real pointer events — for drag-and-drop targets
+        seconds, release. Real pointer events, for drag-and-drop targets
         that have no a11y path (editors that only accept drops from another
         panel, canvas reorder, sliders)."""
         raise NotImplementedError("drag is not implemented for this platform yet")
@@ -578,7 +578,7 @@ class DesktopBackend(ABC):
                                          "button": "left", "clicks": 1}
           {"action": "drag",             "from_x": 0, "from_y": 0, "to_x": 0, "to_y": 0,
                                          "button": "left", "duration": 0.3}
-                                         — or "from_handle"/"to_handle" (element
+                                         or "from_handle"/"to_handle" (element
                                          centers), or "dx"/"dy" from the start
           {"action": "get_bounds",       "handle": "..."}   → value [x, y, w, h] or null
           {"action": "type",             "handle": "...", "text": "..."}
