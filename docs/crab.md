@@ -16,11 +16,20 @@ The first run picks a session id for that name and starts
 `claude --dangerously-skip-permissions --session-id <id>`. Every later run
 resumes the same id. Anything after the name is passed to claude.
 
-Before each start the wrapper pulls bad-ass-mcp (fast-forward only), makes
-the installed package the checkout (`pip install -e`) if it is not already,
-and runs `~/.claude/crab/update` if that file exists and is executable, for
-whatever else the machine needs pulled or rebuilt. Set `CRAB_PYTHON` to the
-interpreter the MCP server runs from when it is not `python3`.
+Before each start the wrapper pulls bad-ass-mcp (fast-forward only) and
+runs `~/.claude/crab/update` if that file exists and is executable, for
+whatever else the machine needs pulled or rebuilt. What the pull reaches
+depends on how the MCP server is launched:
+
+| server command | what updates it |
+|---|---|
+| `python3 -m bad_ass_mcp.server` with `PYTHONPATH` at the checkout's `src` (Kali) | the pull alone |
+| `uv run --directory <checkout> bad-ass-mcp` (the Deck) | the pull alone; uv rebuilds its environment from it |
+| `bad-ass-mcp` from an installed package (the Mac) | the pull plus `CRAB_INSTALL=1`, which installs the checkout editable into `CRAB_PYTHON` (default `python3`, the interpreter that server runs from) once, after which the pull is enough |
+
+`CRAB_REPO` must be the checkout the server runs from. On a machine with
+two checkouts, one for the server and one for development, point it at the
+server's.
 
 ## Restart from inside
 

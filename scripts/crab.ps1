@@ -24,7 +24,7 @@ function Update-Crab {
         git -C $repo pull -q --ff-only
         if ($LASTEXITCODE -ne 0) { Write-Warning "crab: bad-ass-mcp pull failed, running what is checked out" }
         $shown = & $py -m pip show bad-ass-mcp 2>$null
-        if (-not ($shown -match '^Editable project location')) {
+        if ($env:CRAB_INSTALL -eq "1" -and -not ($shown -match '^Editable project location')) {
             & $py -m pip install -q -e $repo
             if ($LASTEXITCODE -ne 0) { Write-Warning "crab: editable install failed" }
         }

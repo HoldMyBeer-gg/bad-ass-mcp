@@ -5,8 +5,10 @@
 #
 # The first run picks a session id for the name and starts claude with it;
 # every later run resumes that session. Before each start the wrapper pulls
-# bad-ass-mcp and makes sure the installed package is the checkout (editable),
-# so the MCP server comes up on main. From inside the session, `crab-restart`
+# bad-ass-mcp, so an MCP server that runs from the checkout (PYTHONPATH to
+# its src, or `uv run --directory`) comes up on main. Where the server runs
+# an installed package instead, CRAB_INSTALL=1 also installs the checkout
+# editable into CRAB_PYTHON. From inside the session, `crab-restart`
 # writes a flag and ends claude; the wrapper sees the flag, updates, and
 # resumes the same session in the same terminal. A plain exit ends the loop.
 #
@@ -15,9 +17,10 @@
 # anything else this machine needs pulled or rebuilt. Delete <name>.session
 # to start the crab fresh.
 #
-# Environment: CRAB_HOME (that folder), CRAB_REPO (the bad-ass-mcp checkout,
-# default ~/code/bad-ass-mcp), CRAB_PYTHON (the interpreter the MCP server
-# runs from, default python3), CRAB_CLAUDE (the claude command).
+# Environment: CRAB_HOME (that folder), CRAB_REPO (the bad-ass-mcp checkout
+# the MCP server runs from, default ~/code/bad-ass-mcp), CRAB_INSTALL (1 to
+# also pip install it editable), CRAB_PYTHON (the interpreter for that,
+# default python3), CRAB_CLAUDE (the claude command).
 set -uo pipefail
 
 name="${1:-${CRAB_NAME:-$(hostname -s)-crab}}"
@@ -43,7 +46,8 @@ update() {
     if ! git -C "$repo" pull -q --ff-only; then
       echo "crab: bad-ass-mcp pull failed, running what is checked out" >&2
     fi
-    if ! "$py" -m pip show bad-ass-mcp 2>/dev/null | grep -q '^Editable project location'; then
+    if [ "${CRAB_INSTALL:-0}" = 1 ] &&
+      ! "$py" -m pip show bad-ass-mcp 2>/dev/null | grep -q '^Editable project location'; then
       "$py" -m pip install -q -e "$repo" || echo "crab: editable install failed" >&2
     fi
   fi
