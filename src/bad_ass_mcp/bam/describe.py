@@ -76,6 +76,14 @@ def describe_step(
         return {"text": f"{element(desc)} appears", "expect": True}
     if a == "wait_for_window":
         return {"text": f"A {_q(v('pattern'))} window appears", "expect": True}
+    if a == "wait_for_text":
+        if step.get("pattern"):
+            return {"text": _cap(f'{t()} matches "{v("pattern")}"'), "expect": True}
+        verb = "contains" if step.get("contains") else "reads"
+        name = _saved(step.get("text"))
+        if name and name not in variables:
+            return {"text": _cap(f"{t()} {verb} the saved {name}"), "expect": True}
+        return {"text": _cap(f'{t()} {verb} "{v("text")}"'), "expect": True}
     if a in ("get_value", "get_bounds"):
         if "expect" in step:
             want = step["expect"]

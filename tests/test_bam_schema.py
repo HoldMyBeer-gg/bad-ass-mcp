@@ -239,3 +239,20 @@ def test_shell_step_cmd_may_be_per_platform():
         ],
     )
     assert messages(validate_script(s)) == []
+
+
+def test_wait_for_text_is_a_known_step():
+    s = one_phase(
+        learn={"box": {"name": "Search"}},
+        steps=[
+            {"action": "wait_for_text", "target": "box", "text": "crab", "timeout": 2},
+            {"action": "wait_for_text", "target": "box", "text": "cr", "contains": True},
+            {"action": "wait_for_text", "target": "box", "pattern": "^Opened"},
+        ],
+    )
+    assert messages(validate_script(s)) == []
+    bad = one_phase(
+        learn={"box": {"name": "Search"}},
+        steps=[{"action": "wait_for_text", "target": "box"}],
+    )
+    assert messages(validate_script(bad)) != []

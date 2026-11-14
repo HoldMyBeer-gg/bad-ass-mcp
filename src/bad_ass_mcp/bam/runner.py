@@ -549,6 +549,7 @@ class _Run:
                 self.vars,
                 timeout_scale=float(self.config.get("timeout_scale", 1)),
                 secrets=self._resolve_secrets(phase.get("steps", []), n),
+                specs=phase.get("learn", {}),
             )
             self.run_steps(sent, meta, n)
             if "checks" in phase:
@@ -648,6 +649,9 @@ class _Run:
             return f"wait for {what!r}"
         if action == "wait_for_window":
             return f"wait for window {step.get('pattern')!r}"
+        if action == "wait_for_text":
+            want = step.get("pattern") or step.get("text")
+            return f"wait for {target or 'the field'} to read {want!r}"
         if action == "sleep":
             return f"sleep {float(step.get('seconds', 0)):g} s"
         words = f"{action}" + (f" {target}" if target else "")

@@ -836,12 +836,24 @@ def test_timeout_scale_stretches_waits_and_sleeps(tmp_path):
         {"action": "wait_for_window", "pattern": "Save", "timeout": 5},
         {"action": "sleep", "seconds": 0.5},
         {"action": "click", "target": "ok"},
+        {"action": "wait_for_text", "target": "ok", "text": "Done", "timeout": 2},
     ]
-    sent, _ = build_steps(steps, "linux", {"ok": "h"}, "W", {}, timeout_scale=3)
+    specs = {"ok": {"name": "OK", "role": {"linux": "push button", "macos": "button"}}}
+    sent, _ = build_steps(steps, "linux", {"ok": "h"}, "W", {}, timeout_scale=3, specs=specs)
     assert sent[0]["timeout"] == 9
     assert sent[1]["timeout"] == 15
     assert sent[2]["seconds"] == 1.5
     assert sent[3] == {"action": "click", "handle": "h"}
+    # wait_for_text re-finds its target every poll (a replaced label keeps
+    # its old text on the old handle), so it carries the learn spec.
+    assert sent[4] == {
+        "action": "wait_for_text",
+        "window_id": "W",
+        "name": "OK",
+        "role": "push button",
+        "text": "Done",
+        "timeout": 6,
+    }
 
 
 def test_timeout_scale_defaults_to_one_and_reaches_the_runner(tmp_path):
@@ -2142,3 +2154,24 @@ def test_shell_on_windows_without_bash_says_so(monkeypatch):
     with pytest.raises(runner.ScriptFailure) as e:
         runner._shell("printf hi", {})
     assert "Git Bash" in str(e.value)
+
+
+def test_wait_for_text_reads_like_an_expectation():
+    from bad_ass_mcp.bam.describe import describe_phase
+
+    phase = {
+        "learn": {"box": {"name": "Search emoji"}, "bar": {"role": "status"}},
+        "steps": [
+            {"action": "wait_for_text", "target": "box", "text": "crab", "timeout": 2},
+            {"action": "wait_for_text", "target": "bar", "text": "Opened", "contains": True},
+            {"action": "wait_for_text", "target": "box", "text": "$name"},
+            {"action": "wait_for_text", "target": "bar", "pattern": "^Opened"},
+        ],
+    }
+    d = describe_phase(phase, "linux")
+    assert d["steps"] == [
+        {"text": '“Search emoji” reads "crab"', "expect": True},
+        {"text": 'The status contains "Opened"', "expect": True},
+        {"text": "“Search emoji” reads the saved name", "expect": True},
+        {"text": 'The status matches "^Opened"', "expect": True},
+    ]
