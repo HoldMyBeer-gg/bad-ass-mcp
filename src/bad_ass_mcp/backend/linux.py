@@ -724,14 +724,29 @@ class LinuxBackend(DesktopBackend):
         result = self._type_text_once(handle_id, text)
         if not result.ok:
             return result
+        # A busy app applies keystrokes after the call returns (rustydemon
+        # reading an archive over sshfs showed '*.me' for '*.mesh'), so give
+        # the readback up to a second to settle, as select_option does.
         got = self._read_text(self._resolve(handle_id))
+        deadline = time.monotonic() + 1.0
+        while got is not None and not _landed(got, text) and time.monotonic() < deadline:
+            time.sleep(0.05)
+            got = self._read_text(self._resolve(handle_id))
         if got is not None and not _landed(got, text):
-            return ActionResult(
-                ok=False,
-                error=f"Typed, but the field reads {got!r}: the text did not arrive "
-                "(on native Wayland, input to another app's window often can't be "
-                "delivered; XWayland works)",
+            if got and text.startswith(got):
+                why = (
+                    "only a prefix of the text arrived within 1 s "
+                    "(the app applies keys slowly, or dropped some)"
+                )
+            else:
+                why = "the text did not arrive"
+            hint = (
+                " (on native Wayland, input to another app's window often can't be "
+                "delivered; XWayland works)"
+                if _is_wayland_session()
+                else ""
             )
+            return ActionResult(ok=False, error=f"Typed, but the field reads {got!r}: {why}{hint}")
         return result
 
     @staticmethod

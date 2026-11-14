@@ -79,3 +79,56 @@ def test_the_failure_names_what_the_field_reads():
     ):
         r = backend.type_text("h", "FrameXML")
     assert not r.ok and "reads ''" in r.error
+
+
+# ── slow apps (rusty-kali-crab, XFCE/X11, rustydemon reading over sshfs) ──
+#
+# type_text("*.mesh") came back ok=False, "the field reads '*.me'", while a
+# get_value a moment later read the whole text. The readback ran straight
+# after the keystrokes, before a busy app had applied them all.
+
+
+def _settling(backend, mod, reads):
+    """type_text with the readback returning `reads` in turn (the last one
+    repeats), with sleep stubbed and the clock advancing 0.1 s per look."""
+    node = _field("")
+    seq = list(reads)
+    ticks = iter(i * 0.1 for i in range(200))
+
+    def read(_node):
+        return seq.pop(0) if len(seq) > 1 else seq[0]
+
+    with (
+        patch.object(backend, "_type_text_once", return_value=mod.ActionResult(ok=True)),
+        patch.object(backend, "_resolve", return_value=node),
+        patch.object(backend, "_read_text", side_effect=read),
+        patch("time.sleep"),
+        patch("time.monotonic", side_effect=lambda: next(ticks)),
+    ):
+        return backend.type_text("h", "*.mesh")
+
+
+def test_a_slow_app_that_catches_up_within_a_second_is_ok():
+    backend, mod = _make_backend()
+    r = _settling(backend, mod, ["*.me", "*.mes", "*.mesh"])
+    assert r.ok
+
+
+def test_a_prefix_that_never_completes_says_only_that_much_arrived():
+    backend, mod = _make_backend()
+    with patch.object(mod, "_is_wayland_session", return_value=False):
+        r = _settling(backend, mod, ["*.me"])
+    assert not r.ok
+    assert "reads '*.me'" in r.error
+    assert "only a prefix" in r.error
+    assert "Wayland" not in r.error
+
+
+def test_the_wayland_hint_is_given_only_on_a_wayland_session():
+    backend, mod = _make_backend()
+    with patch.object(mod, "_is_wayland_session", return_value=True):
+        on = _settling(backend, mod, [""])
+    with patch.object(mod, "_is_wayland_session", return_value=False):
+        off = _settling(backend, mod, [""])
+    assert not on.ok and "Wayland" in on.error
+    assert not off.ok and "Wayland" not in off.error
