@@ -1,6 +1,6 @@
 """`annotate`: an on-screen overlay that boxes and labels each step.
 
-rusty-win-crab, November 11th: Michael watched a demo-mode video for the
+rusty-win-crab, November 11th: the maintainer watched a demo-mode video for the
 bam-site gallery and missed the step highlights. `--annotate` (or
 "annotate": true) runs at demo pace and draws, before each step, a box and
 "N  action target" over the target, an arrow for a drag, and a red box with

@@ -1867,7 +1867,7 @@ def test_user_input_stops_the_whole_suite(tmp_path):
 
 
 def test_progress_bar_shows_failures_not_just_how_far_along():
-    """'100%' next to a failure read like success (Michael). The filled part
+    """'100%' next to a failure read like success (the maintainer). The filled part
     is split by result and the counts are spelled out."""
     from bad_ass_mcp.bam.cli import render_bar
 
