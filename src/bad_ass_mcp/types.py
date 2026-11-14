@@ -18,7 +18,7 @@ class WindowInfo:
     # False when the window was discovered via an OS-level fallback path
     # because it never appeared in the platform a11y tree (CGWindowList on
     # macOS, _NET_CLIENT_LIST on Linux). find_elements / get_tree will
-    # return empty for those windows — callers should go straight to
+    # return empty for those windows; callers should go straight to
     # screenshot + click_at instead of round-tripping through AX.
     # Backends poke lazy Chromium-family trees awake (AXManualAccessibility
     # on macOS, the AT-SPI screen-reader flag on Linux) before stamping

@@ -42,7 +42,7 @@ def test_pattern_matches_the_listed_name():
 
 def test_pattern_matches_a_window_title_when_the_name_differs():
     w = WindowInfo(
-        id="1", name="rustydemon", pid=1, focused=False, titles=("Rusty Demon — CASC Explorer",)
+        id="1", name="rustydemon", pid=1, focused=False, titles=("Rusty Demon - CASC Explorer",)
     )
     assert w.matches("Rusty Demon")
     assert w.matches("rustydemon")
@@ -50,7 +50,7 @@ def test_pattern_matches_a_window_title_when_the_name_differs():
 
 
 def test_pattern_matches_a_title_when_the_name_is_empty():
-    w = WindowInfo(id="1", name="", pid=1, focused=False, titles=("Rusty Demon — CASC Explorer",))
+    w = WindowInfo(id="1", name="", pid=1, focused=False, titles=("Rusty Demon - CASC Explorer",))
     assert w.matches("rusty demon")
 
 
@@ -71,7 +71,7 @@ class _NamedByProcess(FakeBackend):
                 name=self._name,
                 pid=9999,
                 focused=True,
-                titles=("Rusty Demon — CASC Explorer",),
+                titles=("Rusty Demon - CASC Explorer",),
             )
         ]
 
@@ -210,9 +210,9 @@ def _listed(backend, mod, app, *, session, x11=()):
 
 def test_linux_window_titles_come_from_its_frames():
     backend, mod = _make_backend()
-    app = _atspi_app("", 77, "Rusty Demon — CASC Explorer", (410, 177, 1100, 700))
+    app = _atspi_app("", 77, "Rusty Demon - CASC Explorer", (410, 177, 1100, 700))
     wins = _listed(backend, mod, app, session="x11")
-    assert wins[0].titles == ("Rusty Demon — CASC Explorer",)
+    assert wins[0].titles == ("Rusty Demon - CASC Explorer",)
     assert wins[0].matches("Rusty Demon")
 
 
@@ -276,7 +276,7 @@ def test_macos_window_titles_come_from_ax_windows():
         if attr == "AXWindows":
             return [ax_win]
         if attr == "AXTitle" and el is ax_win:
-            return "Rusty Demon — CASC Explorer"
+            return "Rusty Demon - CASC Explorer"
         return None
 
     with (
@@ -288,7 +288,7 @@ def test_macos_window_titles_come_from_ax_windows():
     ):
         wins = backend.list_windows()
     assert wins[0].name == "rustydemon"
-    assert wins[0].titles == ("Rusty Demon — CASC Explorer",)
+    assert wins[0].titles == ("Rusty Demon - CASC Explorer",)
 
 
 # ── every backend's wait_for_window matches titles too ───────────────
@@ -414,7 +414,7 @@ def test_linux_untitled_atspi_window_takes_its_x11_title():
     x11 = [
         WindowInfo(
             id="69360",
-            name="Rusty Demon — CASC Explorer",
+            name="Rusty Demon - CASC Explorer",
             pid=69360,
             focused=False,
             bounds=(5, 64, 1014, 699),
@@ -424,7 +424,7 @@ def test_linux_untitled_atspi_window_takes_its_x11_title():
     wins = _listed(backend, mod, app, session="x11", x11=x11)
     assert len(wins) == 1
     assert wins[0].accessible is True
-    assert wins[0].titles == ("Rusty Demon — CASC Explorer",)
+    assert wins[0].titles == ("Rusty Demon - CASC Explorer",)
     assert wins[0].matches("Rusty Demon")
 
 
@@ -432,10 +432,10 @@ def _x11_then_atspi(backend, polls_before_atspi):
     """list_windows that shows only the X11 entry for the first N polls,
     as on Kali right after launch, then the AT-SPI entry."""
     x11_only = WindowInfo(
-        id="71550", name="Rusty Demon — CASC Explorer", pid=71550, focused=True, accessible=False
+        id="71550", name="Rusty Demon - CASC Explorer", pid=71550, focused=True, accessible=False
     )
     atspi = WindowInfo(
-        id="71550", name="", pid=71550, focused=True, titles=("Rusty Demon — CASC Explorer",)
+        id="71550", name="", pid=71550, focused=True, titles=("Rusty Demon - CASC Explorer",)
     )
     calls = {"n": 0}
 

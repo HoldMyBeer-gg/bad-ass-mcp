@@ -265,14 +265,14 @@ def _quartz_mouse_click(x: float, y: float, button: str = "left", clicks: int = 
     """Inject a mouse click at the given screen coordinates via the HID
     event tap.
 
-    Delivery via kCGHIDEventTap is the lowest-level path — the WindowServer
+    Delivery via kCGHIDEventTap is the lowest-level path: the WindowServer
     performs hit-testing as it would for a real click, which is what makes
     this reach Tauri/Electron/CEF webview content. Higher-level paths
     (CGEventPostToPid, kCGSessionEventTap) bypass the hit-test pipeline and
     silently no-op for webviews while still returning success.
 
     Tradeoff: HID delivery is system-global, so this DOES affect the focused
-    window — whatever is at (x, y) gets the click. Coordinates are in the
+    window; whatever is at (x, y) gets the click. Coordinates are in the
     global display space (top-left origin), same as AXFrame.
 
     clicks > 1 stamps kCGMouseEventClickState on each press/release so AppKit
@@ -316,7 +316,7 @@ def _quartz_mouse_drag(
 def _cg_onscreen_windows() -> list[dict]:
     """Return on-screen window dicts from the WindowServer.
 
-    Catches windows the AX API doesn't surface — Tauri/Electron/CEF apps
+    Catches windows the AX API doesn't surface: Tauri/Electron/CEF apps
     often don't expose AXWindows until they get focus, but they're already
     drawing pixels so the WindowServer knows about them.
     """
@@ -388,7 +388,7 @@ def _ax_name(element: Any) -> str:
     """Best available human-readable label for an element.
 
     AXTitle/AXDescription cover most controls, but icon buttons and other
-    graphical controls often carry neither — they surface as name="" and a
+    graphical controls often carry neither; they surface as name="" and a
     caller can't tell what they do. Fall back through the attributes screen
     readers use to voice such controls, most specific first:
 
@@ -398,7 +398,7 @@ def _ax_name(element: Any) -> str:
                         text beside a field); use its own title/value
       AXValue           static text only: its words, what VoiceOver reads
       AXHelp            tooltip text
-      AXRoleDescription a human phrase for the role ("close button") — the
+      AXRoleDescription a human phrase for the role ("close button"); the
                         weakest, only when nothing more specific labels it
 
     Returns "" when the element is genuinely unlabelled everywhere.
@@ -425,7 +425,7 @@ def _ax_name(element: Any) -> str:
         return str(help_text)
 
     # AXRoleDescription is the last resort. Skip it when it just echoes the
-    # role ("button" for a button) — that adds nothing over the role field.
+    # role ("button" for a button), and that adds nothing over the role field.
     # Keep it when it's more specific ("close button", "minimize button").
     role_desc = _ax_get(element, "AXRoleDescription")
     if role_desc and role_desc.lower() != _role_name(element):
@@ -470,7 +470,7 @@ _KEY_CODES: dict[str, int] = {
 # Attributes that tell Chromium-family apps "an assistive tech is listening"
 # so they build their (lazy) AX tree. AXManualAccessibility is Electron's
 # documented switch; AXEnhancedUserInterface is what VoiceOver sets and what
-# plain Chrome/CEF watch — but it also makes some apps animate window moves,
+# plain Chrome/CEF watch, but it also makes some apps animate window moves,
 # so it's the fallback, not the first choice.
 _AX_WAKE_ATTRS = ("AXManualAccessibility", "AXEnhancedUserInterface")
 # How long to wait for a freshly-woken webview to publish AXWindows.
@@ -478,8 +478,8 @@ _AX_WAKE_TIMEOUT = 1.5
 # Chromium (Electron/CEF and every Chromium browser) nests the real content
 # deep: from the AXApplication root, Vivaldi's mail/web area doesn't begin
 # until depth ~13 and runs to ~22, and GPU-composited pages add still more
-# wrapper layers. A shallow cap returns a hollow husk of empty AXGroups —
-# get_tree looked broken while find_elements (uncapped) saw everything. 60
+# wrapper layers. A shallow cap returns a hollow husk of empty AXGroups,
+# so get_tree looked broken while find_elements (uncapped) saw everything. 60
 # clears real trees with headroom; _WALK_MAX_NODES keeps the walk bounded
 # regardless of depth so a pathological/cyclic tree can't run away.
 _WALK_MAX_DEPTH = 60
@@ -601,7 +601,7 @@ class MacOSBackend(DesktopBackend):
         empty and the app looks canvas-only. Setting a wake attribute is the
         announcement. The set call only succeeds on apps that implement one
         of the attributes, so this is a cheap no-op for genuinely AX-less
-        windows — no process-name sniffing needed. One attempt per PID per
+        windows, no process-name sniffing needed. One attempt per PID per
         server lifetime.
         """
         if pid in self._woken_pids:
@@ -625,7 +625,7 @@ class MacOSBackend(DesktopBackend):
             name = app.localizedName() or ""
             if str(pid) == window_id or name == window_id:
                 return AXUIElementCreateApplication(pid)
-        # NSWorkspace.runningApplications() can lag in a long-running daemon —
+        # NSWorkspace.runningApplications() can lag in a long-running daemon;
         # fall back to direct AX-by-PID. AXUIElementCreateApplication accepts
         # any PID; we only return the element if it actually has AXWindows
         # (otherwise we've created an element for a dead/AX-less PID and
@@ -654,7 +654,7 @@ class MacOSBackend(DesktopBackend):
             name = app.localizedName() or ""
             if str(pid) == window_id or name == window_id:
                 return pid
-        # NSWorkspace.runningApplications() can lag in a long-running daemon —
+        # NSWorkspace.runningApplications() can lag in a long-running daemon;
         # apps that started after server init may be missing for a while.
         # CGWindowList sees them via the WindowServer regardless, which is
         # the same backfill list_windows() already does for Tauri/Electron/CEF.
@@ -770,13 +770,13 @@ class MacOSBackend(DesktopBackend):
             # so apps that launched after server init can land here even when
             # they DO have a working AX adapter (egui+accesskit, freshly
             # bundled .apps, etc.). Probe AX directly via the PID rather than
-            # blindly stamping accessible=False — the marker is meant for
+            # blindly stamping accessible=False: the marker is meant for
             # genuinely-canvas-only apps (Tauri/Electron pre-handshake), not
             # for any app NSWorkspace happened to miss this tick.
             ax_app = AXUIElementCreateApplication(pid)
             ax_wins = _ax_get(ax_app, "AXWindows") or []
             if not ax_wins:
-                # Chromium-family trees are lazy, not absent — announce
+                # Chromium-family trees are lazy, not absent: announce
                 # ourselves as an assistive tech and re-probe before
                 # stamping accessible=False.
                 ax_wins = self._wake_ax_windows(pid)
@@ -840,7 +840,7 @@ class MacOSBackend(DesktopBackend):
 
     def type_text(self, handle_id: str, text: str, paste: bool = False) -> ActionResult:
         element = self._resolve(handle_id)
-        # Primary: direct AXValue set — foreground-independent, handles all
+        # Primary: direct AXValue set, foreground-independent, handles all
         # Unicode. Some editors (CodeMirror, Monaco, other contenteditable
         # widgets) report the set as successful but ignore it, since only
         # real input events reach them; read the value back to tell.
@@ -1235,7 +1235,7 @@ class MacOSBackend(DesktopBackend):
         if window_id:
             app = self._find_app_element(window_id)
             if app:
-                # Iterate every AXWindow — the first one isn't always the
+                # Iterate every AXWindow: the first one isn't always the
                 # visible/foreground one. Hidden/minimized windows may
                 # not expose AXWindowID, so skip them and keep looking.
                 for w in _ax_get(app, "AXWindows") or []:
@@ -1248,7 +1248,7 @@ class MacOSBackend(DesktopBackend):
                 if pid is not None:
                     win_num = self._cg_window_number_for_pid(pid)
             if win_num is None:
-                # Don't silently fall back to a full-desktop capture — that produced
+                # Don't silently fall back to a full-desktop capture; that produced
                 # huge useless screenshots when the window couldn't be located.
                 # Common cause: app is minimized to the dock, so its windows are
                 # off-screen and CGWindowListOptionOnScreenOnly skips them.
@@ -1258,7 +1258,7 @@ class MacOSBackend(DesktopBackend):
                     wins = _ax_get(ax_app, "AXWindows") or []
                     if wins and all(bool(_ax_get(w, "AXMinimized")) for w in wins):
                         raise ValueError(
-                            f"Window for {window_id!r} is minimized to the dock — "
+                            f"Window for {window_id!r} is minimized to the dock; "
                             "restore it before capturing"
                         )
                 raise ValueError(f"No on-screen window found for window_id {window_id!r}")
@@ -1268,7 +1268,7 @@ class MacOSBackend(DesktopBackend):
                 w, h = dims
                 if w <= 0 or h <= 0:
                     raise ValueError(
-                        f"Window {window_id!r} has zero area ({w}x{h}) — nothing to capture"
+                        f"Window {window_id!r} has zero area ({w}x{h}), nothing to capture"
                     )
 
         if output_path:
@@ -1286,7 +1286,7 @@ class MacOSBackend(DesktopBackend):
             cmd.append(target)
             subprocess.run(cmd, check=True, capture_output=True)
             if output_path:
-                # Caller asked for a path — don't read the bytes back. The MCP
+                # Caller asked for a path, so don't read the bytes back. The MCP
                 # tool layer returns just the path so we don't blow the token
                 # budget on multi-megabyte base64.
                 return b""
