@@ -26,6 +26,7 @@ depends on how the MCP server is launched:
 | `python3 -m bad_ass_mcp.server` with `PYTHONPATH` at the checkout's `src` (Kali) | the pull alone |
 | `uv run --directory <checkout> bad-ass-mcp` (the Deck) | the pull alone; uv rebuilds its environment from it |
 | `bad-ass-mcp` from an installed package (the Mac) | the pull plus `CRAB_INSTALL=1`, which installs the checkout editable into `CRAB_PYTHON` (default `python3`, the interpreter that server runs from) once, after which the pull is enough |
+| `bad-ass-mcp.exe` from `uv tool install --editable` (Windows) | the pull alone for code; `CRAB_INSTALL=1` reinstalls the tool (`uv tool install --editable "<checkout>[windows]" --force`) when dependencies changed. Set `CRAB_EXTRAS` to the extras, e.g. `[windows]` |
 
 `CRAB_REPO` must be the checkout the server runs from. On a machine with
 two checkouts, one for the server and one for development, point it at the
@@ -66,6 +67,11 @@ powershell -ExecutionPolicy Bypass -File ~/code/bad-ass-mcp/scripts/crab-restart
 | `~/.claude/crab/update` | optional, run before every start |
 
 ## Limits
+
+- On Windows `Stop-Process` is a hard kill either way; claude's transcript
+  is written per message, so the resume survives it, but nothing graceful
+  happens. Do not run `crab-restart.ps1` under Git's `timeout.exe`: its
+  parent is gone by the time the walk starts and claude is never found.
 
 - The crab cannot see the restart happen; its last tool call dies with the
   process. Say what is about to happen before running it.

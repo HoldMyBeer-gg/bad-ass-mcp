@@ -23,10 +23,20 @@ function Update-Crab {
     if (Test-Path (Join-Path $repo ".git")) {
         git -C $repo pull -q --ff-only
         if ($LASTEXITCODE -ne 0) { Write-Warning "crab: bad-ass-mcp pull failed, running what is checked out" }
-        $shown = & $py -m pip show bad-ass-mcp 2>$null
-        if ($env:CRAB_INSTALL -eq "1" -and -not ($shown -match '^Editable project location')) {
-            & $py -m pip install -q -e $repo
-            if ($LASTEXITCODE -ne 0) { Write-Warning "crab: editable install failed" }
+        if ($env:CRAB_INSTALL -eq "1") {
+            # A uv tool install is already editable on the checkout; reinstalling
+            # picks up dependency changes. Otherwise pip, into CRAB_PYTHON.
+            $tools = & uv tool list 2>$null
+            if ($tools -match '^bad-ass-mcp\b') {
+                & uv tool install --editable "$repo[windows]" --force -q
+                if ($LASTEXITCODE -ne 0) { Write-Warning "crab: uv tool install failed" }
+            } else {
+                $shown = & $py -m pip show bad-ass-mcp 2>$null
+                if (-not ($shown -match '^Editable project location')) {
+                    & $py -m pip install -q -e $repo
+                    if ($LASTEXITCODE -ne 0) { Write-Warning "crab: editable install failed" }
+                }
+            }
         }
     }
     $extra = Join-Path $dir "update.ps1"

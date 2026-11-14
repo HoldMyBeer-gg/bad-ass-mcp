@@ -19,8 +19,9 @@
 #
 # Environment: CRAB_HOME (that folder), CRAB_REPO (the bad-ass-mcp checkout
 # the MCP server runs from, default ~/code/bad-ass-mcp), CRAB_INSTALL (1 to
-# also pip install it editable), CRAB_PYTHON (the interpreter for that,
-# default python3), CRAB_CLAUDE (the claude command).
+# also install it editable: uv tool when that is how it is installed, else
+# pip into CRAB_PYTHON, default python3), CRAB_EXTRAS (e.g. "[macos]"),
+# CRAB_CLAUDE (the claude command).
 set -uo pipefail
 
 name="${1:-${CRAB_NAME:-$(hostname -s)-crab}}"
@@ -46,9 +47,15 @@ update() {
     if ! git -C "$repo" pull -q --ff-only; then
       echo "crab: bad-ass-mcp pull failed, running what is checked out" >&2
     fi
-    if [ "${CRAB_INSTALL:-0}" = 1 ] &&
-      ! "$py" -m pip show bad-ass-mcp 2>/dev/null | grep -q '^Editable project location'; then
-      "$py" -m pip install -q -e "$repo" || echo "crab: editable install failed" >&2
+    if [ "${CRAB_INSTALL:-0}" = 1 ]; then
+      # A uv tool install is already editable on the checkout; reinstalling
+      # picks up dependency changes. Otherwise pip, into CRAB_PYTHON.
+      if command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q '^bad-ass-mcp\b'; then
+        uv tool install -q --editable "$repo${CRAB_EXTRAS:-}" --force ||
+          echo "crab: uv tool install failed" >&2
+      elif ! "$py" -m pip show bad-ass-mcp 2>/dev/null | grep -q '^Editable project location'; then
+        "$py" -m pip install -q -e "$repo${CRAB_EXTRAS:-}" || echo "crab: editable install failed" >&2
+      fi
     fi
   fi
   if [ -x "$dir/update" ]; then
