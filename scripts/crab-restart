@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# crab-restart: from inside a session started by `crab`, ask the wrapper to
+# update and resume this session. Writes the restart flag, finds the claude
+# process above this shell, and ends it a second later; the wrapper does the
+# rest. `--dry-run` only says what it would do.
+set -uo pipefail
+
+name="${CRAB_NAME:-}"
+dir="${CRAB_HOME:-$HOME/.claude/crab}"
+dry=0
+[ "${1:-}" = "--dry-run" ] && dry=1
+if [ -z "$name" ]; then
+  echo "crab-restart: CRAB_NAME is not set; this session was not started by the crab wrapper" >&2
+  exit 2
+fi
+
+# The executable decides, not the whole command line: a shell's own line
+# can mention claude in a path or an argument.
+is_claude() {
+  set -- $1
+  case "${1##*/}" in
+    claude | claude.exe) return 0 ;;
+    node | bun) case "${2:-}" in claude | */claude | */claude.js) return 0 ;; esac ;;
+  esac
+  return 1
+}
+
+pid=$$
+cmd=""
+while [ "$pid" -gt 1 ]; do
+  cmd=$(ps -o command= -p "$pid" 2>/dev/null || true)
+  if is_claude "$cmd"; then break; fi
+  pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+  [ -n "$pid" ] || pid=0
+done
+if [ "$pid" -le 1 ]; then
+  echo "crab-restart: no claude process above this shell" >&2
+  exit 1
+fi
+
+if [ "$dry" = 1 ]; then
+  echo "would write $dir/$name.restart and end claude pid $pid: $cmd"
+  exit 0
+fi
+
+touch "$dir/$name.restart"
+echo "crab-restart: $name is going down for an update; the wrapper resumes this session"
+(
+  sleep 1
+  kill -TERM "$pid" 2>/dev/null
+  sleep 5
+  kill -KILL "$pid" 2>/dev/null
+) >/dev/null 2>&1 &
+disown 2>/dev/null || true

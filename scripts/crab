@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# crab: run a named Claude Code session that can restart itself up to date.
+#
+#   crab [name] [claude args...]
+#
+# The first run picks a session id for the name and starts claude with it;
+# every later run resumes that session. Before each start the wrapper pulls
+# bad-ass-mcp, so an MCP server that runs from the checkout (PYTHONPATH to
+# its src, or `uv run --directory`) comes up on main. Where the server runs
+# an installed package instead, CRAB_INSTALL=1 also installs the checkout
+# editable into CRAB_PYTHON. From inside the session, `crab-restart`
+# writes a flag and ends claude; the wrapper sees the flag, updates, and
+# resumes the same session in the same terminal. A plain exit ends the loop.
+#
+# Files live in ~/.claude/crab: <name>.session (the id), <name>.restart (the
+# flag), and an optional executable `update` run before every start for
+# anything else this machine needs pulled or rebuilt. Delete <name>.session
+# to start the crab fresh.
+#
+# Environment: CRAB_HOME (that folder), CRAB_REPO (the bad-ass-mcp checkout
+# the MCP server runs from, default ~/code/bad-ass-mcp), CRAB_INSTALL (1 to
+# also install it editable: uv tool when that is how it is installed, else
+# pip into CRAB_PYTHON, default python3), CRAB_EXTRAS (e.g. "[macos]"),
+# CRAB_CLAUDE (the claude command).
+set -uo pipefail
+
+name="${1:-${CRAB_NAME:-$(hostname -s)-crab}}"
+[ $# -gt 0 ] && shift
+dir="${CRAB_HOME:-$HOME/.claude/crab}"
+repo="${CRAB_REPO:-$HOME/code/bad-ass-mcp}"
+py="${CRAB_PYTHON:-python3}"
+claude_bin="${CRAB_CLAUDE:-claude}"
+mkdir -p "$dir"
+session_file="$dir/$name.session"
+flag="$dir/$name.restart"
+
+fresh=0
+if [ ! -s "$session_file" ]; then
+  id=$("$py" -c 'import uuid; print(uuid.uuid4())' 2>/dev/null || uuidgen | tr '[:upper:]' '[:lower:]')
+  printf '%s\n' "$id" >"$session_file"
+  fresh=1
+fi
+session=$(head -n1 "$session_file" | tr -d '[:space:]')
+
+update() {
+  if [ -d "$repo/.git" ]; then
+    if ! git -C "$repo" pull -q --ff-only; then
+      echo "crab: bad-ass-mcp pull failed, running what is checked out" >&2
+    fi
+    if [ "${CRAB_INSTALL:-0}" = 1 ]; then
+      # A uv tool install is already editable on the checkout; reinstalling
+      # picks up dependency changes. Otherwise pip, into CRAB_PYTHON.
+      if command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q '^bad-ass-mcp\b'; then
+        uv tool install -q --editable "$repo${CRAB_EXTRAS:-}" --force ||
+          echo "crab: uv tool install failed" >&2
+      elif ! "$py" -m pip show bad-ass-mcp 2>/dev/null | grep -q '^Editable project location'; then
+        "$py" -m pip install -q -e "$repo${CRAB_EXTRAS:-}" || echo "crab: editable install failed" >&2
+      fi
+    fi
+  fi
+  if [ -x "$dir/update" ]; then
+    "$dir/update" || echo "crab: update script failed" >&2
+  fi
+}
+
+export CRAB_NAME="$name" CRAB_HOME="$dir"
+while :; do
+  rm -f "$flag"
+  update
+  if [ "$fresh" = 1 ]; then
+    "$claude_bin" --dangerously-skip-permissions --session-id "$session" "$@"
+    fresh=0
+  else
+    "$claude_bin" --dangerously-skip-permissions --resume "$session" "$@"
+  fi
+  [ -f "$flag" ] || break
+  echo "crab: $name restarting"
+done
