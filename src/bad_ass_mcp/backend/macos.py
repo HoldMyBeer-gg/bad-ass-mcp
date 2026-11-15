@@ -1332,7 +1332,10 @@ class MacOSBackend(DesktopBackend):
             pass
         return 1.0
 
-    def start_recording(self, window_id: str | None = None, fps: int = 15) -> str:
+    def start_recording(
+        self, window_id: str | None = None, fps: int = 15, audio: bool = False
+    ) -> str:
+        self._audio_unsupported(audio)
         import os
         import tempfile
 

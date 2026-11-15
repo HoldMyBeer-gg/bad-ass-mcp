@@ -40,7 +40,7 @@ Actions fire on control objects directly, so the target window doesn't need focu
 | `wait_for_element` | Wait until an element exists and optionally has a given state |
 | `wait_for_text` | Wait until an element reads a text, contains it, or matches a regex such as `^Opened`; by handle, or re-found each poll by role and name for labels |
 | `screenshot` | Capture a PNG (write to `output_path` or return base64) |
-| `start_recording` | Start recording the screen (or a specific window) |
+| `start_recording` | Start recording the screen (or a specific window); `audio=True` adds the system sound on Windows |
 | `stop_recording` | Stop recording and export as GIF (short clips) or MP4 (long sessions, no re-encode) |
 | `learn_layout` | Resolve semantic names → live handle IDs (one call per session) |
 | `run_sequence` | Execute a list of actions server-side, no per-action round-trips |
@@ -61,6 +61,7 @@ Observed driving large native apps (a game editor, a DAW) on Windows:
 - **SetValue skips the app's event handlers.** Setting a filter box's text won't re-run the filter; press a key or click elsewhere and back to trigger it.
 - **Never send bare keys into an editor without a focused dialog.** In most DAWs and NLEs, single keys are editor shortcuts and will edit the project.
 - **Long demos**: `stop_recording` to a `.mp4` path keeps the raw capture (seconds to finish); GIF transcodes and downscales, fine for under a minute.
+- **Sound**: `start_recording(..., audio=True)` records everything the machine plays (not only the recorded app, and never the microphone) into the MP4. Off unless asked; Windows only for now.
 
 ## Webviews: waking lazy accessibility trees
 

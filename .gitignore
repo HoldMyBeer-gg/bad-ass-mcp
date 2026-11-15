@@ -13,3 +13,8 @@ build/
 
 # uv writes this on `uv run`; CI and releases use pip
 uv.lock
+
+# Local tool and crash files
+.mcp.json
+.python-version
+*.stackdump
