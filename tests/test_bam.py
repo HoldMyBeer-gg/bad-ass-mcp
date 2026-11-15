@@ -1859,6 +1859,37 @@ def test_our_own_input_is_not_mistaken_for_the_user(tmp_path):
     assert desk.key_log == ["F1", "F2"]
 
 
+def test_input_sent_by_a_shell_step_is_ours(tmp_path, monkeypatch):
+    """A shell step may run a helper that clicks or types (the goblin
+    showcase opened the Creation Kit's File menu from one). That input comes
+    from another process, so nothing marks it; it is still the run's own,
+    not a person's."""
+    from bad_ass_mcp.bam import runner
+
+    desk = _Human()
+    real = runner._shell
+
+    def helper_that_clicks(cmd, env, timeout=60):
+        desk.last_input = desk._t.monotonic()
+        return real("true", env)
+
+    monkeypatch.setattr(runner, "_shell", helper_that_clicks)
+    script = _real_input_script(
+        tmp_path,
+        [
+            {"action": "sleep", "seconds": 1.2},
+            {"action": "shell", "cmd": "true"},
+            {"action": "sleep", "seconds": 0.4},
+            {"action": "key", "key": "F2"},
+        ],
+    )
+    res = run_script(
+        desk, script, "linux", {**CONFIG, "demo": True, "demo_pace": 0}, tmp_path / "out"
+    )
+    assert res["status"] == "PASS", res.get("failure")
+    assert desk.key_log == ["F2"]
+
+
 def test_background_scripts_dont_care_if_the_user_works(tmp_path):
     """No real input in the script: it runs behind the user's back by design."""
     desk = _Human()

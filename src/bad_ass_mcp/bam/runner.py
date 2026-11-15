@@ -877,6 +877,10 @@ class _Run:
                 r = _shell(
                     sent[start].get("cmd", ""), self.vars, timeout=sent[start].get("timeout", 60)
                 )
+                # A helper run by the step may have clicked or typed from its
+                # own process, where nothing marks the input as ours: input
+                # up to here is the run's, not a person's.
+                self.own_until = max(self.own_until, time.monotonic())
                 if r.returncode != 0:
                     raise ScriptFailure(
                         f"shell step failed ({r.returncode}): {sent[start].get('cmd')!r} "
