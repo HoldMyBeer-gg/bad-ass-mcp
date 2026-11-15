@@ -89,6 +89,94 @@ def prune_tree(root: "ElementHandle") -> "ElementHandle":
 _LAST_INJECTED = [0.0]
 
 
+# Runs ffmpeg for _spawn_recorder on POSIX and ends it when the server is
+# gone: a recorder that outlived a dead server kept capturing the whole
+# desktop until its 30 minute bound. Arguments: the server pid, then the
+# ffmpeg command. stdin is handed on explicitly, since a background job in
+# a non-interactive sh gets /dev/null otherwise and the 'q' from
+# stop_recording would never arrive. SIGTERM makes ffmpeg finish the file;
+# a background job in sh ignores SIGINT.
+_RECORDER_GUARD = """
+parent=$1; shift
+exec 3<&0
+"$@" <&3 &
+exec 3<&-
+child=$!
+while kill -0 "$parent" 2>/dev/null && kill -0 "$child" 2>/dev/null; do
+  sleep 0.5
+done
+kill -0 "$child" 2>/dev/null && kill -TERM "$child" 2>/dev/null
+wait "$child"
+"""
+
+_JOBS: list = []  # Windows job handles; a job ends its processes when its last handle closes
+
+
+def _bind_to_job(proc) -> None:
+    """Windows: put the recorder in a job object that kills its processes
+    when the handle closes, which the OS does when this process dies. Best
+    effort: an older Windows that refuses nested jobs leaves the recorder
+    as before."""
+    import ctypes
+    from ctypes import wintypes
+
+    class IO_COUNTERS(ctypes.Structure):
+        _fields_ = [
+            (n, ctypes.c_ulonglong)
+            for n in (
+                "ReadOperationCount",
+                "WriteOperationCount",
+                "OtherOperationCount",
+                "ReadTransferCount",
+                "WriteTransferCount",
+                "OtherTransferCount",
+            )
+        ]
+
+    class BASIC_LIMITS(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_longlong),
+            ("PerJobUserTimeLimit", ctypes.c_longlong),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class EXTENDED_LIMITS(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", BASIC_LIMITS),
+            ("IoInfo", IO_COUNTERS),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+    JobObjectExtendedLimitInformation = 9
+    k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+    k32.CreateJobObjectW.restype = wintypes.HANDLE  # 64-bit; the default int truncates
+    job = k32.CreateJobObjectW(None, None)
+    if not job:
+        return
+    info = EXTENDED_LIMITS()
+    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    ok = k32.SetInformationJobObject(
+        wintypes.HANDLE(job),
+        JobObjectExtendedLimitInformation,
+        ctypes.byref(info),
+        ctypes.sizeof(info),
+    ) and k32.AssignProcessToJobObject(wintypes.HANDLE(job), wintypes.HANDLE(proc._handle))
+    if ok:
+        _JOBS.append(job)
+    else:
+        k32.CloseHandle(wintypes.HANDLE(job))
+
+
 def drive(steps: Generator[None, None, Any], pause: Callable[[], None]) -> Any:
     """Run a wait generator to its return value, calling pause() between
     its steps. See the waits section of DesktopBackend."""
@@ -517,11 +605,18 @@ class DesktopBackend(ABC):
 
     @staticmethod
     def _h264_output(video_path: str) -> list[str]:
-        """The encode every recording ends with: H.264 in 4:2:0 with the moov
-        atom up front, which browsers and QuickTime play. Left alone, libx264
-        keeps the capture's chroma (4:4:4 from gdigrab, 4:2:2 from
-        avfoundation) and the file shows only a poster in a browser. 4:2:0
-        needs even dimensions; every backend evens its crop."""
+        """The encode every recording ends with: H.264 in 4:2:0, which
+        browsers and QuickTime play. Left alone, libx264 keeps the capture's
+        chroma (4:4:4 from gdigrab, 4:2:2 from avfoundation) and the file
+        shows only a poster in a browser. 4:2:0 needs even dimensions; every
+        backend evens its crop.
+
+        The file is written fragmented, with an empty moov up front and a
+        fragment per keyframe, flushed to disk as written, and a keyframe is
+        forced every two seconds: if the server dies mid-take, what is on
+        disk still plays, and at most two seconds are lost. A plain MP4 gets its moov atom only when
+        ffmpeg finishes, so a kill left nothing playable. _export_recording
+        remuxes a clean stop into the ordinary seekable file."""
         return [
             "-t",
             "1800",
@@ -533,8 +628,12 @@ class DesktopBackend(ABC):
             "23",
             "-pix_fmt",
             "yuv420p",
+            "-force_key_frames",
+            "expr:gte(t,n_forced*2)",
+            "-flush_packets",
+            "1",
             "-movflags",
-            "+faststart",
+            "+frag_keyframe+empty_moov",
             video_path,
         ]
 
@@ -547,6 +646,7 @@ class DesktopBackend(ABC):
         index, a missing display) surfaces as a RuntimeError here rather
         than as a missing-file error at stop_recording. Returns
         (proc, video_path, log_path) for the _recordings table."""
+        import os
         import subprocess
         import time as _time
 
@@ -554,13 +654,21 @@ class DesktopBackend(ABC):
             cmd = [cmd[0], "-hide_banner", *cmd[1:]]
         log_path = video_path + ".log"
         log = open(log_path, "wb")
+        popen_kw: dict = {}
+        if sys.platform != "win32":
+            # The guard ends the recorder when this process is gone; its own
+            # session makes the pair one process group for the kill path.
+            cmd = ["sh", "-c", _RECORDER_GUARD, "bam-recorder", str(os.getpid()), *cmd]
+            popen_kw["start_new_session"] = True
         try:
             proc = subprocess.Popen(
-                cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=log
+                cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=log, **popen_kw
             )
         except FileNotFoundError:
             log.close()
             raise RuntimeError("ffmpeg not found; install it to use start_recording")
+        if sys.platform == "win32":
+            _bind_to_job(proc)
         # Give ffmpeg long enough to open the device and reject it.
         deadline = _time.monotonic() + 1.5
         while _time.monotonic() < deadline:
@@ -593,11 +701,12 @@ class DesktopBackend(ABC):
         return " | ".join(kept) or "(ffmpeg wrote nothing)"
 
     @staticmethod
-    def _finish_recorder(entry: tuple) -> str:
-        """Quit ffmpeg gracefully ('q' on stdin writes the moov atom), wait,
-        and return the capture path. Raises with ffmpeg's last stderr lines
-        if the capture file never appeared."""
+    def _finish_recorder(entry: tuple, grace: float = 10.0) -> str:
+        """Quit ffmpeg gracefully ('q' on stdin finishes the file), wait up
+        to `grace` seconds, and return the capture path. Raises with
+        ffmpeg's last stderr lines if the capture file never appeared."""
         import os
+        import signal
         import subprocess
 
         proc, video_path = entry[0], entry[1]
@@ -608,8 +717,15 @@ class DesktopBackend(ABC):
         except Exception:
             pass
         try:
-            proc.wait(timeout=10)
+            proc.wait(timeout=grace)
         except subprocess.TimeoutExpired:
+            if sys.platform != "win32":
+                # The guard and ffmpeg share a process group (their own
+                # session), so this reaches ffmpeg, not only the guard.
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             proc.kill()
             proc.wait()
         if not os.path.exists(video_path):
@@ -624,15 +740,41 @@ class DesktopBackend(ABC):
 
     @staticmethod
     def _export_recording(video_path: str, canonical: str, fmt: str) -> str:
-        """Finish a stopped recording: transcode to GIF, or move the already
-        H.264-encoded capture into place for mp4 (no re-encode, so a
-        half-hour session finishes instantly and keeps full resolution)."""
+        """Finish a stopped recording: transcode to GIF, or for mp4 copy the
+        H.264 stream into an ordinary file with the moov atom up front (no
+        re-encode, so a half-hour session finishes in seconds and keeps full
+        resolution). The capture itself is fragmented so a crash leaves it
+        playable; without ffmpeg at hand it is moved into place as is."""
         import os
         import shutil
         import subprocess
 
         if fmt == "mp4":
-            shutil.move(video_path, canonical)
+            try:
+                remux = subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-i",
+                        video_path,
+                        "-c",
+                        "copy",
+                        "-movflags",
+                        "+faststart",
+                        canonical,
+                    ],
+                    capture_output=True,
+                )
+                ok = remux.returncode == 0 and os.path.exists(canonical)
+            except FileNotFoundError:
+                ok = False
+            if ok:
+                try:
+                    os.unlink(video_path)
+                except OSError:
+                    pass
+            else:
+                shutil.move(video_path, canonical)
             return canonical
         result = subprocess.run(
             [

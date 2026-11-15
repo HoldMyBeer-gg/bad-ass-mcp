@@ -677,7 +677,9 @@ def _web_playable(cmd: list[str]) -> None:
     4:2:2 (avfoundation), and the bam-site gallery showed only a poster."""
     assert cmd[cmd.index("-c:v") + 1] == "libx264"
     assert cmd[cmd.index("-pix_fmt") + 1] == "yuv420p"
-    assert cmd[cmd.index("-movflags") + 1] == "+faststart"
+    # Written fragmented so a crash leaves a playable file; the mp4 export
+    # remuxes with +faststart for the final file (test_recorder_survival).
+    assert "+frag_keyframe" in cmd[cmd.index("-movflags") + 1]
     assert cmd.index("-pix_fmt") < len(cmd) - 1  # an output option, before the path
 
 
