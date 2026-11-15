@@ -14,6 +14,7 @@ children in one call, and give up with a clear error at a deadline.
 from __future__ import annotations
 
 import time
+from unittest.mock import patch
 
 import pytest
 
@@ -225,3 +226,183 @@ def test_wait_for_element_tool_returns_the_timeout_as_an_error():
     with patch.object(server, "_backend", lambda: _TooBig()):
         out = asyncio.run(server.wait_for_element(FAKE_WINDOW_ID, name="OK", timeout=5))
     assert "searched 31 elements" in out["error"]
+
+
+# ── macOS: the same on the accessibility tree ───────────────────────────
+
+
+class AXNode:
+    """A fake AXUIElement: role, title, children, extra attributes, and
+    how slow it answers."""
+
+    def __init__(self, role, name, children=(), delay=0.0, **attrs):
+        self.role, self.name, self.kids, self.delay = role, name, list(children), delay
+        self.attrs = {"AXRole": role, "AXTitle": name, "AXChildren": self.kids, **attrs}
+
+
+class AXCalls:
+    reads = 0  # cross-process reads; a search costs one per node
+
+
+def _fake_ax():
+    """The AX layer over AXNode trees. A search may read a node's attributes
+    together (once) and the app root's AXWindows; the linked title element
+    of an unlabelled node may be read too. Anything else is a bug."""
+    from bad_ass_mcp.backend import macos as m
+
+    def multi(el, attrs):
+        AXCalls.reads += 1
+        if el.delay:
+            time.sleep(el.delay)
+        return [el.attrs.get(a) for a in attrs]
+
+    def get(el, attr):
+        if attr == "AXWindows" and el.role == "AXApplication":
+            return list(el.kids)
+        if attr in ("AXTitle", "AXValue") and el.role == "AXStaticText":
+            AXCalls.reads += 1
+            return el.attrs.get(attr)
+        raise AssertionError(f"a search must not read {attr} node by node")
+
+    return patch.multiple(m, _ax_multi=multi, _ax_get=get)
+
+
+def _finder_window(rows=5000):
+    """An app whose window holds a sidebar tree and a list with `rows` rows."""
+    rows_ = [
+        AXNode("AXRow", f"Record{i}", [AXNode("AXStaticText", f"cell{i}")]) for i in range(rows)
+    ]
+    tree = AXNode(
+        "AXOutline",
+        "tree",
+        [
+            AXNode("AXRow", "Actors", [AXNode("AXRow", "Actor")]),
+            AXNode("AXRow", "Items", [AXNode("AXRow", "Armor"), AXNode("AXRow", "ArmorAddon")]),
+        ],
+    )
+    window = AXNode("AXWindow", "Object Window", [AXNode("AXList", "records", rows_), tree])
+    return AXNode("AXApplication", "CK", [window])
+
+
+def _mac():
+    from bad_ass_mcp.backend import macos as m
+
+    return object.__new__(m.MacOSBackend)
+
+
+@pytest.fixture(autouse=True)
+def _reset_ax():
+    AXCalls.reads = 0
+
+
+def test_macos_shallow_target_is_found_without_reading_the_big_list():
+    with _fake_ax():
+        found = _mac()._search(_finder_window(), "row", "ArmorAddon", limit=1)
+    assert [n.name for n in found] == ["ArmorAddon"]
+    assert AXCalls.reads < 15
+
+
+def test_macos_matches_come_shallow_first():
+    root = AXNode(
+        "AXApplication",
+        "app",
+        [
+            AXNode(
+                "AXWindow",
+                "w",
+                [
+                    AXNode("AXGroup", "a", [AXNode("AXButton", "OK", [AXNode("AXButton", "OK")])]),
+                    AXNode("AXButton", "OK"),
+                ],
+            )
+        ],
+    )
+    with _fake_ax():
+        found = _mac()._search(root, None, "OK")
+    assert found[0] is root.kids[0].kids[1]
+    assert len(found) == 3
+
+
+def test_macos_without_a_limit_every_match_is_still_found():
+    with _fake_ax():
+        found = _mac()._search(_finder_window(rows=300), None, "cell299")
+    assert len(found) == 1
+
+
+def test_macos_a_row_deep_in_the_big_list_is_still_reachable_with_a_limit():
+    with _fake_ax():
+        found = _mac()._search(_finder_window(rows=500), None, "Record480", limit=1)
+    assert [n.name for n in found] == ["Record480"]
+
+
+def test_macos_a_search_past_its_deadline_says_so_instead_of_hanging():
+    slow = AXNode(
+        "AXApplication",
+        "app",
+        [
+            AXNode(
+                "AXWindow",
+                "w",
+                [
+                    AXNode("AXGroup", f"n{i}", [AXNode("AXGroup", "x")], delay=0.01)
+                    for i in range(200)
+                ],
+                delay=0.01,
+            )
+        ],
+    )
+    t0 = time.monotonic()
+    with _fake_ax(), pytest.raises(SearchTimeout) as raised:
+        _mac()._search(slow, None, "never", deadline=time.monotonic() + 0.2)
+    assert time.monotonic() - t0 < 1.0
+    assert "searched" in str(raised.value)
+
+
+def test_macos_find_elements_passes_limit_and_has_a_default_deadline():
+    b = _mac()
+    seen = {}
+
+    def fake_search(el, role, name, limit=None, deadline=None):
+        seen.update(limit=limit, deadline=deadline)
+        return []
+
+    b._search = fake_search
+    b._find_app_element = lambda window_id: object()
+    b._pid_for_window = lambda window_id: 1
+    b.find_elements("123", name="OK", limit=1)
+    assert seen["limit"] == 1
+    assert seen["deadline"] is not None and seen["deadline"] > time.monotonic()
+
+
+def test_macos_reads_each_node_once():
+    """Role, every attribute a name can come from, and the children arrive
+    in one cross-process call per node; the fake raises on any other read."""
+    with _fake_ax():
+        found = _mac()._search(_finder_window(rows=20), "statictext", "cell7")
+    assert [n.name for n in found] == ["cell7"]
+    assert AXCalls.reads == 49  # one per node
+
+
+def test_macos_search_names_unlabelled_nodes_the_way_get_tree_does():
+    """An icon button with only AXHelp, and a field labelled by a separate
+    text element, are found by those names (the _ax_name fallbacks)."""
+    label = AXNode("AXStaticText", "")
+    label.attrs["AXValue"] = "Height"
+    root = AXNode(
+        "AXApplication",
+        "app",
+        [
+            AXNode(
+                "AXWindow",
+                "w",
+                [
+                    AXNode("AXButton", "", AXHelp="Close"),
+                    AXNode("AXTextField", "", AXTitleUIElement=label),
+                    label,
+                ],
+            )
+        ],
+    )
+    with _fake_ax():
+        assert [n.role for n in _mac()._search(root, None, "Close")] == ["AXButton"]
+        assert [n.role for n in _mac()._search(root, "textfield", "Height")] == ["AXTextField"]

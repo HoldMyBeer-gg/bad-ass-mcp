@@ -5,15 +5,18 @@ import re
 import subprocess
 import time
 import uuid
+from collections import deque
+from collections.abc import Callable
 from typing import Any
 
-from ..types import ActionResult, ElementHandle, StaleHandleError, WindowInfo
+from ..types import ActionResult, ElementHandle, SearchTimeout, StaleHandleError, WindowInfo
 from .base import DesktopBackend, mark_injected, prune_tree
 
 try:
     from AppKit import NSRunningApplication, NSWorkspace
     from ApplicationServices import (
         AXUIElementCopyAttributeValue,
+        AXUIElementCopyMultipleAttributeValues,
         AXUIElementCreateApplication,
         AXUIElementPerformAction,
         AXUIElementSetAttributeValue,
@@ -152,6 +155,16 @@ def _ax_value_to_rect(ax_value: Any) -> tuple[float, float, float, float] | None
 def _ax_get(element: Any, attr: str) -> Any:
     err, value = AXUIElementCopyAttributeValue(element, attr, None)
     return value if err == _kAXErrorSuccess else None
+
+
+def _ax_multi(element: Any, attrs: list[str]) -> list[Any]:
+    """Several attributes in one cross-process call. An attribute the
+    element lacks comes back as an AXValue error object; it is None here,
+    as _ax_get would give."""
+    err, values = AXUIElementCopyMultipleAttributeValues(element, attrs, 0, None)
+    if err != _kAXErrorSuccess or values is None:
+        return [None] * len(attrs)
+    return [None if type(v).__name__ == "AXValueRef" else v for v in values]
 
 
 def _ax_set(element: Any, attr: str, value: Any) -> bool:
@@ -379,9 +392,13 @@ def _quartz_type_char(char: str, pid: int | None = None) -> None:
         CGEventPost(kCGSessionEventTap, up)
 
 
-def _role_name(element: Any) -> str:
-    role = _ax_get(element, "AXRole") or "AXUnknown"
+def _role_from(ax_role: Any) -> str:
+    role = ax_role or "AXUnknown"
     return role[2:].lower() if role.startswith("AX") else role.lower()
+
+
+def _role_name(element: Any) -> str:
+    return _role_from(_ax_get(element, "AXRole"))
 
 
 def _ax_name(element: Any) -> str:
@@ -403,11 +420,23 @@ def _ax_name(element: Any) -> str:
 
     Returns "" when the element is genuinely unlabelled everywhere.
     """
-    name = _ax_get(element, "AXTitle") or _ax_get(element, "AXDescription")
+    return _name_from(lambda attr: _ax_get(element, attr))
+
+
+# Everything _name_from may ask for, so a search can read them with the
+# role and the children in one call per node.
+_NAME_ATTRS = ["AXTitle", "AXDescription", "AXTitleUIElement", "AXRole", "AXValue", "AXHelp"]
+_NAME_ATTRS.append("AXRoleDescription")
+
+
+def _name_from(get: Callable[[str], Any]) -> str:
+    """The label in _ax_name's order, from attribute reads `get(attr)`:
+    lazy reads for one element, or a dict's lookups for prefetched ones."""
+    name = get("AXTitle") or get("AXDescription")
     if name:
         return name
 
-    title_el = _ax_get(element, "AXTitleUIElement")
+    title_el = get("AXTitleUIElement")
     if title_el is not None:
         linked = _ax_get(title_el, "AXTitle") or _ax_get(title_el, "AXValue")
         if linked:
@@ -415,20 +444,20 @@ def _ax_name(element: Any) -> str:
 
     # Static text has its words in AXValue (what VoiceOver reads). Only for
     # static text: other roles' values are content, such as typed text.
-    if _ax_get(element, "AXRole") == "AXStaticText":
-        words = _ax_get(element, "AXValue")
+    if get("AXRole") == "AXStaticText":
+        words = get("AXValue")
         if isinstance(words, str) and words.strip():
             return words
 
-    help_text = _ax_get(element, "AXHelp")
+    help_text = get("AXHelp")
     if help_text:
         return str(help_text)
 
     # AXRoleDescription is the last resort. Skip it when it just echoes the
     # role ("button" for a button), and that adds nothing over the role field.
     # Keep it when it's more specific ("close button", "minimize button").
-    role_desc = _ax_get(element, "AXRoleDescription")
-    if role_desc and role_desc.lower() != _role_name(element):
+    role_desc = get("AXRoleDescription")
+    if role_desc and role_desc.lower() != _role_from(get("AXRole")):
         return str(role_desc)
 
     return ""
@@ -670,19 +699,53 @@ class MacOSBackend(DesktopBackend):
                 continue
         return None
 
+    # A container with more children than this (a list with thousands of
+    # rows) has them read behind everything else, so a lookup for a button
+    # or a sidebar item beside it never waits for the rows.
+    SEARCH_BIG_LIST = 50
+
     def _search(
-        self, element: Any, role: str | None, name: str | None, depth: int = 0
+        self,
+        element: Any,
+        role: str | None,
+        name: str | None,
+        limit: int | None = None,
+        deadline: float | None = None,
     ) -> list[Any]:
+        """Breadth first from `element`, shallow matches first. Stops after
+        `limit` matches; raises SearchTimeout past `deadline`. Each node
+        costs one cross-process call: its role, every attribute a name can
+        come from, and its children arrive together."""
+        attrs = ["AXRole", *_NAME_ATTRS[:3], *_NAME_ATTRS[4:], "AXChildren"]
         results: list[Any] = []
-        try:
-            node_role = _role_name(element)
-            node_name = _ax_name(element)
-            if (role is None or node_role == role) and (name is None or node_name == name):
-                results.append(element)
-            for child in self._ax_descendants(element, depth):
-                results.extend(self._search(child, role, name, depth + 1))
-        except Exception:
-            pass
+        queue: deque[tuple[Any, int]] = deque([(element, 0)])
+        low: deque[tuple[Any, int]] = deque()  # the rows of big containers
+        visited = 0
+        started = time.monotonic()
+        while queue or low:
+            if deadline is not None and time.monotonic() > deadline:
+                raise SearchTimeout(
+                    f"searched {visited} elements in {time.monotonic() - started:.1f}s "
+                    "without finishing; narrow the search by role and name"
+                )
+            node, depth = queue.popleft() if queue else low.popleft()
+            visited += 1
+            try:
+                vals = dict(zip(attrs, _ax_multi(node, attrs)))
+                if (role is None or _role_from(vals["AXRole"]) == role) and (
+                    name is None or _name_from(vals.get) == name
+                ):
+                    results.append(node)
+                    if limit is not None and len(results) >= limit:
+                        break
+                # The app root's windows hide in AXWindows (see _ax_descendants).
+                kids = (
+                    self._ax_descendants(node, 0) if depth == 0 else list(vals["AXChildren"] or [])
+                )
+            except Exception:
+                continue
+            entries = [(kid, depth + 1) for kid in kids]
+            (low if len(entries) > self.SEARCH_BIG_LIST else queue).extend(entries)
         return results
 
     def _window_geometry(self, window_id: str) -> tuple[int, int, int, int] | None:
@@ -814,9 +877,8 @@ class MacOSBackend(DesktopBackend):
         if app is None:
             return []
         pid = self._pid_for_window(window_id)
-        nodes = self._search(app, role, name)
-        if limit is not None:
-            nodes = nodes[:limit]
+        deadline = time.monotonic() + self.SEARCH_BUDGET_S
+        nodes = self._search(app, role, name, limit=limit, deadline=deadline)
         return [self._to_handle(n, pid) for n in nodes]
 
     def element_bounds(self, handle_id: str) -> tuple[float, float, float, float] | None:
