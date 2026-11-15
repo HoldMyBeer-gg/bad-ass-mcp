@@ -8,8 +8,8 @@ A cross-platform MCP server for desktop GUI automation, driven by accessibility 
 
 Works with Claude, Codex, Gemini, Ollama, or any OpenAI-compatible client that supports MCP.
 
-![bad-ass-mcp recording itself interacting with MarkTheCrab](https://raw.githubusercontent.com/HoldMyBeer-gg/bad-ass-mcp/main/docs/demo.gif)
-*bad-ass-mcp recording itself interacting with [MarkTheCrab](https://github.com/HoldMyBeer-gg/MarkTheCrab)*
+[![A Diablo 3 Treasure Goblin becomes a Skyrim mod, driven by bad-ass-mcp](https://img.youtube.com/vi/1Re3UkuC0fE/maxresdefault.jpg)](https://www.youtube.com/watch?v=1Re3UkuC0fE)
+*A Diablo 3 Treasure Goblin becomes a playable Skyrim mod with no hand work in between: bad-ass-mcp drives [RustyDemon](https://rustydemon.holdmybeer.gg/), Blender with [BlenderWright](https://blenderwright.holdmybeer.gg/), and the mod export end to end. Click to watch.*
 
 ## Why
 
