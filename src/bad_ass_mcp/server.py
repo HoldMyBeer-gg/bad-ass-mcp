@@ -13,7 +13,7 @@ import anyio
 from mcp.server.fastmcp import FastMCP
 from mcp.shared.session import RequestResponder
 
-from .types import BlockedByDialog, StaleHandleError
+from .types import BlockedByDialog, SearchTimeout, StaleHandleError
 
 mcp = FastMCP("bad-ass-mcp")
 
@@ -207,13 +207,19 @@ def find_elements(
     window_id: str,
     role: str | None = None,
     name: str | None = None,
-) -> list[dict]:
+) -> list[dict] | dict:
     """Find interactive elements by role and/or name.
     Returns element handles; pass the 'id' field to click/type_text/etc.
     Common roles: button, combo box, text, entry, check box, menu item.
     name is an exact match, not a substring ("Load Listfile…" with its
-    ellipsis, "Export Folder" not "Export"); use get_tree to read names."""
-    els = _backend().find_elements(window_id, role=role, name=name)
+    ellipsis, "Export Folder" not "Export"); use get_tree to read names.
+
+    On a window with a huge tree a search gives up after about 10 s and
+    returns {"error": "searched N elements ..."}; narrow it by role and name."""
+    try:
+        els = _backend().find_elements(window_id, role=role, name=name)
+    except SearchTimeout as e:
+        return {"error": str(e)}
     return [
         {"id": e.id, "role": e.role, "name": e.name, "value": e.value, "states": sorted(e.states)}
         for e in els
@@ -322,6 +328,8 @@ async def wait_for_element(
         )
     except BlockedByDialog as blocked:
         return {"error": str(blocked), "dialog": blocked.dialog.__dict__}
+    except SearchTimeout as e:
+        return {"error": str(e)}
     if el is None:
         return {"error": "Timeout: element not found"}
     return {

@@ -199,6 +199,35 @@ def test_the_children_cache_carries_name_and_control_type():
     assert sorted(added) == [30003, 30005]
 
 
+# ── the MCP tools answer a timeout the way they answer a blocking dialog ──
+
+
+class _TooBig(FakeBackend):
+    def find_elements(self, window_id, *, role=None, name=None, index=0, limit=None):
+        raise SearchTimeout("searched 31 elements in 10.0s without finishing")
+
+
+def test_find_elements_tool_returns_the_timeout_as_an_error():
+    from unittest.mock import patch
+
+    from bad_ass_mcp import server
+
+    with patch.object(server, "_backend", lambda: _TooBig()):
+        out = server.find_elements(FAKE_WINDOW_ID, name="OK")
+    assert "searched 31 elements" in out["error"]
+
+
+def test_wait_for_element_tool_returns_the_timeout_as_an_error():
+    import asyncio
+    from unittest.mock import patch
+
+    from bad_ass_mcp import server
+
+    with patch.object(server, "_backend", lambda: _TooBig()):
+        out = asyncio.run(server.wait_for_element(FAKE_WINDOW_ID, name="OK", timeout=5))
+    assert "searched 31 elements" in out["error"]
+
+
 # ── macOS: the same on the accessibility tree ───────────────────────────
 
 
