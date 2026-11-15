@@ -20,7 +20,7 @@ import zlib
 from typing import Any
 
 from ..types import ActionResult, ElementHandle, StaleHandleError, WindowInfo
-from .base import DesktopBackend, _AudioTap, mark_injected, prune_tree
+from .base import DesktopBackend, mark_injected, prune_tree
 
 
 class _MarkInput:
@@ -134,195 +134,6 @@ class _FramePump(threading.Thread):
         self._stopping.set()
         if self.is_alive() and threading.current_thread() is not self:
             self.join(timeout=5)
-
-
-_AUDCLNT_STREAMFLAGS_LOOPBACK = 0x00020000
-_AUDCLNT_BUFFERFLAGS_SILENT = 0x2
-_WAVE_FORMAT_PCM = 1
-_WAVE_FORMAT_IEEE_FLOAT = 3
-_WAVE_FORMAT_EXTENSIBLE = 0xFFFE
-
-
-def _wasapi_interfaces():
-    """The four Core Audio interfaces loopback needs, declared on first use
-    so this module still imports where comtypes is missing."""
-    from ctypes import POINTER, c_int64, c_uint32, c_uint64, c_void_p
-
-    from comtypes import COMMETHOD, GUID, HRESULT, IUnknown
-
-    class IAudioCaptureClient(IUnknown):
-        _iid_ = GUID("{C8ADBD64-E71E-48A0-A4DE-185C395CD317}")
-        _methods_ = [
-            COMMETHOD(
-                [],
-                HRESULT,
-                "GetBuffer",
-                (["out"], POINTER(c_void_p), "data"),
-                (["out"], POINTER(c_uint32), "frames"),
-                (["out"], POINTER(c_uint32), "flags"),
-                (["out"], POINTER(c_uint64), "position"),
-                (["out"], POINTER(c_uint64), "qpc"),
-            ),
-            COMMETHOD([], HRESULT, "ReleaseBuffer", (["in"], c_uint32, "frames")),
-            COMMETHOD([], HRESULT, "GetNextPacketSize", (["out"], POINTER(c_uint32), "frames")),
-        ]
-
-    class IAudioClient(IUnknown):
-        _iid_ = GUID("{1CB9AD4C-DBFA-4C32-B178-C2F568A703B2}")
-        _methods_ = [
-            COMMETHOD(
-                [],
-                HRESULT,
-                "Initialize",
-                (["in"], c_uint32, "mode"),
-                (["in"], c_uint32, "flags"),
-                (["in"], c_int64, "duration"),
-                (["in"], c_int64, "periodicity"),
-                (["in"], c_void_p, "format"),
-                (["in"], c_void_p, "session"),
-            ),
-            COMMETHOD([], HRESULT, "GetBufferSize", (["out"], POINTER(c_uint32), "frames")),
-            COMMETHOD([], HRESULT, "GetStreamLatency", (["out"], POINTER(c_int64), "latency")),
-            COMMETHOD([], HRESULT, "GetCurrentPadding", (["out"], POINTER(c_uint32), "frames")),
-            COMMETHOD(
-                [],
-                HRESULT,
-                "IsFormatSupported",
-                (["in"], c_uint32, "mode"),
-                (["in"], c_void_p, "format"),
-                (["out"], POINTER(c_void_p), "closest"),
-            ),
-            COMMETHOD([], HRESULT, "GetMixFormat", (["out"], POINTER(c_void_p), "format")),
-            COMMETHOD(
-                [],
-                HRESULT,
-                "GetDevicePeriod",
-                (["out"], POINTER(c_int64), "default"),
-                (["out"], POINTER(c_int64), "minimum"),
-            ),
-            COMMETHOD([], HRESULT, "Start"),
-            COMMETHOD([], HRESULT, "Stop"),
-            COMMETHOD([], HRESULT, "Reset"),
-            COMMETHOD([], HRESULT, "SetEventHandle", (["in"], c_void_p, "event")),
-            COMMETHOD(
-                [],
-                HRESULT,
-                "GetService",
-                (["in"], POINTER(GUID), "iid"),
-                (["out"], POINTER(POINTER(IUnknown)), "service"),
-            ),
-        ]
-
-    class IMMDevice(IUnknown):
-        _iid_ = GUID("{D666063F-1587-4E43-81F1-B948E807363F}")
-        _methods_ = [
-            COMMETHOD(
-                [],
-                HRESULT,
-                "Activate",
-                (["in"], POINTER(GUID), "iid"),
-                (["in"], c_uint32, "clsctx"),
-                (["in"], c_void_p, "params"),
-                (["out"], POINTER(POINTER(IUnknown)), "interface"),
-            ),
-        ]
-
-    class IMMDeviceEnumerator(IUnknown):
-        _iid_ = GUID("{A95664D2-9614-4F35-A746-DE8DB63617E6}")
-        _methods_ = [
-            COMMETHOD(
-                [],
-                HRESULT,
-                "EnumAudioEndpoints",
-                (["in"], c_uint32, "flow"),
-                (["in"], c_uint32, "mask"),
-                (["out"], POINTER(c_void_p), "devices"),
-            ),
-            COMMETHOD(
-                [],
-                HRESULT,
-                "GetDefaultAudioEndpoint",
-                (["in"], c_uint32, "flow"),
-                (["in"], c_uint32, "role"),
-                (["out"], POINTER(POINTER(IMMDevice)), "endpoint"),
-            ),
-        ]
-
-    return IMMDeviceEnumerator, IMMDevice, IAudioClient, IAudioCaptureClient
-
-
-def _raw_format(fmt: bytes) -> tuple[int, int, str]:
-    """(rate, channels, ffmpeg raw format) of a WAVEFORMATEX(TENSIBLE)."""
-    tag, channels, rate, _, _, bits = struct.unpack_from("<HHIIHH", fmt)
-    if tag == _WAVE_FORMAT_EXTENSIBLE and len(fmt) >= 26:
-        tag = struct.unpack_from("<H", fmt, 24)[0]  # first field of SubFormat
-    if tag == _WAVE_FORMAT_IEEE_FLOAT and bits == 32:
-        return rate, channels, "f32le"
-    if tag == _WAVE_FORMAT_PCM and bits in (16, 24, 32):
-        return rate, channels, f"s{bits}le"
-    raise OSError(f"unsupported mix format (tag {tag:#x}, {bits} bits)")
-
-
-class _LoopbackSource:
-    """The default output device's mix, through WASAPI loopback: what the
-    machine plays, not what a microphone hears. Opened on the thread that
-    reads it."""
-
-    def __init__(self) -> None:
-        comtypes.CoInitializeEx(comtypes.COINIT_MULTITHREADED)
-        try:
-            self._open()
-        except BaseException:
-            self._release()
-            comtypes.CoUninitialize()
-            raise
-
-    def _open(self) -> None:
-        enumerator_cls, _, client_cls, capture_cls = _wasapi_interfaces()
-        self._client = self._capture = self._format = None
-        enumerator = comtypes.CoCreateInstance(
-            comtypes.GUID("{BCDE0395-E52F-467C-8E3D-C4579291692E}"),
-            interface=enumerator_cls,
-            clsctx=comtypes.CLSCTX_ALL,
-        )
-        device = enumerator.GetDefaultAudioEndpoint(0, 0)  # render, console
-        self._client = device.Activate(
-            ctypes.byref(client_cls._iid_), comtypes.CLSCTX_ALL, None
-        ).QueryInterface(client_cls)
-        self._format = self._client.GetMixFormat()
-        cb = struct.unpack_from("<H", ctypes.string_at(self._format, 18), 16)[0]
-        fmt = ctypes.string_at(self._format, 18 + cb)
-        self.rate, self.channels, self.sample_fmt = _raw_format(fmt)
-        self.frame_bytes = struct.unpack_from("<H", fmt, 12)[0]
-        self._client.Initialize(0, _AUDCLNT_STREAMFLAGS_LOOPBACK, 10_000_000, 0, self._format, None)
-        self._capture = self._client.GetService(ctypes.byref(capture_cls._iid_)).QueryInterface(
-            capture_cls
-        )
-        self._client.Start()
-
-    def read(self) -> bytes | None:
-        if not self._capture.GetNextPacketSize():
-            return None
-        data, frames, flags, _, _ = self._capture.GetBuffer()
-        size = frames * self.frame_bytes
-        try:
-            if flags & _AUDCLNT_BUFFERFLAGS_SILENT or not data:
-                return bytes(size)
-            return ctypes.string_at(data, size)
-        finally:
-            self._capture.ReleaseBuffer(frames)
-
-    def _release(self) -> None:
-        if getattr(self, "_client", None) is not None:
-            with contextlib.suppress(Exception):
-                self._client.Stop()
-        if getattr(self, "_format", None):
-            ctypes.windll.ole32.CoTaskMemFree(ctypes.c_void_p(self._format))
-        self._capture = self._client = self._format = None
-
-    def close(self) -> None:
-        self._release()
-        comtypes.CoUninitialize()
 
 
 def _dwm_frame_bounds(hwnd: int) -> tuple[int, int, int, int] | None:
@@ -1375,9 +1186,7 @@ class WindowsBackend(DesktopBackend):
             return b""
         return png
 
-    def start_recording(
-        self, window_id: str | None = None, fps: int = 15, audio: bool = False
-    ) -> str:
+    def start_recording(self, window_id: str | None = None, fps: int = 15) -> str:
         import tempfile
 
         handle = str(uuid.uuid4())
@@ -1387,8 +1196,7 @@ class WindowsBackend(DesktopBackend):
             hwnd = int(window_id)
             geom = _dwm_frame_bounds(hwnd) or self._window_rect(hwnd)
             if geom:
-                self._record_window(handle, hwnd, geom, fps, video_path)
-                return self._with_audio(handle, audio)
+                return self._record_window(handle, hwnd, geom, fps, video_path)
 
         cmd = ["ffmpeg", "-y", "-f", "gdigrab", "-framerate", str(fps)]
         cmd += [
@@ -1397,35 +1205,7 @@ class WindowsBackend(DesktopBackend):
             *self._h264_output(video_path),
         ]
 
-        started = time.monotonic()
         self._recordings[handle] = self._spawn_recorder(cmd, video_path)
-        return self._with_audio(handle, audio, origin=started)
-
-    def _with_audio(self, handle: str, audio: bool, origin: float | None = None) -> str:
-        """Start recording the system's sound beside the take `handle` when
-        asked. Its clock starts at `origin`, the moment the first frame
-        stands for (now, for a pumped window); a sound device that will not
-        open ends the take and fails the start."""
-        if not audio:
-            return handle
-        entry = self._recordings[handle]
-        pcm_path = entry[1] + ".pcm"
-        sink = open(pcm_path, "wb")
-        tap = _AudioTap(_LoopbackSource, sink, origin=origin)
-        tap.start()
-        try:
-            tap.wait_ready()
-        except Exception:
-            sink.close()
-            with contextlib.suppress(OSError):
-                os.unlink(pcm_path)
-            with contextlib.suppress(Exception):
-                self.stop_recording(handle, entry[1] + ".discard.mp4")
-            with contextlib.suppress(OSError):
-                os.unlink(entry[1] + ".discard.mp4")
-            raise
-        pump = entry[3] if len(entry) > 3 else None
-        self._recordings[handle] = (*entry[:3], pump, tap, pcm_path, sink)
         return handle
 
     def _record_window(
@@ -1528,13 +1308,8 @@ class WindowsBackend(DesktopBackend):
 
         if handle not in self._recordings:
             raise ValueError(f"No active recording with handle {handle!r}")
-        entry = self._recordings.pop(handle)
-        video_path = self._finish_recorder(entry)
-        audio = None
-        if len(entry) > 6 and entry[4] is not None:
-            entry[6].close()
-            audio = (entry[5], entry[4].ffmpeg_input)
-        return self._export_recording(video_path, canonical, fmt, audio=audio)
+        video_path = self._finish_recorder(self._recordings.pop(handle))
+        return self._export_recording(video_path, canonical, fmt)
 
     def _send_mouse(self, events: list[tuple[int, float, float]]) -> ActionResult:
         """Send a batch of absolute mouse events via SendInput.

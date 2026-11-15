@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sys
-import threading
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator
@@ -176,80 +175,6 @@ def _bind_to_job(proc) -> None:
         _JOBS.append(job)
     else:
         k32.CloseHandle(wintypes.HANDLE(job))
-
-
-class _AudioTap(threading.Thread):
-    """Writes the system's sound (loopback, never the microphone) to `sink`
-    as raw samples on the video's clock.
-
-    `open_source` runs on this thread (COM sources must live on the thread
-    that uses them) and returns an object with `rate`, `channels`,
-    `sample_fmt` (an ffmpeg raw format such as "f32le"), `frame_bytes`,
-    `read()` (bytes, or None when nothing is waiting) and `close()`.
-
-    Loopback hands over nothing while the machine is silent, so whenever
-    the samples written fall behind the clock by more than a moment, the
-    gap is written as silence. `origin` is the monotonic time the video's
-    first frame stands for; the time before the source opened is silence
-    too, so sound and frames start together."""
-
-    _SLACK_S = 0.05
-    _POLL_S = 0.01
-
-    def __init__(self, open_source, sink, *, origin: float | None = None) -> None:
-        super().__init__(daemon=True, name="bam-audio-tap")
-        self._open = open_source
-        self._sink = sink
-        self._origin = time.monotonic() if origin is None else origin
-        self._ready = threading.Event()
-        self._stopping = threading.Event()
-        self._error: BaseException | None = None
-        self.ffmpeg_input: list[str] = []
-
-    def wait_ready(self, timeout: float = 3.0) -> None:
-        """Block until the source is open; raise if it could not be."""
-        if not self._ready.wait(timeout):
-            self.stop()
-            raise RuntimeError("system sound did not start in time")
-        if self._error is not None:
-            raise RuntimeError(f"cannot record system sound: {self._error}")
-
-    def run(self) -> None:
-        try:
-            src = self._open()
-        except BaseException as e:
-            self._error = e
-            self._ready.set()
-            return
-        self.ffmpeg_input = ["-f", src.sample_fmt, "-ar", str(src.rate), "-ac", str(src.channels)]
-        self._ready.set()
-        written = 0
-        try:
-            while True:
-                stopping = self._stopping.is_set()
-                got = False
-                while (data := src.read()) is not None:
-                    got = True
-                    self._sink.write(data)
-                    written += len(data) // src.frame_bytes
-                due = int((time.monotonic() - self._origin) * src.rate)
-                if due - written > self._SLACK_S * src.rate or (stopping and due > written):
-                    if not got or stopping:
-                        self._sink.write(bytes((due - written) * src.frame_bytes))
-                        written = due
-                self._sink.flush()
-                if stopping:
-                    return
-                self._stopping.wait(self._POLL_S)
-        except (OSError, ValueError):
-            return
-        finally:
-            src.close()
-
-    def stop(self) -> None:
-        self._stopping.set()
-        if self.is_alive() and threading.current_thread() is not self:
-            self.join(timeout=5)
 
 
 def drive(steps: Generator[None, None, Any], pause: Callable[[], None]) -> Any:
@@ -806,9 +731,6 @@ class DesktopBackend(ABC):
         proc, video_path = entry[0], entry[1]
         log_path = entry[2] if len(entry) > 2 else None
         pump = entry[3] if len(entry) > 3 else None
-        tap = entry[4] if len(entry) > 4 else None
-        if tap is not None:
-            tap.stop()
         try:
             if pump is not None:
                 # Frames arrive on stdin, where a 'q' would land mid-frame;
@@ -843,49 +765,30 @@ class DesktopBackend(ABC):
         return video_path
 
     @staticmethod
-    def _export_recording(
-        video_path: str,
-        canonical: str,
-        fmt: str,
-        audio: tuple[str, list[str]] | None = None,
-    ) -> str:
+    def _export_recording(video_path: str, canonical: str, fmt: str) -> str:
         """Finish a stopped recording: transcode to GIF, or for mp4 copy the
         H.264 stream into an ordinary file with the moov atom up front (no
         re-encode, so a half-hour session finishes in seconds and keeps full
         resolution). The capture itself is fragmented so a crash leaves it
-        playable; without ffmpeg at hand it is moved into place as is.
-
-        `audio` is (raw sound file, its ffmpeg input options) when the take
-        recorded system sound: an MP4 gets it as AAC, a GIF has no sound."""
-        import os
-
-        try:
-            return DesktopBackend._export_video(video_path, canonical, fmt, audio)
-        finally:
-            if audio is not None:
-                try:
-                    os.unlink(audio[0])
-                except OSError:
-                    pass
-
-    @staticmethod
-    def _export_video(
-        video_path: str, canonical: str, fmt: str, audio: tuple[str, list[str]] | None
-    ) -> str:
+        playable; without ffmpeg at hand it is moved into place as is."""
         import os
         import shutil
         import subprocess
 
         if fmt == "mp4":
-            if audio is not None:
-                cmd = ["ffmpeg", "-y", "-i", video_path, *audio[1], "-i", audio[0]]
-                cmd += ["-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac"]
-                cmd += ["-shortest"]
-            else:
-                cmd = ["ffmpeg", "-y", "-i", video_path, "-c", "copy"]
             try:
                 remux = subprocess.run(
-                    [*cmd, "-movflags", "+faststart", canonical],
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-i",
+                        video_path,
+                        "-c",
+                        "copy",
+                        "-movflags",
+                        "+faststart",
+                        canonical,
+                    ],
                     capture_output=True,
                 )
                 ok = remux.returncode == 0 and os.path.exists(canonical)
@@ -953,21 +856,9 @@ class DesktopBackend(ABC):
         self.last_raise = []
         return False
 
-    @staticmethod
-    def _audio_unsupported(audio: bool) -> None:
-        """For backends that cannot record system sound yet."""
-        if audio:
-            raise NotImplementedError(
-                "recording system audio is not implemented on this platform yet"
-            )
-
     @abstractmethod
-    def start_recording(
-        self, window_id: str | None = None, fps: int = 15, audio: bool = False
-    ) -> str:
-        """Start screen recording. Returns a recording handle. `audio`
-        records the system's sound (everything playing, never the
-        microphone) into the take."""
+    def start_recording(self, window_id: str | None = None, fps: int = 15) -> str:
+        """Start screen recording. Returns a recording handle."""
 
     @abstractmethod
     def stop_recording(self, handle: str, output_path: str) -> str:
