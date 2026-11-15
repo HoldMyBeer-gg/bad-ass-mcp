@@ -5,6 +5,7 @@ import subprocess
 import time
 import uuid
 from collections import deque
+from collections.abc import Callable
 from typing import Any
 
 import gi
@@ -184,6 +185,29 @@ class LinuxBackend(DesktopBackend):
             raise StaleHandleError(f"Handle {handle_id!r} is stale (widget gone)")
         return node
 
+    # The states a handle reports, by their AT-SPI StateType names.
+    _STATE_NAMES = (
+        "enabled",
+        "focused",
+        "visible",
+        "checked",
+        "editable",
+        "selected",
+        "expanded",
+        "active",
+        "pressed",
+    )
+
+    def _has_state(self, node: Any, state: str) -> bool:
+        """Whether `node` carries one of the states a handle reports."""
+        if state not in self._STATE_NAMES:
+            return False
+        attr = getattr(Atspi.StateType, state.upper(), None)
+        try:
+            return attr is not None and bool(node.get_state_set().contains(attr))
+        except Exception:
+            return False
+
     def _to_handle(self, node: Any) -> ElementHandle:
         handle_id = self._register(node)
         role = node.get_role_name() or "unknown"
@@ -197,17 +221,7 @@ class LinuxBackend(DesktopBackend):
         states = set()
         try:
             ss = node.get_state_set()
-            for state_name in (
-                "enabled",
-                "focused",
-                "visible",
-                "checked",
-                "editable",
-                "selected",
-                "expanded",
-                "active",
-                "pressed",
-            ):
+            for state_name in self._STATE_NAMES:
                 attr = getattr(Atspi.StateType, state_name.upper(), None)
                 if attr is not None and ss.contains(attr):
                     states.add(state_name)
@@ -372,16 +386,20 @@ class LinuxBackend(DesktopBackend):
         name: str | None,
         limit: int | None = None,
         deadline: float | None = None,
+        accept: Callable[[Any], bool] | None = None,
     ) -> list[Any]:
         """Breadth first from `node`, shallow matches first. Stops after
-        `limit` matches; raises SearchTimeout past `deadline`."""
+        `limit` matches; raises SearchTimeout past `deadline`. `accept`
+        is asked about each role and name match and can turn it down."""
         results: list[Any] = []
 
         def check(n: Any) -> bool:
             """Collect `n` if it matches. True once the limit is met."""
             try:
-                if (role is None or n.get_role_name() == role) and (
-                    name is None or (n.get_name() or "") == name
+                if (
+                    (role is None or n.get_role_name() == role)
+                    and (name is None or (n.get_name() or "") == name)
+                    and (accept is None or accept(n))
                 ):
                     results.append(n)
             except Exception:
@@ -654,6 +672,25 @@ class LinuxBackend(DesktopBackend):
             return []
         deadline = time.monotonic() + self.SEARCH_BUDGET_S
         nodes = self._search(app, role, name, limit=limit, deadline=deadline)
+        return [self._to_handle(n) for n in nodes]
+
+    def find_with_state(
+        self, window_id: str, *, role=None, name=None, state: str, limit=None
+    ) -> list[ElementHandle]:
+        """The state is read during the search, and only on role and name
+        matches, so a lookup for one element stops at the first that has it."""
+        app = self._find_app_waking(window_id)
+        if app is None:
+            return []
+        deadline = time.monotonic() + self.SEARCH_BUDGET_S
+        nodes = self._search(
+            app,
+            role,
+            name,
+            limit=limit,
+            deadline=deadline,
+            accept=lambda n: self._has_state(n, state),
+        )
         return [self._to_handle(n) for n in nodes]
 
     _XDO_BUTTONS = {"left": "1", "middle": "2", "right": "3"}
