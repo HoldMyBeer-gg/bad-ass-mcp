@@ -100,7 +100,7 @@ class FakeBackend(DesktopBackend):
             for el in _all_elements(_TREE)
             if (role is None or el.role == role) and (name is None or el.name == name)
         ]
-        return results
+        return results[:limit] if limit else results
 
     def click(self, handle_id: str, button: str = "left", clicks: int = 1) -> ActionResult:
         self._resolve(handle_id)

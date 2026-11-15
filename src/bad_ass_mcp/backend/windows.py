@@ -18,6 +18,7 @@ import time
 import uuid
 import zlib
 from collections import deque
+from collections.abc import Callable
 from typing import Any
 
 from ..types import ActionResult, ElementHandle, SearchTimeout, StaleHandleError, WindowInfo
@@ -583,6 +584,12 @@ class WindowsBackend(DesktopBackend):
         except Exception:
             pass
 
+        return ElementHandle(
+            id=handle_id, role=role, name=name, value=value, states=self._states_of(element, role)
+        )
+
+    @staticmethod
+    def _states_of(element: Any, role: str) -> set[str]:
         states: set[str] = set()
         try:
             if element.CurrentIsEnabled:
@@ -625,8 +632,7 @@ class WindowsBackend(DesktopBackend):
             pass
         if role in ("textfield", "combobox", "document"):
             states.add("editable")
-
-        return ElementHandle(id=handle_id, role=role, name=name, value=value, states=states)
+        return states
 
     def _walk(
         self,
@@ -699,18 +705,22 @@ class WindowsBackend(DesktopBackend):
         name: str | None,
         limit: int | None = None,
         deadline: float | None = None,
+        accept: Callable[[Any], bool] | None = None,
     ) -> list[Any]:
-        """Breadth first from `element`, shallow matches first. Stops after
+        """Breadth first from `element`, shallow matches first. `accept`
+        checks role and name matches further (a state, say). Stops after
         `limit` matches; raises SearchTimeout past `deadline`."""
         results: list[Any] = []
 
-        def matches(ct: int, nm: str) -> bool:
-            return (role is None or _CONTROL_TYPE_ROLES.get(ct, "unknown") == role) and (
-                name is None or nm == name
+        def matches(ct: int, nm: str, el: Any) -> bool:
+            return (
+                (role is None or _CONTROL_TYPE_ROLES.get(ct, "unknown") == role)
+                and (name is None or nm == name)
+                and (accept is None or accept(el))
             )
 
         try:
-            if matches(element.CurrentControlType, element.CurrentName or ""):
+            if matches(element.CurrentControlType, element.CurrentName or "", element):
                 results.append(element)
                 if limit is not None and len(results) >= limit:
                     return results
@@ -731,7 +741,7 @@ class WindowsBackend(DesktopBackend):
             read: list[Any] = []
             while el and len(read) < self.SEARCH_PAGE:
                 try:
-                    if matches(el.CachedControlType, el.CachedName or ""):
+                    if matches(el.CachedControlType, el.CachedName or "", el):
                         results.append(el)
                         if limit is not None and len(results) >= limit:
                             return True
@@ -942,6 +952,63 @@ class WindowsBackend(DesktopBackend):
         deadline = time.monotonic() + self.SEARCH_BUDGET_S
         found = self._search(root, role, name, limit=limit, deadline=deadline)
         return [self._to_handle(n, hwnd) for n in found]
+
+    def find_with_state(
+        self, window_id: str, *, role=None, name=None, state: str, limit=None
+    ) -> list[ElementHandle]:
+        hwnd = int(window_id)
+        if not _user32.IsWindow(hwnd):
+            return []
+        root = self._uia.ElementFromHandle(self._chromium_root(hwnd))
+        if root is None:
+            return []
+        if state == "focused":
+            # Only one element has keyboard focus: ask for it instead of
+            # walking the window, which can hold thousands of rows.
+            el = self._focused_within(root, role, name)
+            return [self._to_handle(el, hwnd)] if el is not None else []
+
+        def accept(el: Any) -> bool:
+            try:
+                r = _CONTROL_TYPE_ROLES.get(el.CurrentControlType, "unknown")
+            except Exception:
+                return False
+            return state in self._states_of(el, r)
+
+        deadline = time.monotonic() + self.SEARCH_BUDGET_S
+        found = self._search(root, role, name, limit=limit, deadline=deadline, accept=accept)
+        return [self._to_handle(n, hwnd) for n in found]
+
+    FOCUS_DEPTH = 256
+
+    def _focused_within(self, root: Any, role: str | None, name: str | None) -> Any:
+        """The element with keyboard focus, if it lies inside `root` and
+        matches role and name; otherwise None."""
+        try:
+            el = self._uia.GetFocusedElement()
+        except Exception:
+            return None
+        if el is None:
+            return None
+        try:
+            if role is not None and _CONTROL_TYPE_ROLES.get(el.CurrentControlType) != role:
+                return None
+            if name is not None and (el.CurrentName or "") != name:
+                return None
+        except Exception:
+            return None
+        walker = self._uia.RawViewWalker
+        node = el
+        for _ in range(self.FOCUS_DEPTH):
+            if node is None:
+                return None
+            try:
+                if self._uia.CompareElements(node, root):
+                    return el
+                node = walker.GetParentElement(node)
+            except Exception:
+                return None
+        return None
 
     def element_bounds(self, handle_id: str) -> tuple[float, float, float, float] | None:
         element = self._resolve(handle_id)
