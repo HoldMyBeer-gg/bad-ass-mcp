@@ -62,3 +62,12 @@ class ActionResult:
 
 class StaleHandleError(Exception):
     """Raised when an element handle is no longer valid (widget gone or UI changed)."""
+
+
+class BlockedByDialog(Exception):
+    """Raised by a wait whose window stays disabled behind a modal dialog:
+    the element can't appear until someone answers the dialog."""
+
+    def __init__(self, dialog: WindowInfo) -> None:
+        super().__init__(f"Blocked by dialog {dialog.name!r} (window_id {dialog.id})")
+        self.dialog = dialog

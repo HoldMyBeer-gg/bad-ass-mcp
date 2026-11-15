@@ -183,6 +183,7 @@ _SRCCOPY = 0x00CC0020
 _CAPTUREBLT = 0x40000000
 _GA_ROOT = 2
 _GA_ROOTOWNER = 3
+_GW_OWNER = 4
 
 
 # ── SendInput structures ──────────────────────────────────────────────
@@ -784,6 +785,48 @@ class WindowsBackend(DesktopBackend):
                 w.accessible = self._wake_chromium(hwnd, w.pid)
 
         return windows
+
+    def blocking_dialog(self, window_id: str) -> WindowInfo | None:
+        """A modal dialog disables its owner. When window_id is disabled,
+        the visible, enabled top-level window it owns (directly or through
+        a chain of owners) is what blocks it: the Creation Kit's "Warning"
+        box over its main window, for one."""
+        try:
+            hwnd = int(window_id)
+        except ValueError:
+            return None
+        if not _user32.IsWindow(hwnd) or _user32.IsWindowEnabled(hwnd):
+            return None
+        found: list[int] = []
+
+        @ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+        def _cb(h, _lparam):
+            if h == hwnd or not _user32.IsWindowVisible(h) or not _user32.IsWindowEnabled(h):
+                return True
+            owner = _user32.GetWindow(h, _GW_OWNER)
+            while owner:
+                if owner == hwnd:
+                    found.append(h)
+                    return False
+                owner = _user32.GetWindow(owner, _GW_OWNER)
+            return True
+
+        _user32.EnumWindows(_cb, 0)
+        if not found:
+            return None
+        h = found[0]
+        length = _user32.GetWindowTextLengthW(h)
+        buf = ctypes.create_unicode_buffer(length + 1)
+        _user32.GetWindowTextW(h, buf, length + 1)
+        pid = ctypes.wintypes.DWORD()
+        _user32.GetWindowThreadProcessId(h, ctypes.byref(pid))
+        return WindowInfo(
+            id=str(h),
+            name=buf.value,
+            pid=pid.value,
+            focused=h == _user32.GetForegroundWindow(),
+            bounds=self._window_rect(h),
+        )
 
     def get_tree(self, window_id: str, *, max_depth: int | None = None) -> ElementHandle:
         hwnd = int(window_id)
