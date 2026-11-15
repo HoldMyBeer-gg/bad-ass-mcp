@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Generator
+from typing import Any
 
 from ..types import ActionResult, ElementHandle, StaleHandleError, WindowInfo
 
@@ -85,6 +87,17 @@ def prune_tree(root: "ElementHandle") -> "ElementHandle":
 # keybd_event, CGEventPost, XTEST), so the BAM runner can tell its own input
 # from a person's: anything newer than this didn't come from us.
 _LAST_INJECTED = [0.0]
+
+
+def drive(steps: Generator[None, None, Any], pause: Callable[[], None]) -> Any:
+    """Run a wait generator to its return value, calling pause() between
+    its steps. See the waits section of DesktopBackend."""
+    try:
+        while True:
+            next(steps)
+            pause()
+    except StopIteration as done:
+        return done.value
 
 
 def mark_injected() -> None:
@@ -279,11 +292,51 @@ class DesktopBackend(ABC):
     def get_value(self, handle_id: str) -> str | None:
         """Return current text/value/state of an element."""
 
-    @abstractmethod
+    # ── waits ───────────────────────────────────────────────────────────
+    # Each wait is a generator that probes once per step and returns the hit,
+    # or None once its deadline has passed. The sync wait_for_* methods run
+    # one with time.sleep between steps; the MCP server runs the same
+    # generator with an async sleep, so a long wait leaves the event loop
+    # free for other calls and a client cancel ends it. Override the *_poll
+    # generator, not the wait, to change how a platform probes.
+
+    POLL_S = 0.1
+
+    def _pause(self) -> None:
+        time.sleep(self.POLL_S)
+
+    def window_poll(self, title_pattern: str, timeout: float) -> Generator[None, None, Any]:
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while True:
+            for w in self.list_windows():
+                if w.matches(title_pattern):
+                    return w
+            if time.monotonic() >= deadline:
+                return None
+            yield
+
     def wait_for_window(self, title_pattern: str, timeout: float = 5.0) -> WindowInfo | None:
         """Poll until a window matching title_pattern appears. Returns None on timeout."""
+        return drive(self.window_poll(title_pattern, timeout), self._pause)
 
-    @abstractmethod
+    def element_poll(
+        self,
+        window_id: str,
+        *,
+        role: str | None = None,
+        name: str | None = None,
+        state: str | None = None,
+        timeout: float = 5.0,
+    ) -> Generator[None, None, Any]:
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while True:
+            for el in self.find_elements(window_id, role=role, name=name):
+                if state is None or state in el.states:
+                    return el
+            if time.monotonic() >= deadline:
+                return None
+            yield
+
     def wait_for_element(
         self,
         window_id: str,
@@ -294,6 +347,44 @@ class DesktopBackend(ABC):
         timeout: float = 5.0,
     ) -> ElementHandle | None:
         """Poll until a matching element exists and optionally has the given state."""
+        return drive(
+            self.element_poll(window_id, role=role, name=name, state=state, timeout=timeout),
+            self._pause,
+        )
+
+    def text_poll(
+        self,
+        handle_id: str | None = None,
+        text: str | None = None,
+        *,
+        pattern: str | None = None,
+        contains: bool = False,
+        timeout: float = 5.0,
+        window_id: str | None = None,
+        role: str | None = None,
+        name: str | None = None,
+    ) -> Generator[None, None, Any]:
+        import re
+
+        want = _nfc(text) if text is not None else None
+        rx = re.compile(pattern) if pattern else None
+
+        def matches(value: str) -> bool:
+            got = _nfc(value)
+            if rx is not None:
+                return rx.search(got) is not None
+            if want is None:
+                return False
+            return (want in got) if contains else (got == want)
+
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while True:
+            for value in self._texts_of(handle_id, window_id, role, name):
+                if matches(value):
+                    return value
+            if time.monotonic() >= deadline:
+                return None
+            yield
 
     def wait_for_text(
         self,
@@ -318,27 +409,19 @@ class DesktopBackend(ABC):
         egui replaces such a node when its text changes, and the old
         handle keeps the old text for good, so the element is re-found
         each poll. An element without a value is read by its name."""
-        import re
-
-        want = _nfc(text) if text is not None else None
-        rx = re.compile(pattern) if pattern else None
-
-        def matches(value: str) -> bool:
-            got = _nfc(value)
-            if rx is not None:
-                return rx.search(got) is not None
-            if want is None:
-                return False
-            return (want in got) if contains else (got == want)
-
-        deadline = time.monotonic() + max(0.0, float(timeout))
-        while True:
-            for value in self._texts_of(handle_id, window_id, role, name):
-                if matches(value):
-                    return value
-            if time.monotonic() >= deadline:
-                return None
-            time.sleep(0.1)
+        return drive(
+            self.text_poll(
+                handle_id,
+                text,
+                pattern=pattern,
+                contains=contains,
+                timeout=timeout,
+                window_id=window_id,
+                role=role,
+                name=name,
+            ),
+            self._pause,
+        )
 
     def _wait_for_text_error(self, step: dict, timeout: float) -> str:
         now = self._texts_of(

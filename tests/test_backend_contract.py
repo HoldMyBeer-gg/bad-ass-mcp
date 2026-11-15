@@ -155,7 +155,7 @@ def test_get_value_stale_handle_raises(backend):
 
 def test_wait_for_window_appears(backend):
     backend.schedule_window(delay=0.02)
-    result = backend.wait_for_window("Fake App", timeout=1.0)
+    result = backend.wait_for_window("Appeared Window", timeout=1.0)
     assert result is not None
     assert isinstance(result, WindowInfo)
 
@@ -180,7 +180,9 @@ def test_wait_for_element_with_state(backend):
 
 
 def test_wait_for_element_missing_state_returns_none(backend):
-    el = backend.wait_for_element(FAKE_WINDOW_ID, role="button", name="OK", state="checked")
+    el = backend.wait_for_element(
+        FAKE_WINDOW_ID, role="button", name="OK", state="checked", timeout=0.1
+    )
     assert el is None
 
 

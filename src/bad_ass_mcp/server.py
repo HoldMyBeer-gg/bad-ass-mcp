@@ -9,11 +9,46 @@ import platform
 import sys
 from collections import deque
 
+import anyio
 from mcp.server.fastmcp import FastMCP
+from mcp.shared.session import RequestResponder
 
 from .types import StaleHandleError
 
 mcp = FastMCP("bad-ass-mcp")
+
+
+async def _cancel_without_reply(self) -> None:
+    """Stop the handler and send nothing for the request.
+
+    The client drops its handler for a request when it cancels it, so any
+    later reply, the SDK's own "Request cancelled" error included, reaches
+    it as a response to an unknown message ID; Claude Code logs that as a
+    dropped stdio connection. The MCP spec says a cancelled request gets no
+    response, which is what mcp 2.x does; this stands in until the pin
+    moves past 1.x."""
+    self._cancel_scope.cancel()
+    self._completed = True
+
+
+RequestResponder.cancel = _cancel_without_reply
+
+
+async def _wait(backend, steps):
+    """Run a backend wait generator on the event loop.
+
+    A sync tool runs inline in the server's loop, so a long wait starved
+    every other call (a screenshot queued behind it for minutes) and a
+    client cancel was read only after the result had already gone out.
+    Sleeping with anyio between probes serves the other calls during the
+    wait and lets the cancel land: the task ends at the next sleep."""
+    try:
+        while True:
+            next(steps)
+            await anyio.sleep(backend.POLL_S)
+    except StopIteration as done:
+        return done.value
+
 
 # get_tree's JSON must fit the MCP client's per-tool-result cap (~25K tokens
 # in Claude Code). Even after pruning empty wrappers, a content-heavy page can
@@ -254,19 +289,20 @@ def get_value(handle_id: str) -> dict:
 
 
 @mcp.tool()
-def wait_for_window(title_pattern: str, timeout: float = 5.0) -> dict:
+async def wait_for_window(title_pattern: str, timeout: float = 5.0) -> dict:
     """Wait until a window matching title_pattern appears. Returns null on timeout.
     Useful after triggering an action that opens a dialog.
 
     title_pattern is a case-insensitive substring (not a regex), matched
     against the listed name and every top-level window title, so a window
     title works on macOS (listed by process name) and Linux too."""
-    w = _backend().wait_for_window(title_pattern, timeout)
+    b = _backend()
+    w = await _wait(b, b.window_poll(title_pattern, timeout))
     return w.__dict__ if w else {"error": f"Timeout: no window matching {title_pattern!r}"}
 
 
 @mcp.tool()
-def wait_for_element(
+async def wait_for_element(
     window_id: str,
     role: str | None = None,
     name: str | None = None,
@@ -275,7 +311,10 @@ def wait_for_element(
 ) -> dict:
     """Wait until a matching element exists and optionally has the given state.
     Useful after clicks that trigger async UI changes."""
-    el = _backend().wait_for_element(window_id, role=role, name=name, state=state, timeout=timeout)
+    b = _backend()
+    el = await _wait(
+        b, b.element_poll(window_id, role=role, name=name, state=state, timeout=timeout)
+    )
     if el is None:
         return {"error": "Timeout: element not found"}
     return {
@@ -288,7 +327,7 @@ def wait_for_element(
 
 
 @mcp.tool()
-def wait_for_text(
+async def wait_for_text(
     handle_id: str | None = None,
     text: str | None = None,
     pattern: str | None = None,
@@ -311,7 +350,7 @@ def wait_for_text(
 
     Returns {ok, value}; on timeout {ok: false, error} with what was read."""
     b = _backend()
-    value = b.wait_for_text(
+    steps = b.text_poll(
         handle_id,
         text,
         pattern=pattern,
@@ -321,6 +360,7 @@ def wait_for_text(
         role=role,
         name=name,
     )
+    value = await _wait(b, steps)
     if value is not None:
         return {"ok": True, "value": value}
     step = {

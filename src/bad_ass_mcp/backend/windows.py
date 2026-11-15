@@ -999,26 +999,6 @@ class WindowsBackend(DesktopBackend):
             pass
         return None
 
-    def wait_for_window(self, title_pattern: str, timeout: float = 5.0) -> WindowInfo | None:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            for w in self.list_windows():
-                if w.matches(title_pattern):
-                    return w
-            time.sleep(0.1)
-        return None
-
-    def wait_for_element(
-        self, window_id: str, *, role=None, name=None, state=None, timeout=5.0
-    ) -> ElementHandle | None:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            for el in self.find_elements(window_id, role=role, name=name):
-                if state is None or state in el.states:
-                    return el
-            time.sleep(0.1)
-        return None
-
     def _screen_rect_for(self, hwnd: int) -> tuple[int, int, int, int] | None:
         """The visible frame to copy from the screen instead of PrintWindow,
         or None to print the window as usual. Only while another window of

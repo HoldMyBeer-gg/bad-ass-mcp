@@ -1116,26 +1116,6 @@ class MacOSBackend(DesktopBackend):
             return str(raw)
         return _ax_get(element, "AXTitle") or _ax_get(element, "AXDescription")
 
-    def wait_for_window(self, title_pattern: str, timeout: float = 5.0) -> WindowInfo | None:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            for w in self.list_windows():
-                if w.matches(title_pattern):
-                    return w
-            time.sleep(0.1)
-        return None
-
-    def wait_for_element(
-        self, window_id: str, *, role=None, name=None, state=None, timeout=5.0
-    ) -> ElementHandle | None:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            for el in self.find_elements(window_id, role=role, name=name):
-                if state is None or state in el.states:
-                    return el
-            time.sleep(0.1)
-        return None
-
     def _cg_window_bounds(self, win_num: int) -> tuple[int, int] | None:
         """Return (width, height) in points for an on-screen CGWindow number.
 

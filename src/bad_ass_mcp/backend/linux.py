@@ -950,11 +950,11 @@ class LinuxBackend(DesktopBackend):
     # time, not polls: one list_windows() can itself take ~0.1 s.
     _ATSPI_GRACE_S = 1.5
 
-    def wait_for_window(self, title_pattern: str, timeout: float = 5.0) -> WindowInfo | None:
-        deadline = time.monotonic() + timeout
+    def window_poll(self, title_pattern: str, timeout: float):
+        deadline = time.monotonic() + max(0.0, float(timeout))
         x11_only: WindowInfo | None = None
         grace_until: float | None = None
-        while time.monotonic() < deadline:
+        while True:
             hits = [w for w in self.list_windows() if w.matches(title_pattern)]
             for w in hits:
                 if w.accessible:
@@ -965,20 +965,9 @@ class LinuxBackend(DesktopBackend):
                     grace_until = time.monotonic() + self._ATSPI_GRACE_S
                 elif time.monotonic() >= grace_until:
                     return x11_only
-            time.sleep(0.1)
-        return x11_only
-
-    def wait_for_element(
-        self, window_id, *, role=None, name=None, state=None, timeout=5.0
-    ) -> ElementHandle | None:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            results = self.find_elements(window_id, role=role, name=name)
-            for el in results:
-                if state is None or state in el.states:
-                    return el
-            time.sleep(0.1)
-        return None
+            if time.monotonic() >= deadline:
+                return x11_only
+            yield
 
     def _display_backend(self) -> str:
         """Return 'x11', 'kwin', or 'other'.
