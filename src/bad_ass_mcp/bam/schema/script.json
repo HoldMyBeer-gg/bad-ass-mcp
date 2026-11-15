@@ -930,6 +930,11 @@
               },
               "cmd": {
                 "$ref": "#/$defs/per_platform_string"
+              },
+              "timeout": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "description": "Seconds the command may run before the step fails (default 60)."
               }
             },
             "additionalProperties": false,

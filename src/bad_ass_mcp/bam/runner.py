@@ -566,7 +566,10 @@ class _Run:
 
     def find(self, window: str | None, desc: dict) -> list:
         """find_elements by role/name, then keep those carrying `state`."""
-        found = self.b.find_elements(window, role=desc.get("role"), name=desc.get("name"))
+        one = None if "state" in desc else 1
+        found = self.b.find_elements(
+            window, role=desc.get("role"), name=desc.get("name"), limit=one
+        )
         if "state" in desc:
             found = [e for e in found if desc["state"] in (getattr(e, "states", None) or ())]
         return found
@@ -871,7 +874,9 @@ class _Run:
         start = 0
         while start < len(sent):
             if sent[start].get("action") == "shell":
-                r = _shell(sent[start].get("cmd", ""), self.vars)
+                r = _shell(
+                    sent[start].get("cmd", ""), self.vars, timeout=sent[start].get("timeout", 60)
+                )
                 if r.returncode != 0:
                     raise ScriptFailure(
                         f"shell step failed ({r.returncode}): {sent[start].get('cmd')!r} "

@@ -695,6 +695,36 @@ def test_a_failing_shell_step_fails_at_that_step(tmp_path):
     assert backend.key_log == []  # nothing after the failed shell step ran
 
 
+def test_a_shell_step_can_wait_longer_than_a_minute(tmp_path, monkeypatch):
+    """The Creation Kit's data load runs for minutes; a shell step that
+    waits it out says how long it may take."""
+    from bad_ass_mcp.bam import runner
+
+    seen = []
+    real = runner._shell
+
+    def spy(cmd, env, timeout=60):
+        seen.append(timeout)
+        return real("true", env)
+
+    monkeypatch.setattr(runner, "_shell", spy)
+    script = write(
+        tmp_path,
+        "long-shell",
+        {"phases": [{"learn": {}, "steps": [{"action": "shell", "cmd": "true", "timeout": 300}]}]},
+    )
+    r = run_script(FakeBackend(), script, "linux", CONFIG, tmp_path / "out")
+    assert r["status"] == "PASS", r
+    assert seen == [300]
+
+
+def test_shell_step_timeout_is_in_the_schema():
+    from bad_ass_mcp.bam.validate import validate_script
+
+    ok = {"name": "x", "phases": [{"steps": [{"action": "shell", "cmd": "true", "timeout": 120}]}]}
+    assert validate_script(ok) == []
+
+
 # ── wait for the app to be ready, not just for its window ────────────
 
 
@@ -714,7 +744,7 @@ class _SlowContent(FakeBackend):
 
         return _t.monotonic() >= self._ready_at
 
-    def find_elements(self, window_id, *, role=None, name=None, index=0):
+    def find_elements(self, window_id, *, role=None, name=None, index=0, limit=None):
         return super().find_elements(window_id, role=role, name=name) if self._loaded() else []
 
     def press_key(self, key, window_id=None):

@@ -224,8 +224,10 @@ class DesktopBackend(ABC):
         role: str | None = None,
         name: str | None = None,
         index: int = 0,
+        limit: int | None = None,
     ) -> list[ElementHandle]:
-        """Find elements by role and/or name. Returns all matches unless index is set."""
+        """Find elements by role and/or name. Returns all matches unless index
+        is set; `limit` stops the search after that many, shallowest first."""
 
     @abstractmethod
     def click(self, handle_id: str, button: str = "left", clicks: int = 1) -> ActionResult:
@@ -393,6 +395,10 @@ class DesktopBackend(ABC):
     # the wait gives up and names it. A progress box that comes and goes
     # inside this doesn't end the wait.
     BLOCKED_GRACE_S = 3.0
+    # Seconds one element search may take before it gives up with
+    # SearchTimeout, so a window with a huge tree fails a step instead of
+    # hanging it.
+    SEARCH_BUDGET_S = 10.0
 
     def _pause(self) -> None:
         time.sleep(self.POLL_S)
@@ -429,7 +435,8 @@ class DesktopBackend(ABC):
         deadline = time.monotonic() + max(0.0, float(timeout))
         blocked_since = None
         while True:
-            for el in self.find_elements(window_id, role=role, name=name):
+            one = 1 if state is None else None
+            for el in self.find_elements(window_id, role=role, name=name, limit=one):
                 if state is None or state in el.states:
                     return el
             dialog = self.blocking_dialog(window_id)
@@ -892,6 +899,7 @@ class DesktopBackend(ABC):
                 window_id,
                 role=desc.get("role"),
                 name=desc.get("name"),
+                limit=1,
             )
             result[label] = elements[0].id if elements else None
         return result

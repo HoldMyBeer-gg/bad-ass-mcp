@@ -808,13 +808,16 @@ class MacOSBackend(DesktopBackend):
         return prune_tree(tree)
 
     def find_elements(
-        self, window_id: str, *, role=None, name=None, index=0
+        self, window_id: str, *, role=None, name=None, index=0, limit=None
     ) -> list[ElementHandle]:
         app = self._find_app_element(window_id)
         if app is None:
             return []
         pid = self._pid_for_window(window_id)
-        return [self._to_handle(n, pid) for n in self._search(app, role, name)]
+        nodes = self._search(app, role, name)
+        if limit is not None:
+            nodes = nodes[:limit]
+        return [self._to_handle(n, pid) for n in nodes]
 
     def element_bounds(self, handle_id: str) -> tuple[float, float, float, float] | None:
         element = self._resolve(handle_id)

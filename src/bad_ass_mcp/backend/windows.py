@@ -17,9 +17,10 @@ import threading
 import time
 import uuid
 import zlib
+from collections import deque
 from typing import Any
 
-from ..types import ActionResult, ElementHandle, StaleHandleError, WindowInfo
+from ..types import ActionResult, ElementHandle, SearchTimeout, StaleHandleError, WindowInfo
 from .base import DesktopBackend, mark_injected, prune_tree
 
 
@@ -253,6 +254,8 @@ _GWL_EXSTYLE = -20
 _DWMWA_CLOAKED = 14
 
 # UIA pattern IDs
+_UIA_ControlTypePropertyId = 30003
+_UIA_NamePropertyId = 30005
 _UIA_InvokePatternId = 10000
 _UIA_ValuePatternId = 10002
 _UIA_ExpandCollapsePatternId = 10005
@@ -664,24 +667,105 @@ class WindowsBackend(DesktopBackend):
                 pass
         return handle
 
-    def _search(self, element: Any, role: str | None, name: str | None) -> list[Any]:
+    # Children read a page at a time: a list with thousands of rows is read
+    # behind everything else, so a lookup for a button or a tree item beside
+    # it never waits for the rows.
+    SEARCH_PAGE = 50
+
+    def _children_cache(self) -> Any:
+        """A cache request that brings each child's name and control type
+        back with the children: one cross-process call per node, not three."""
+        cache = getattr(self, "_cache", None)
+        if cache is None:
+            cache = self._uia.CreateCacheRequest()
+            cache.AddProperty(_UIA_ControlTypePropertyId)
+            cache.AddProperty(_UIA_NamePropertyId)
+            self._cache = cache
+        return cache
+
+    def _tree_walker(self) -> Any:
+        """The control-view walker: steps sibling to sibling, so a huge list
+        costs only the rows actually read."""
+        walker = getattr(self, "_walker", None)
+        if walker is None:
+            walker = self._uia.ControlViewWalker
+            self._walker = walker
+        return walker
+
+    def _search(
+        self,
+        element: Any,
+        role: str | None,
+        name: str | None,
+        limit: int | None = None,
+        deadline: float | None = None,
+    ) -> list[Any]:
+        """Breadth first from `element`, shallow matches first. Stops after
+        `limit` matches; raises SearchTimeout past `deadline`."""
         results: list[Any] = []
+
+        def matches(ct: int, nm: str) -> bool:
+            return (role is None or _CONTROL_TYPE_ROLES.get(ct, "unknown") == role) and (
+                name is None or nm == name
+            )
+
         try:
-            ct = element.CurrentControlType
-            node_role = _CONTROL_TYPE_ROLES.get(ct, "unknown")
-            node_name = element.CurrentName or ""
-            if (role is None or node_role == role) and (name is None or node_name == name):
+            if matches(element.CurrentControlType, element.CurrentName or ""):
                 results.append(element)
-            cond = self._uia.CreateTrueCondition()
-            children = element.FindAll(_TreeScope_Children, cond)
-            if children:
-                for i in range(children.Length):
-                    try:
-                        results.extend(self._search(children.GetElement(i), role, name))
-                    except Exception:
-                        pass
+                if limit is not None and len(results) >= limit:
+                    return results
         except Exception:
             pass
+        cache = self._children_cache()
+        walker = self._tree_walker()
+        queue: deque[Any] = deque([element])
+        low: deque[Any] = deque()  # rows of containers bigger than a page
+        later: deque[Any] = deque()  # where those containers' next page starts
+        visited = 0
+        started = time.monotonic()
+
+        def page(el: Any) -> bool:
+            """Check and queue up to a page of siblings from `el`, streaming
+            them one at a time; the rest wait in `later`. True once the
+            limit is met."""
+            read: list[Any] = []
+            while el and len(read) < self.SEARCH_PAGE:
+                try:
+                    if matches(el.CachedControlType, el.CachedName or ""):
+                        results.append(el)
+                        if limit is not None and len(results) >= limit:
+                            return True
+                    read.append(el)
+                except Exception:
+                    pass
+                try:
+                    el = walker.GetNextSiblingElementBuildCache(el, cache)
+                except Exception:
+                    el = None
+            if el:
+                later.append(el)
+                low.extend(read)
+            else:
+                queue.extend(read)
+            return False
+
+        while queue or low or later:
+            if deadline is not None and time.monotonic() > deadline:
+                raise SearchTimeout(
+                    f"searched {visited} elements in {time.monotonic() - started:.1f}s "
+                    "without finishing; narrow the search by role and name"
+                )
+            if queue or low:
+                node = queue.popleft() if queue else low.popleft()
+                visited += 1
+                try:
+                    first = walker.GetFirstChildElementBuildCache(node, cache)
+                except Exception:
+                    continue
+                if page(first):
+                    break
+            elif page(later.popleft()):
+                break
         return results
 
     def _hwnd_for_element(self, handle_id: str) -> int | None:
@@ -846,7 +930,7 @@ class WindowsBackend(DesktopBackend):
         return walk()
 
     def find_elements(
-        self, window_id: str, *, role=None, name=None, index=0
+        self, window_id: str, *, role=None, name=None, index=0, limit=None
     ) -> list[ElementHandle]:
         hwnd = int(window_id)
         if not _user32.IsWindow(hwnd):
@@ -855,7 +939,9 @@ class WindowsBackend(DesktopBackend):
         root = self._uia.ElementFromHandle(target)
         if root is None:
             return []
-        return [self._to_handle(n, hwnd) for n in self._search(root, role, name)]
+        deadline = time.monotonic() + self.SEARCH_BUDGET_S
+        found = self._search(root, role, name, limit=limit, deadline=deadline)
+        return [self._to_handle(n, hwnd) for n in found]
 
     def element_bounds(self, handle_id: str) -> tuple[float, float, float, float] | None:
         element = self._resolve(handle_id)
