@@ -564,15 +564,15 @@ class _Run:
                 self.screenshots.append(name)
                 self.phase_entry["screenshot"] = name
 
-    def find(self, window: str | None, desc: dict) -> list:
-        """find_elements by role/name, then keep those carrying `state`."""
-        one = None if "state" in desc else 1
-        found = self.b.find_elements(
-            window, role=desc.get("role"), name=desc.get("name"), limit=one
-        )
+    def find(self, window: str | None, desc: dict, limit: int | None = 1) -> list:
+        """Elements matching role, name and `state`; the first one unless
+        `limit` says otherwise (None for all)."""
+        role, name = desc.get("role"), desc.get("name")
         if "state" in desc:
-            found = [e for e in found if desc["state"] in (getattr(e, "states", None) or ())]
-        return found
+            return self.b.find_with_state(
+                window, role=role, name=name, state=desc["state"], limit=limit
+            )
+        return self.b.find_elements(window, role=role, name=name, limit=limit)
 
     def run_steps(self, sent: list[dict], meta: list[dict], phase: int) -> None:
         if not (self.config.get("demo") or self.config.get("annotate")):
@@ -962,7 +962,9 @@ class _Run:
                     {"x": c["present" if want_present else "absent"]}, self.platform
                 )["x"]
                 spec = c["present" if want_present else "absent"]
-                found = self.find(window, desc)
+                # A count needs every match; otherwise one answers the check.
+                limit = None if want_present and "count" in spec else 1
+                found = self.find(window, desc, limit)
                 if want_present:
                     # Web views (WKWebView mid-transition) can briefly expose
                     # an almost empty tree: retry until step_timeout.
@@ -972,7 +974,7 @@ class _Run:
                         (len(found) != want) if want is not None else not found
                     ) and time.monotonic() < deadline:
                         time.sleep(0.2)
-                        found = self.find(window, desc)
+                        found = self.find(window, desc, limit)
                 if want_present and "count" in spec:
                     if len(found) != int(spec["count"]):
                         raise ScriptFailure(

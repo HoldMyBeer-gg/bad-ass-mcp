@@ -229,6 +229,25 @@ class DesktopBackend(ABC):
         """Find elements by role and/or name. Returns all matches unless index
         is set; `limit` stops the search after that many, shallowest first."""
 
+    def find_with_state(
+        self,
+        window_id: str,
+        *,
+        role: str | None = None,
+        name: str | None = None,
+        state: str,
+        limit: int | None = None,
+    ) -> list[ElementHandle]:
+        """Role and name matches that carry `state`, at most `limit` of them.
+
+        This default finds every role and name match before checking states,
+        a full walk of the window. Backends override it to ask the platform
+        for the focused element, or to check state during the search."""
+        found = [
+            e for e in self.find_elements(window_id, role=role, name=name) if state in e.states
+        ]
+        return found[:limit] if limit else found
+
     @abstractmethod
     def click(self, handle_id: str, button: str = "left", clicks: int = 1) -> ActionResult:
         """Invoke the element's primary action. Foreground-independent where possible.
@@ -435,10 +454,12 @@ class DesktopBackend(ABC):
         deadline = time.monotonic() + max(0.0, float(timeout))
         blocked_since = None
         while True:
-            one = 1 if state is None else None
-            for el in self.find_elements(window_id, role=role, name=name, limit=one):
-                if state is None or state in el.states:
-                    return el
+            if state is None:
+                found = self.find_elements(window_id, role=role, name=name, limit=1)
+            else:
+                found = self.find_with_state(window_id, role=role, name=name, state=state, limit=1)
+            if found:
+                return found[0]
             dialog = self.blocking_dialog(window_id)
             if dialog is None:
                 blocked_since = None
