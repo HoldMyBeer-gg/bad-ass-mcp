@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import io
 import math
+import os
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -190,9 +192,10 @@ def test_platforms_without_audio_say_so():
 # ── Windows wiring ───────────────────────────────────────────────────────
 
 
-def _win_start(window_id, **kw):
+def _win_start(tmp_path, monkeypatch, window_id, **kw):
     from bad_ass_mcp.backend import windows as w
 
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
     backend = object.__new__(w.WindowsBackend)
     backend._recordings = {}
     backend._window_rect = lambda hwnd: (0, 0, 640, 480)
@@ -207,8 +210,9 @@ def _win_start(window_id, **kw):
 
 
 @pytest.mark.parametrize("window_id", ["42", None])
-def test_windows_starts_a_tap_when_asked(window_id):
-    entry, tap_cls = _win_start(window_id, audio=True)
+def test_windows_starts_a_tap_when_asked(tmp_path, monkeypatch, window_id):
+    entry, tap_cls = _win_start(tmp_path, monkeypatch, window_id, audio=True)
+    entry[6].close()
     assert entry[4] is tap_cls.return_value
     tap_cls.return_value.start.assert_called_once()
     tap_cls.return_value.wait_ready.assert_called_once()
@@ -234,8 +238,8 @@ def test_full_screen_sound_starts_when_ffmpeg_does():
     assert tap_cls.call_args.kwargs["origin"] <= spawned_at[0]
 
 
-def test_windows_records_no_sound_by_default():
-    entry, tap_cls = _win_start("42")
+def test_windows_records_no_sound_by_default(tmp_path, monkeypatch):
+    entry, tap_cls = _win_start(tmp_path, monkeypatch, "42")
     tap_cls.assert_not_called()
     assert len(entry) < 5 or entry[4] is None
 
@@ -297,3 +301,152 @@ def test_windows_loopback_hears_a_tone_played_on_the_machine(tmp_path):
     else:
         vals = struct.unpack(f"<{len(data) // 2}h", data[: len(data) // 2 * 2])
         assert max(abs(v) for v in vals) > 300
+
+
+# ── macOS wiring ─────────────────────────────────────────────────────────
+
+
+def _mac_start(tmp_path, monkeypatch, **kw):
+    from bad_ass_mcp.backend import macos as m
+
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    backend = object.__new__(m.MacOSBackend)
+    backend._recordings = {}
+    backend._avfoundation_screen_device = lambda: "1"
+    spawned_at = []
+
+    def spawn(cmd, path):
+        spawned_at.append(time.monotonic())
+        time.sleep(0.05)
+        return (MagicMock(), path, "log")
+
+    backend._spawn_recorder = spawn
+    with patch.object(m, "_AudioTap") as tap_cls:
+        handle = backend.start_recording(None, fps=15, **kw)
+    return backend, handle, tap_cls, spawned_at
+
+
+def test_macos_starts_a_tap_on_the_system_sound_when_asked(tmp_path, monkeypatch):
+    from bad_ass_mcp.backend import macos as m
+
+    backend, handle, tap_cls, spawned_at = _mac_start(tmp_path, monkeypatch, audio=True)
+    entry = backend._recordings[handle]
+    assert entry[4] is tap_cls.return_value
+    assert tap_cls.call_args.args[0] is m._SystemAudioSource
+    tap_cls.return_value.start.assert_called_once()
+    tap_cls.return_value.wait_ready.assert_called_once()
+    entry[6].close()
+
+
+def test_macos_sound_starts_when_ffmpeg_does(tmp_path, monkeypatch):
+    """avfoundation captures from its spawn, and the spawn waits a moment
+    for ffmpeg to fail; the sound's clock must start at the spawn."""
+    backend, handle, tap_cls, spawned_at = _mac_start(tmp_path, monkeypatch, audio=True)
+    assert tap_cls.call_args.kwargs["origin"] <= spawned_at[0]
+    backend._recordings[handle][6].close()
+
+
+def test_macos_records_no_sound_by_default(tmp_path, monkeypatch):
+    backend, handle, tap_cls, _ = _mac_start(tmp_path, monkeypatch)
+    tap_cls.assert_not_called()
+    assert len(backend._recordings[handle]) < 5
+
+
+def test_macos_stop_muxes_the_sound(tmp_path, monkeypatch):
+    backend, handle, tap_cls, _ = _mac_start(tmp_path, monkeypatch, audio=True)
+    entry = backend._recordings[handle]
+    seen = {}
+    backend._finish_recorder = lambda entry, grace=10.0: entry[1]
+    backend._export_recording = lambda v, c, f, audio=None: seen.update(audio=audio) or c
+    backend.stop_recording(handle, str(tmp_path / "o.mp4"))
+    assert seen["audio"] == (entry[5], tap_cls.return_value.ffmpeg_input)
+    assert entry[6].closed
+
+
+def test_macos_sound_that_will_not_open_ends_the_take(tmp_path, monkeypatch):
+    from bad_ass_mcp.backend import macos as m
+
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    backend = object.__new__(m.MacOSBackend)
+    backend._recordings = {}
+    backend._avfoundation_screen_device = lambda: "1"
+    backend._spawn_recorder = lambda cmd, path: (MagicMock(), path, "log")
+    with patch.object(m, "_AudioTap") as tap_cls:
+        tap_cls.return_value.wait_ready.side_effect = RuntimeError("no screen recording permission")
+        with pytest.raises(RuntimeError, match="permission"):
+            backend.start_recording(None, audio=True)
+    assert backend._recordings == {}
+    assert list(tmp_path.glob("*.pcm")) == []
+
+
+def test_planar_float_is_interleaved_for_ffmpeg():
+    """ScreenCaptureKit hands over each channel's samples in a row; the
+    f32le reader wants left, right, left, right."""
+    from bad_ass_mcp.backend import macos as m
+
+    left = struct.pack("<3f", 1.0, 2.0, 3.0)
+    right = struct.pack("<3f", 4.0, 5.0, 6.0)
+    out = m._interleave(left + right, 2)
+    assert struct.unpack("<6f", out) == (1.0, 4.0, 2.0, 5.0, 3.0, 6.0)
+    assert m._interleave(left, 1) == left
+
+
+def test_macos_source_reports_the_format_ffmpeg_reads():
+    from bad_ass_mcp.backend import macos as m
+
+    src = m._SystemAudioSource
+    assert (src.rate, src.channels, src.sample_fmt) == (48000, 2, "f32le")
+    assert src.frame_bytes == 8
+
+
+# ── the real thing on macOS ──────────────────────────────────────────────
+
+
+def _open_mac_source():
+    from bad_ass_mcp.backend import macos as m
+
+    try:
+        return m._SystemAudioSource()
+    except Exception as e:
+        pytest.skip(f"system sound not available here: {e}")
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="ScreenCaptureKit")
+def test_macos_source_delivers_sound_on_its_own_clock():
+    """Unlike WASAPI, ScreenCaptureKit keeps sending frames while the
+    machine is quiet, so half a second of listening is half a second of
+    samples, interleaved stereo float."""
+    src = _open_mac_source()
+    time.sleep(1.0)
+    chunks = []
+    while (data := src.read()) is not None:
+        chunks.append(data)
+    src.close()
+    total = sum(len(c) for c in chunks)
+    assert total % src.frame_bytes == 0
+    assert total // src.frame_bytes >= 48000 * 0.3
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin" or not os.environ.get("BAM_PLAY_SOUND"),
+    reason="plays a tone out loud; set BAM_PLAY_SOUND=1",
+)
+def test_macos_source_hears_a_tone_played_on_the_machine(tmp_path):
+    wav = tmp_path / "tone.wav"
+    wav.write_bytes(_tone_wav())
+    sink = _Sink()
+    src_holder = []
+
+    def open_source():
+        src_holder.append(_open_mac_source())
+        return src_holder[0]
+
+    tap = base._AudioTap(open_source, sink)
+    tap.start()
+    tap.wait_ready(timeout=5)
+    subprocess.run(["afplay", "-v", "0.2", str(wav)], check=True)
+    time.sleep(0.3)
+    tap.stop()
+    data = sink.getvalue()
+    vals = struct.unpack(f"<{len(data) // 4}f", data[: len(data) // 4 * 4])
+    assert max(abs(v) for v in vals) > 0.01, "the tone never reached the capture"

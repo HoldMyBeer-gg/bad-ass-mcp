@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import array
 import contextlib
+import os
 import re
 import subprocess
+import threading
 import time
 import uuid
+from collections import deque
 from typing import Any
 
 from ..types import ActionResult, ElementHandle, StaleHandleError, WindowInfo
-from .base import DesktopBackend, mark_injected, prune_tree
+from .base import DesktopBackend, _AudioTap, mark_injected, prune_tree
 
 try:
     from AppKit import NSRunningApplication, NSWorkspace
@@ -484,6 +488,173 @@ _AX_WAKE_TIMEOUT = 1.5
 # regardless of depth so a pathological/cyclic tree can't run away.
 _WALK_MAX_DEPTH = 60
 _WALK_MAX_NODES = 20000
+
+
+# ── system sound ───────────────────────────────────────────────────────
+
+_FLAG_NON_INTERLEAVED = 1 << 5  # kAudioFormatFlagIsNonInterleaved
+_OUTPUT_CLASS = None
+
+
+def _interleave(data: bytes, channels: int) -> bytes:
+    """Planar float32 (each channel's samples in a row) to interleaved, the
+    layout ffmpeg's f32le reader expects."""
+    if channels < 2:
+        return data
+    plane = len(data) // channels // 4 * 4
+    out = array.array("f", bytes(plane * channels))
+    for ch in range(channels):
+        out[ch::channels] = array.array("f", data[ch * plane : (ch + 1) * plane])
+    return out.tobytes()
+
+
+def _stream_output_class():
+    """The ObjC object ScreenCaptureKit hands sample buffers to. Defined
+    once, on first use: an NSObject subclass registers its name with the
+    runtime, and the framework is imported only when sound is asked for."""
+    global _OUTPUT_CLASS
+    if _OUTPUT_CLASS is None:
+        from Foundation import NSObject
+
+        class _BamStreamOutput(NSObject):
+            tap_source = None
+
+            def stream_didOutputSampleBuffer_ofType_(self, stream, sample_buffer, kind):
+                # An exception leaving this method ends the whole process.
+                with contextlib.suppress(Exception):
+                    self.tap_source._on_sample(sample_buffer, kind)
+
+            def stream_didStopWithError_(self, stream, error):
+                with contextlib.suppress(Exception):
+                    self.tap_source._on_stop(error)
+
+        _OUTPUT_CLASS = _BamStreamOutput
+    return _OUTPUT_CLASS
+
+
+class _SystemAudioSource:
+    """What the machine plays, through ScreenCaptureKit (macOS 13 or
+    newer), never the microphone. Shaped for _AudioTap: the stream's own
+    queue appends sample buffers, read() hands them over interleaved for
+    ffmpeg's f32le reader, close() stops the stream.
+
+    The stream needs a picture to capture; it is asked for the smallest,
+    slowest one it allows and no screen output is attached, so only sound
+    arrives. It runs under the Screen Recording permission the recorder
+    already needs."""
+
+    rate = 48000
+    channels = 2
+    sample_fmt = "f32le"
+    frame_bytes = 8
+    _OPEN_S = 3.0
+
+    def __init__(self) -> None:
+        import CoreMedia as cm
+        import ScreenCaptureKit as sck
+
+        self._cm = cm
+        self._audio_kind = sck.SCStreamOutputTypeAudio
+        self._lock = threading.Lock()
+        self._chunks: deque[bytes] = deque()
+        self.error = None
+
+        displays = self._shareable_content(sck).displays()
+        if not displays:
+            raise RuntimeError("no display to capture sound from")
+        content = sck.SCContentFilter.alloc().initWithDisplay_excludingWindows_(displays[0], [])
+        config = sck.SCStreamConfiguration.alloc().init()
+        config.setCapturesAudio_(True)
+        config.setSampleRate_(self.rate)
+        config.setChannelCount_(self.channels)
+        config.setExcludesCurrentProcessAudio_(True)
+        config.setWidth_(2)
+        config.setHeight_(2)
+        config.setMinimumFrameInterval_(cm.CMTimeMake(1, 1))
+
+        self._output = _stream_output_class().alloc().init()
+        self._output.tap_source = self
+        self._stream = sck.SCStream.alloc().initWithFilter_configuration_delegate_(
+            content, config, self._output
+        )
+        ok, err = self._stream.addStreamOutput_type_sampleHandlerQueue_error_(
+            self._output, self._audio_kind, None, None
+        )
+        if not ok:
+            raise RuntimeError(f"cannot listen to the system sound: {err}")
+        self._complete(
+            self._stream.startCaptureWithCompletionHandler_, "system sound did not start"
+        )
+
+    def _shareable_content(self, sck):
+        done = threading.Event()
+        box: list = []
+
+        def got(content, error):
+            box[:] = [content, error]
+            done.set()
+
+        sck.SCShareableContent.getShareableContentWithCompletionHandler_(got)
+        if not done.wait(self._OPEN_S):
+            raise RuntimeError("ScreenCaptureKit did not answer; is Screen Recording allowed?")
+        content, error = box
+        if error is not None or content is None:
+            raise RuntimeError(f"cannot capture the screen's sound: {error}")
+        return content
+
+    def _complete(self, call, what: str, timeout: float | None = None) -> None:
+        """Run an SCStream call that reports back through a completion
+        handler, and wait for it."""
+        done = threading.Event()
+        box: list = []
+
+        def finished(error):
+            box.append(error)
+            done.set()
+
+        call(finished)
+        if not done.wait(self._OPEN_S if timeout is None else timeout):
+            raise RuntimeError(f"{what}: timed out")
+        if box and box[0] is not None:
+            raise RuntimeError(f"{what}: {box[0]}")
+
+    def _on_sample(self, sample_buffer, kind) -> None:
+        if kind != self._audio_kind:
+            return
+        cm = self._cm
+        block = cm.CMSampleBufferGetDataBuffer(sample_buffer)
+        if block is None:
+            return
+        length = cm.CMBlockBufferGetDataLength(block)
+        status, data = cm.CMBlockBufferCopyDataBytes(block, 0, length, None)
+        if status != 0 or not data:
+            return
+        data = bytes(data)
+        desc = cm.CMAudioFormatDescriptionGetStreamBasicDescription(
+            cm.CMSampleBufferGetFormatDescription(sample_buffer)
+        )
+        # AudioStreamBasicDescription; mFormatFlags is its third field.
+        flags = _FLAG_NON_INTERLEAVED if desc is None else int(desc[2])
+        if flags & _FLAG_NON_INTERLEAVED:
+            data = _interleave(data, self.channels)
+        with self._lock:
+            self._chunks.append(data)
+
+    def _on_stop(self, error) -> None:
+        self.error = error
+
+    def read(self) -> bytes | None:
+        with self._lock:
+            return self._chunks.popleft() if self._chunks else None
+
+    def close(self) -> None:
+        with contextlib.suppress(Exception):
+            self._complete(
+                self._stream.stopCaptureWithCompletionHandler_,
+                "system sound did not stop",
+                timeout=2.0,
+            )
+        self._output.tap_source = None
 
 
 class MacOSBackend(DesktopBackend):
@@ -1335,8 +1506,6 @@ class MacOSBackend(DesktopBackend):
     def start_recording(
         self, window_id: str | None = None, fps: int = 15, audio: bool = False
     ) -> str:
-        self._audio_unsupported(audio)
-        import os
         import tempfile
 
         handle = str(uuid.uuid4())
@@ -1366,7 +1535,35 @@ class MacOSBackend(DesktopBackend):
 
         cmd += self._h264_output(video_path)
 
+        started = time.monotonic()
         self._recordings[handle] = self._spawn_recorder(cmd, video_path)
+        return self._with_audio(handle, audio, origin=started)
+
+    def _with_audio(self, handle: str, audio: bool, origin: float) -> str:
+        """Start recording the system's sound beside the take `handle` when
+        asked. Its clock starts at `origin`, the spawn: avfoundation
+        captures from then, and the spawn waits a moment for ffmpeg to
+        fail. A sound source that will not open ends the take and fails
+        the start."""
+        if not audio:
+            return handle
+        entry = self._recordings[handle]
+        pcm_path = entry[1] + ".pcm"
+        sink = open(pcm_path, "wb")
+        tap = _AudioTap(_SystemAudioSource, sink, origin=origin)
+        tap.start()
+        try:
+            tap.wait_ready()
+        except Exception:
+            sink.close()
+            with contextlib.suppress(OSError):
+                os.unlink(pcm_path)
+            with contextlib.suppress(Exception):
+                self.stop_recording(handle, entry[1] + ".discard.mp4")
+            with contextlib.suppress(OSError):
+                os.unlink(entry[1] + ".discard.mp4")
+            raise
+        self._recordings[handle] = (*entry[:3], None, tap, pcm_path, sink)
         return handle
 
     def stop_recording(self, handle: str, output_path: str) -> str:
@@ -1374,8 +1571,13 @@ class MacOSBackend(DesktopBackend):
 
         if handle not in self._recordings:
             raise ValueError(f"No active recording with handle {handle!r}")
-        video_path = self._finish_recorder(self._recordings.pop(handle))
-        return self._export_recording(video_path, canonical, fmt)
+        entry = self._recordings.pop(handle)
+        video_path = self._finish_recorder(entry)
+        audio = None
+        if len(entry) > 6 and entry[4] is not None:
+            entry[6].close()
+            audio = (entry[5], entry[4].ffmpeg_input)
+        return self._export_recording(video_path, canonical, fmt, audio=audio)
 
     def click_at(
         self,
