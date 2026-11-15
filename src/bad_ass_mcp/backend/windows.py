@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import os
 import struct
+import threading
 import time
 import uuid
 import zlib
@@ -85,6 +86,54 @@ except (ImportError, AttributeError, OSError):
 # ── Win32 constants ──────────────────────────────────────────────────
 
 _DWMWA_EXTENDED_FRAME_BOUNDS = 9
+
+
+def _crop_bgra(buf: bytes, stride_px: int, x: int, y: int, w: int, h: int) -> bytes:
+    """The w x h block at (x, y) of a top-down BGRA bitmap stride_px wide."""
+    row = stride_px * 4
+    return b"".join(buf[(y + r) * row + x * 4 : (y + r) * row + (x + w) * 4] for r in range(h))
+
+
+class _FramePump(threading.Thread):
+    """Feeds one window's frames to ffmpeg as raw BGRA at a steady rate.
+
+    Every tick it grabs a frame; when a grab fails (window minimized,
+    mid-resize) the last frame is written again, and black until a grab
+    first works. A grab slower than the interval writes the frame once per
+    missed tick, so the video keeps the take's real length. Ends when
+    stopped or when ffmpeg stops reading."""
+
+    def __init__(self, grab, sink, *, fps: int, size: tuple[int, int]) -> None:
+        super().__init__(daemon=True, name="bam-frame-pump")
+        self._grab = grab
+        self._sink = sink
+        self._interval = 1.0 / max(1, fps)
+        self._last = bytes(size[0] * size[1] * 4)
+        self._stopping = threading.Event()
+
+    def run(self) -> None:
+        due = time.monotonic()
+        while not self._stopping.is_set():
+            try:
+                frame = self._grab()
+            except Exception:
+                frame = None
+            if frame is not None and len(frame) == len(self._last):
+                self._last = frame
+            now = time.monotonic()
+            try:
+                while due <= now:
+                    self._sink.write(self._last)
+                    due += self._interval
+                self._sink.flush()
+            except (OSError, ValueError):
+                return
+            self._stopping.wait(max(0.0, due - time.monotonic()))
+
+    def stop(self) -> None:
+        self._stopping.set()
+        if self.is_alive() and threading.current_thread() is not self:
+            self.join(timeout=5)
 
 
 def _dwm_frame_bounds(hwnd: int) -> tuple[int, int, int, int] | None:
@@ -1100,16 +1149,13 @@ class WindowsBackend(DesktopBackend):
         handle = str(uuid.uuid4())
         video_path = os.path.join(tempfile.gettempdir(), f"bam-rec-{handle}.mp4")
 
-        cmd = ["ffmpeg", "-y", "-f", "gdigrab", "-framerate", str(fps)]
-
         if window_id:
-            geom = _dwm_frame_bounds(int(window_id)) or self._window_rect(int(window_id))
+            hwnd = int(window_id)
+            geom = _dwm_frame_bounds(hwnd) or self._window_rect(hwnd)
             if geom:
-                x, y, w, h = geom
-                w -= w % 2
-                h -= h % 2
-                cmd += ["-offset_x", str(x), "-offset_y", str(y), "-video_size", f"{w}x{h}"]
+                return self._record_window(handle, hwnd, geom, fps, video_path)
 
+        cmd = ["ffmpeg", "-y", "-f", "gdigrab", "-framerate", str(fps)]
         cmd += [
             "-i",
             "desktop",
@@ -1118,6 +1164,101 @@ class WindowsBackend(DesktopBackend):
 
         self._recordings[handle] = self._spawn_recorder(cmd, video_path)
         return handle
+
+    def _record_window(
+        self, handle: str, hwnd: int, geom: tuple[int, int, int, int], fps: int, video_path: str
+    ) -> str:
+        """Record the window itself, so windows in front of it stay out of
+        the take: its frames are copied at `fps` and piped to ffmpeg. The
+        size is fixed at the start; a resized window is cropped to it."""
+        _, _, w, h = geom
+        w -= w % 2
+        h -= h % 2
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "bgra",
+            "-video_size",
+            f"{w}x{h}",
+            "-framerate",
+            str(fps),
+            "-i",
+            "-",
+            *self._h264_output(video_path),
+        ]
+        entry = self._spawn_recorder(cmd, video_path)
+        pump = _FramePump(
+            lambda: self._grab_window(hwnd, w, h), entry[0].stdin, fps=fps, size=(w, h)
+        )
+        pump.start()
+        self._recordings[handle] = (*entry[:3], pump)
+        return handle
+
+    def _grab_window(self, hwnd: int, w: int, h: int) -> bytes | None:
+        """One w x h BGRA frame of the window's visible frame, or None when
+        it can't be drawn (gone, minimized). PrintWindow draws the window
+        even where others cover it. While a window of the same app is in
+        front (its dialog), the screen is copied instead, as screenshot()
+        does: PrintWindow then stalled rustydemon's file dialog."""
+        if not _user32.IsWindow(hwnd) or _user32.IsIconic(hwnd):
+            return None
+        rect = ctypes.wintypes.RECT()
+        if not _user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return None
+        frame = _dwm_frame_bounds(hwnd) or (
+            rect.left,
+            rect.top,
+            rect.right - rect.left,
+            rect.bottom - rect.top,
+        )
+        from_screen = self._screen_rect_for(hwnd)
+        if from_screen:
+            left, top, bw, bh = from_screen
+            cx, cy = 0, 0
+        else:
+            left, top = rect.left, rect.top
+            bw, bh = rect.right - rect.left, rect.bottom - rect.top
+            cx, cy = frame[0] - rect.left, frame[1] - rect.top
+        if bw <= 0 or bh <= 0:
+            return None
+
+        src_dc = _user32.GetWindowDC(hwnd) if not from_screen else _user32.GetDC(None)
+        mem_dc = _gdi32.CreateCompatibleDC(src_dc)
+        bitmap = _gdi32.CreateCompatibleBitmap(src_dc, bw, bh)
+        old = _gdi32.SelectObject(mem_dc, bitmap)
+        try:
+            if from_screen:
+                _gdi32.BitBlt(mem_dc, 0, 0, bw, bh, src_dc, left, top, _SRCCOPY | _CAPTUREBLT)
+            else:
+                _user32.PrintWindow(hwnd, mem_dc, 2)  # PW_RENDERFULLCONTENT
+            bmi = _BITMAPINFOHEADER()
+            bmi.biSize = ctypes.sizeof(_BITMAPINFOHEADER)
+            bmi.biWidth = bw
+            bmi.biHeight = -bh
+            bmi.biPlanes = 1
+            bmi.biBitCount = 32
+            buf = ctypes.create_string_buffer(bw * bh * 4)
+            _gdi32.GetDIBits(mem_dc, bitmap, 0, bh, buf, ctypes.byref(bmi), 0)
+        finally:
+            _gdi32.SelectObject(mem_dc, old)
+            _gdi32.DeleteObject(bitmap)
+            _gdi32.DeleteDC(mem_dc)
+            _user32.ReleaseDC(0 if from_screen else hwnd, src_dc)
+
+        # Fit the bitmap to the recording size: crop, and pad with black
+        # when the window shrank.
+        cw, ch = min(w, bw - cx), min(h, bh - cy)
+        if cw <= 0 or ch <= 0:
+            return None
+        part = _crop_bgra(buf.raw, bw, cx, cy, cw, ch)
+        if (cw, ch) == (w, h):
+            return part
+        pad = bytes((w - cw) * 4)
+        rows = [part[r * cw * 4 : (r + 1) * cw * 4] + pad for r in range(ch)]
+        return b"".join(rows) + bytes((h - ch) * w * 4)
 
     def stop_recording(self, handle: str, output_path: str) -> str:
         canonical, fmt = self._recording_target(output_path)

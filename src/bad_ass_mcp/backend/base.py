@@ -711,9 +711,16 @@ class DesktopBackend(ABC):
 
         proc, video_path = entry[0], entry[1]
         log_path = entry[2] if len(entry) > 2 else None
+        pump = entry[3] if len(entry) > 3 else None
         try:
-            proc.stdin.write(b"q")
-            proc.stdin.flush()
+            if pump is not None:
+                # Frames arrive on stdin, where a 'q' would land mid-frame;
+                # the end of input finishes a piped capture.
+                pump.stop()
+                proc.stdin.close()
+            else:
+                proc.stdin.write(b"q")
+                proc.stdin.flush()
         except Exception:
             pass
         try:
