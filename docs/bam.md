@@ -319,8 +319,11 @@ children (a list of thousands of rows) is read a page at a time, behind
 everything else, so a button or tree item beside it is found without
 reading the rows. A lookup that runs past 10 seconds fails with "searched N
 elements ... without finishing" instead of hanging; give it a role and a
-name to narrow it. Windows streams children with a tree walker; macOS and
-Linux take the `limit` but still walk the whole tree for now.
+name to narrow it. Windows streams children with a tree walker; macOS reads
+each node's role, every attribute its name can come from, and its children
+in one accessibility call. On a Finder window listing 924 files, a lookup
+for one button went from 74 s to 0.06 s; a walk of the whole window, 66 s
+before, now stops at the deadline instead.
 
 Element names come from `aria-label` / visible text and are usually the same
 on every OS; roles are platform-native, so give them only to disambiguate.
