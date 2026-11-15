@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator
 from typing import Any
 
-from ..types import ActionResult, ElementHandle, StaleHandleError, WindowInfo
+from ..types import ActionResult, BlockedByDialog, ElementHandle, StaleHandleError, WindowInfo
 
 _MAX_SEQUENCE_STEPS = 500
 _MAX_SEQUENCE_RUNTIME = 300.0  # seconds
@@ -389,9 +389,19 @@ class DesktopBackend(ABC):
     # generator, not the wait, to change how a platform probes.
 
     POLL_S = 0.1
+    # How long a modal dialog must keep blocking a waited-on window before
+    # the wait gives up and names it. A progress box that comes and goes
+    # inside this doesn't end the wait.
+    BLOCKED_GRACE_S = 3.0
 
     def _pause(self) -> None:
         time.sleep(self.POLL_S)
+
+    def blocking_dialog(self, window_id: str) -> WindowInfo | None:
+        """The modal dialog keeping window_id from taking input, or None.
+        Backends that can't tell return None, and waits run to their
+        timeout as before."""
+        return None
 
     def window_poll(self, title_pattern: str, timeout: float) -> Generator[None, None, Any]:
         deadline = time.monotonic() + max(0.0, float(timeout))
@@ -417,10 +427,19 @@ class DesktopBackend(ABC):
         timeout: float = 5.0,
     ) -> Generator[None, None, Any]:
         deadline = time.monotonic() + max(0.0, float(timeout))
+        blocked_since = None
         while True:
             for el in self.find_elements(window_id, role=role, name=name):
                 if state is None or state in el.states:
                     return el
+            dialog = self.blocking_dialog(window_id)
+            if dialog is None:
+                blocked_since = None
+            else:
+                now = time.monotonic()
+                blocked_since = now if blocked_since is None else blocked_since
+                if now - blocked_since >= self.BLOCKED_GRACE_S:
+                    raise BlockedByDialog(dialog)
             if time.monotonic() >= deadline:
                 return None
             yield
@@ -711,9 +730,16 @@ class DesktopBackend(ABC):
 
         proc, video_path = entry[0], entry[1]
         log_path = entry[2] if len(entry) > 2 else None
+        pump = entry[3] if len(entry) > 3 else None
         try:
-            proc.stdin.write(b"q")
-            proc.stdin.flush()
+            if pump is not None:
+                # Frames arrive on stdin, where a 'q' would land mid-frame;
+                # the end of input finishes a piped capture.
+                pump.stop()
+                proc.stdin.close()
+            else:
+                proc.stdin.write(b"q")
+                proc.stdin.flush()
         except Exception:
             pass
         try:

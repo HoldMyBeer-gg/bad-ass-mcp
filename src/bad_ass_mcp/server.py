@@ -13,7 +13,7 @@ import anyio
 from mcp.server.fastmcp import FastMCP
 from mcp.shared.session import RequestResponder
 
-from .types import StaleHandleError
+from .types import BlockedByDialog, StaleHandleError
 
 mcp = FastMCP("bad-ass-mcp")
 
@@ -310,11 +310,18 @@ async def wait_for_element(
     timeout: float = 5.0,
 ) -> dict:
     """Wait until a matching element exists and optionally has the given state.
-    Useful after clicks that trigger async UI changes."""
+    Useful after clicks that trigger async UI changes.
+
+    If a modal dialog keeps the window disabled for a few seconds, the wait
+    ends early with an error naming it and the dialog's window info, so it
+    can be answered instead of waiting out the timeout."""
     b = _backend()
-    el = await _wait(
-        b, b.element_poll(window_id, role=role, name=name, state=state, timeout=timeout)
-    )
+    try:
+        el = await _wait(
+            b, b.element_poll(window_id, role=role, name=name, state=state, timeout=timeout)
+        )
+    except BlockedByDialog as blocked:
+        return {"error": str(blocked), "dialog": blocked.dialog.__dict__}
     if el is None:
         return {"error": "Timeout: element not found"}
     return {

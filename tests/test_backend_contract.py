@@ -676,11 +676,13 @@ def _web_playable(cmd: list[str]) -> None:
     play. Without -pix_fmt, libx264 kept the capture's 4:4:4 (gdigrab) or
     4:2:2 (avfoundation), and the bam-site gallery showed only a poster."""
     assert cmd[cmd.index("-c:v") + 1] == "libx264"
-    assert cmd[cmd.index("-pix_fmt") + 1] == "yuv420p"
+    # The last -pix_fmt is the output's; a piped capture names its input's too.
+    out_fmt = len(cmd) - 1 - cmd[::-1].index("-pix_fmt")
+    assert cmd[out_fmt + 1] == "yuv420p"
     # Written fragmented so a crash leaves a playable file; the mp4 export
     # remuxes with +faststart for the final file (test_recorder_survival).
     assert "+frag_keyframe" in cmd[cmd.index("-movflags") + 1]
-    assert cmd.index("-pix_fmt") < len(cmd) - 1  # an output option, before the path
+    assert out_fmt < len(cmd) - 2  # an output option, before the path
 
 
 def _capture(backend):
@@ -691,16 +693,22 @@ def _capture(backend):
 
 
 def test_windows_recording_is_web_playable():
-    from unittest.mock import patch
+    from unittest.mock import MagicMock, patch
 
     from bad_ass_mcp.backend import windows as w
 
     b = object.__new__(w.WindowsBackend)
     seen = _capture(b)
     b._window_rect = lambda hwnd: (0, 0, 800, 600)
-    with patch.object(w, "_dwm_frame_bounds", lambda hwnd: None):
+    b._spawn_recorder = lambda cmd, path: seen.append(cmd) or (MagicMock(), path, None)
+    with (
+        patch.object(w, "_dwm_frame_bounds", lambda hwnd: None),
+        patch.object(w, "_FramePump"),
+    ):
         b.start_recording("1")
-    _web_playable(seen[0])
+    b.start_recording(None)
+    _web_playable(seen[0])  # one window, piped frames
+    _web_playable(seen[1])  # the whole screen, gdigrab
 
 
 def test_macos_recording_is_web_playable():
