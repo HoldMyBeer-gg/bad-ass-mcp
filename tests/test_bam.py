@@ -714,7 +714,7 @@ class _SlowContent(FakeBackend):
 
         return _t.monotonic() >= self._ready_at
 
-    def find_elements(self, window_id, *, role=None, name=None, index=0):
+    def find_elements(self, window_id, *, role=None, name=None, index=0, limit=None):
         return super().find_elements(window_id, role=role, name=name) if self._loaded() else []
 
     def press_key(self, key, window_id=None):

@@ -579,12 +579,14 @@ class LinuxBackend(DesktopBackend):
         return prune_tree(self._walk(app, max_depth=depth_cap))
 
     def find_elements(
-        self, window_id: str, *, role=None, name=None, index=0
+        self, window_id: str, *, role=None, name=None, index=0, limit=None
     ) -> list[ElementHandle]:
         app = self._find_app_waking(window_id)
         if app is None:
             return []
         nodes = self._search(app, role, name)
+        if limit is not None:
+            nodes = nodes[:limit]
         return [self._to_handle(n) for n in nodes]
 
     _XDO_BUTTONS = {"left": "1", "middle": "2", "right": "3"}

@@ -60,6 +60,11 @@ class ActionResult:
     detail: str | None = None
 
 
+class SearchTimeout(Exception):
+    """An element search ran past its time budget. Raised instead of
+    blocking on windows with huge accessibility trees."""
+
+
 class StaleHandleError(Exception):
     """Raised when an element handle is no longer valid (widget gone or UI changed)."""
 
