@@ -874,7 +874,9 @@ class _Run:
         start = 0
         while start < len(sent):
             if sent[start].get("action") == "shell":
-                r = _shell(sent[start].get("cmd", ""), self.vars)
+                r = _shell(
+                    sent[start].get("cmd", ""), self.vars, timeout=sent[start].get("timeout", 60)
+                )
                 if r.returncode != 0:
                     raise ScriptFailure(
                         f"shell step failed ({r.returncode}): {sent[start].get('cmd')!r} "

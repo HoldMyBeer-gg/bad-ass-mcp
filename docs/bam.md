@@ -261,7 +261,9 @@ Three layers, later wins: the suite file (`--config`), a script's own
   `$target` then works in any step field and shell command.
 - **Shell steps:** `{"action": "shell", "cmd": "..."}` runs a command between
   steps (for `only`-gated platform glue like xdotool); a non-zero exit fails
-  the script at that step. `cmd` may be a per-platform object.
+  the script at that step. `cmd` may be a per-platform object. A step may
+  run 60 seconds; `"timeout": 300` gives a slow command (an app loading its
+  data) longer.
 - **Which shell:** `setup`, `teardown` and check `shell` entries and shell
   steps run in `bash -c`, so write them for a POSIX shell. On Windows that
   is Git Bash: the first `bash.exe` on PATH that isn't WSL's launcher
@@ -310,6 +312,15 @@ tell who is in front (Linux without X focus info, e.g. gamescope) proceed
 as before. On Linux the point check isn't implemented yet; keys are checked.
 
 ## Platform notes
+
+**Big trees.** Element lookups go breadth first and stop at the first match
+when one is enough (a `learn` entry, a wait). A container with more than 50
+children (a list of thousands of rows) is read a page at a time, behind
+everything else, so a button or tree item beside it is found without
+reading the rows. A lookup that runs past 10 seconds fails with "searched N
+elements ... without finishing" instead of hanging; give it a role and a
+name to narrow it. Windows streams children with a tree walker; macOS and
+Linux take the `limit` but still walk the whole tree for now.
 
 Element names come from `aria-label` / visible text and are usually the same
 on every OS; roles are platform-native, so give them only to disambiguate.
