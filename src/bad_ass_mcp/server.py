@@ -533,17 +533,12 @@ def drag(
 
 
 @mcp.tool()
-def start_recording(window_id: str | None = None, fps: int = 15, audio: bool = False) -> dict:
+def start_recording(window_id: str | None = None, fps: int = 15) -> dict:
     """Start recording the screen (or a specific window) as video.
     Returns a handle to pass to stop_recording.
-    Crops to the window if window_id is provided.
-
-    audio=True also records the system's sound into the MP4: everything
-    the machine plays, not only this window's app (calls and notifications
-    too), and never the microphone. Off unless asked. Windows only for
-    now; a GIF carries no sound."""
+    Crops to the window if window_id is provided."""
     try:
-        handle = _backend().start_recording(window_id, fps, audio=audio)
+        handle = _backend().start_recording(window_id, fps)
         return {"ok": True, "handle": handle}
     except Exception as e:
         return {"ok": False, "error": str(e)}

@@ -1327,10 +1327,7 @@ class LinuxBackend(DesktopBackend):
                     continue
         return None
 
-    def start_recording(
-        self, window_id: str | None = None, fps: int = 15, audio: bool = False
-    ) -> str:
-        self._audio_unsupported(audio)
+    def start_recording(self, window_id: str | None = None, fps: int = 15) -> str:
         import os
         import tempfile
 
