@@ -244,10 +244,11 @@ class AXCalls:
     reads = 0  # cross-process reads; a search costs one per node
 
 
-def _fake_ax():
+def _fake_ax(strict=True):
     """The AX layer over AXNode trees. A search may read a node's attributes
-    together (once) and the app root's AXWindows; the linked title element
-    of an unlabelled node may be read too. Anything else is a bug."""
+    together (once), the app root's AXWindows and AXFocusedUIElement, and
+    the linked title element of an unlabelled node. With `strict`, anything
+    else is a bug; a state check reads a candidate's state attributes too."""
     from bad_ass_mcp.backend import macos as m
 
     def multi(el, attrs):
@@ -257,9 +258,12 @@ def _fake_ax():
         return [el.attrs.get(a) for a in attrs]
 
     def get(el, attr):
-        if attr == "AXWindows" and el.role == "AXApplication":
-            return list(el.kids)
+        if attr in ("AXWindows", "AXFocusedUIElement") and el.role == "AXApplication":
+            return list(el.kids) if attr == "AXWindows" else el.attrs.get(attr)
         if attr in ("AXTitle", "AXValue") and el.role == "AXStaticText":
+            AXCalls.reads += 1
+            return el.attrs.get(attr)
+        if not strict:
             AXCalls.reads += 1
             return el.attrs.get(attr)
         raise AssertionError(f"a search must not read {attr} node by node")

@@ -254,10 +254,10 @@ Three layers, later wins: the suite file (`--config`), a script's own
   and skips the wait. GTK dialogs, for example, live inside the app's window.
 - **State:** a learn entry or a `present`/`absent` check may add `"state"`
   (e.g. `"focused"`, `"selected"`, per platform if needed): the first match
-  carrying that state wins. For widgets with no accessible name. On Windows a
-  `"focused"` lookup asks for the focused element instead of searching, and
-  other states are checked during the search, so either stays quick in a
-  window with thousands of rows.
+  carrying that state wins. For widgets with no accessible name. On Windows
+  and macOS a `"focused"` lookup asks for the focused element instead of
+  searching, and other states are checked during the search, so either stays
+  quick in a window with thousands of rows.
 - **Count:** `"count": n` on `present` asserts exactly n matches.
 - **Variables:** `"variables": {"target": {"windows": "$SMOKE\\A.MD", "linux":
   "$SMOKE/a.md"}}` sets per-platform literals (`$SMOKE` expands inside them);

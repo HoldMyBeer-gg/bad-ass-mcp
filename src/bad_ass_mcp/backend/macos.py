@@ -557,6 +557,16 @@ class MacOSBackend(DesktopBackend):
         if raw is not None:
             value = str(raw)
 
+        states = self._states_of(element, role, raw)
+        return ElementHandle(id=handle_id, role=role, name=name, value=value, states=states)
+
+    def _states_of(self, element: Any, role: str | None = None, raw: Any = None) -> set[str]:
+        """The element's states; `role` and its AXValue `raw` are read when
+        not given."""
+        if role is None:
+            role = _role_name(element)
+        if raw is None:
+            raw = _ax_get(element, "AXValue")
         states: set[str] = set()
         if _ax_get(element, "AXEnabled"):
             states.add("enabled")
@@ -572,8 +582,7 @@ class MacOSBackend(DesktopBackend):
             states.add("checked")
         if role in ("textfield", "textarea", "combobox", "searchfield"):
             states.add("editable")
-
-        return ElementHandle(id=handle_id, role=role, name=name, value=value, states=states)
+        return states
 
     def _walk(
         self,
@@ -711,11 +720,13 @@ class MacOSBackend(DesktopBackend):
         name: str | None,
         limit: int | None = None,
         deadline: float | None = None,
+        accept: Callable[[Any], bool] | None = None,
     ) -> list[Any]:
         """Breadth first from `element`, shallow matches first. Stops after
         `limit` matches; raises SearchTimeout past `deadline`. Each node
         costs one cross-process call: its role, every attribute a name can
-        come from, and its children arrive together."""
+        come from, and its children arrive together. `accept` is a further
+        check on a role and name match (a state), run only on those."""
         attrs = ["AXRole", *_NAME_ATTRS[:3], *_NAME_ATTRS[4:], "AXChildren"]
         results: list[Any] = []
         queue: deque[tuple[Any, int]] = deque([(element, 0)])
@@ -732,8 +743,10 @@ class MacOSBackend(DesktopBackend):
             visited += 1
             try:
                 vals = dict(zip(attrs, _ax_multi(node, attrs)))
-                if (role is None or _role_from(vals["AXRole"]) == role) and (
-                    name is None or _name_from(vals.get) == name
+                if (
+                    (role is None or _role_from(vals["AXRole"]) == role)
+                    and (name is None or _name_from(vals.get) == name)
+                    and (accept is None or accept(node))
                 ):
                     results.append(node)
                     if limit is not None and len(results) >= limit:
@@ -880,6 +893,47 @@ class MacOSBackend(DesktopBackend):
         deadline = time.monotonic() + self.SEARCH_BUDGET_S
         nodes = self._search(app, role, name, limit=limit, deadline=deadline)
         return [self._to_handle(n, pid) for n in nodes]
+
+    def find_with_state(
+        self, window_id: str, *, role=None, name=None, state: str, limit=None
+    ) -> list[ElementHandle]:
+        app = self._find_app_element(window_id)
+        if app is None:
+            return []
+        pid = self._pid_for_window(window_id)
+        if state == "focused":
+            # One element has keyboard focus and the app knows which: ask,
+            # instead of walking a window that can hold thousands of rows.
+            el = self._focused_within(app, role, name)
+            return [self._to_handle(el, pid)] if el is not None else []
+
+        def accept(el: Any) -> bool:
+            try:
+                return state in self._states_of(el)
+            except Exception:
+                return False
+
+        deadline = time.monotonic() + self.SEARCH_BUDGET_S
+        found = self._search(app, role, name, limit=limit, deadline=deadline, accept=accept)
+        return [self._to_handle(n, pid) for n in found]
+
+    def _focused_within(self, app: Any, role: str | None, name: str | None) -> Any:
+        """The app's focused element, if it matches role and name; else
+        None. A window id names a process here, so the app's own focused
+        element is the one inside the window."""
+        el = _ax_get(app, "AXFocusedUIElement")
+        if el is None:
+            return None
+        attrs = ["AXRole", *_NAME_ATTRS]
+        try:
+            vals = dict(zip(attrs, _ax_multi(el, attrs)))
+        except Exception:
+            return None
+        if role is not None and _role_from(vals["AXRole"]) != role:
+            return None
+        if name is not None and _name_from(vals.get) != name:
+            return None
+        return el
 
     def element_bounds(self, handle_id: str) -> tuple[float, float, float, float] | None:
         element = self._resolve(handle_id)
