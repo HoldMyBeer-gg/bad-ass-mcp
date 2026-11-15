@@ -4,6 +4,7 @@ import atexit
 import subprocess
 import time
 import uuid
+from collections import deque
 from typing import Any
 
 import gi
@@ -11,7 +12,13 @@ import gi
 gi.require_version("Atspi", "2.0")
 from gi.repository import Atspi  # noqa: E402
 
-from ..types import ActionResult, ElementHandle, StaleHandleError, WindowInfo  # noqa: E402
+from ..types import (  # noqa: E402
+    ActionResult,
+    ElementHandle,
+    SearchTimeout,
+    StaleHandleError,
+    WindowInfo,
+)
 from .base import DesktopBackend, mark_injected, prune_tree  # noqa: E402
 
 _IFACE_CLASSES = {
@@ -353,17 +360,78 @@ class LinuxBackend(DesktopBackend):
                 return app
         return None
 
-    def _search(self, node: Any, role: str | None, name: str | None) -> list[Any]:
-        results = []
-        try:
-            node_role = node.get_role_name()
-            node_name = node.get_name() or ""
-            if (role is None or node_role == role) and (name is None or node_name == name):
-                results.append(node)
-            for i in range(node.get_child_count()):
-                results.extend(self._search(node.get_child_at_index(i), role, name))
-        except Exception:
-            pass
+    # Children read a page at a time: a list with thousands of rows is read
+    # behind everything else, so a lookup for a button or a tree item beside
+    # it never waits for the rows.
+    SEARCH_PAGE = 50
+
+    def _search(
+        self,
+        node: Any,
+        role: str | None,
+        name: str | None,
+        limit: int | None = None,
+        deadline: float | None = None,
+    ) -> list[Any]:
+        """Breadth first from `node`, shallow matches first. Stops after
+        `limit` matches; raises SearchTimeout past `deadline`."""
+        results: list[Any] = []
+
+        def check(n: Any) -> bool:
+            """Collect `n` if it matches. True once the limit is met."""
+            try:
+                if (role is None or n.get_role_name() == role) and (
+                    name is None or (n.get_name() or "") == name
+                ):
+                    results.append(n)
+            except Exception:
+                pass
+            return limit is not None and len(results) >= limit
+
+        if check(node):
+            return results
+        queue: deque[Any] = deque([node])
+        low: deque[Any] = deque()  # rows of containers bigger than a page
+        later: deque[tuple[Any, int, int]] = deque()  # (container, next index, count)
+        visited = 0
+        started = time.monotonic()
+
+        def page(parent: Any, start: int, count: int) -> bool:
+            """Check and queue one page of `parent`'s children; the rest
+            wait in `later`. True once the limit is met."""
+            end = min(count, start + self.SEARCH_PAGE)
+            big = count > self.SEARCH_PAGE
+            for i in range(start, end):
+                try:
+                    child = parent.get_child_at_index(i)
+                except Exception:
+                    continue
+                if child is None:
+                    continue
+                if check(child):
+                    return True
+                (low if big else queue).append(child)
+            if end < count:
+                later.append((parent, end, count))
+            return False
+
+        while queue or low or later:
+            if deadline is not None and time.monotonic() > deadline:
+                raise SearchTimeout(
+                    f"searched {visited} elements in {time.monotonic() - started:.1f}s "
+                    "without finishing; narrow the search by role and name"
+                )
+            if queue or low:
+                parent = queue.popleft() if queue else low.popleft()
+                visited += 1
+                try:
+                    count = parent.get_child_count()
+                except Exception:
+                    continue
+                if page(parent, 0, count):
+                    break
+            elif page(*later.popleft()):
+                break
         return results
 
     # ── DesktopBackend impl ───────────────────────────────────────────
@@ -584,9 +652,8 @@ class LinuxBackend(DesktopBackend):
         app = self._find_app_waking(window_id)
         if app is None:
             return []
-        nodes = self._search(app, role, name)
-        if limit is not None:
-            nodes = nodes[:limit]
+        deadline = time.monotonic() + self.SEARCH_BUDGET_S
+        nodes = self._search(app, role, name, limit=limit, deadline=deadline)
         return [self._to_handle(n) for n in nodes]
 
     _XDO_BUTTONS = {"left": "1", "middle": "2", "right": "3"}
