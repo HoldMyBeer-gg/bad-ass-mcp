@@ -45,6 +45,8 @@ Actions fire on control objects directly, so the target window doesn't need focu
 | `learn_layout` | Resolve semantic names → live handle IDs (one call per session) |
 | `run_sequence` | Execute a list of actions server-side, no per-action round-trips |
 
+The `wait_*` tools poll without blocking the server: a `screenshot` made during a long wait is answered while the wait runs, and a wait the client cancels stops and sends nothing back. Claude Code moves any tool call that runs past 120 s to the background, so keep a wait's `timeout` under that if the result should land in the conversation.
+
 ## Field notes: when the tree isn't enough
 
 Observed driving large native apps (a game editor, a DAW) on Windows:

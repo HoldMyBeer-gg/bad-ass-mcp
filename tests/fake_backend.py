@@ -74,7 +74,7 @@ class FakeBackend(DesktopBackend):
     # ── DesktopBackend impl ──────────────────────────────────────────
 
     def list_windows(self) -> list[WindowInfo]:
-        return [
+        windows = [
             WindowInfo(
                 id=FAKE_WINDOW_ID,
                 name="Fake App",
@@ -83,6 +83,11 @@ class FakeBackend(DesktopBackend):
                 bounds=(100, 200, 800, 600),
             )
         ]
+        if self._window_appears_at and time.monotonic() >= self._window_appears_at:
+            windows.append(
+                WindowInfo(id="appeared-window", name="Appeared Window", pid=1234, focused=False)
+            )
+        return windows
 
     def get_tree(self, window_id: str, *, max_depth: int | None = None) -> ElementHandle:
         return _TREE
@@ -123,25 +128,6 @@ class FakeBackend(DesktopBackend):
     def get_value(self, handle_id: str) -> str | None:
         self._resolve(handle_id)
         return self._values.get(handle_id)
-
-    def wait_for_window(self, title_pattern: str, timeout: float = 5.0) -> WindowInfo | None:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if self._window_appears_at and time.monotonic() >= self._window_appears_at:
-                return WindowInfo(id="appeared-window", name=title_pattern, pid=1234, focused=False)
-            time.sleep(0.01)
-        return None
-
-    def wait_for_element(
-        self, window_id, *, role=None, name=None, state=None, timeout=5.0
-    ) -> ElementHandle | None:
-        results = self.find_elements(window_id, role=role, name=name)
-        if not results:
-            return None
-        el = results[0]
-        if state is None or state in el.states:
-            return el
-        return None
 
     def screenshot(self, window_id=None, output_path=None) -> bytes:
         png = b"\x89PNG\r\n\x1a\n"  # minimal PNG header stub

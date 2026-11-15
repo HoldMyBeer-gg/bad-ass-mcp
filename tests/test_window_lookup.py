@@ -291,18 +291,29 @@ def test_macos_window_titles_come_from_ax_windows():
     assert wins[0].titles == ("Rusty Demon - CASC Explorer",)
 
 
-# ── every backend's wait_for_window matches titles too ───────────────
+# ── every wait_for_window matches titles too ─────────────────────────
+# The loop lives in base.window_poll; Linux overrides it for the AT-SPI
+# grace period, and macOS and Windows inherit it.
 
 
-@pytest.mark.parametrize("modname", ["linux", "macos", "windows"])
-def test_wait_for_window_uses_the_shared_matcher(modname):
+@pytest.mark.parametrize("modname", ["base", "linux"])
+def test_window_poll_uses_the_shared_matcher(modname):
     import importlib
 
     path = importlib.util.find_spec(f"bad_ass_mcp.backend.{modname}").origin
     src = open(path, encoding="utf-8").read()
-    body = src[src.index("def wait_for_window") :]
+    body = src[src.index("def window_poll") :]
     body = body[: body.index("\n    def ", 10)]
     assert ".matches(title_pattern)" in body
+
+
+@pytest.mark.parametrize("modname", ["macos", "windows"])
+def test_other_backends_inherit_window_poll(modname):
+    import importlib
+
+    path = importlib.util.find_spec(f"bad_ass_mcp.backend.{modname}").origin
+    src = open(path, encoding="utf-8").read()
+    assert "def window_poll" not in src and "def wait_for_window" not in src
 
 
 # ── follow-ups from the Deck and macOS runs ─────────────────────────
