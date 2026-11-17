@@ -1,3 +1,9 @@
+![GitHub Sponsors](https://img.shields.io/github/sponsors/jabberwock?style=plastic&logoColor=%23ff0000&color=%23FF0000)
+![PyPI Python Version](https://img.shields.io/pypi/pyversions/bad-ass-mcp?pypiBaseUrl=https%3A%2F%2Fpypi.org%2F&style=plastic&link=https%3A%2F%2Fpypi.org%2Fproject%2Fbad-ass-mcp%2F)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/holdmybeer-gg/bad-ass-mcp/ci.yml?style=plastic)
+![GitHub Pull Requests](https://img.shields.io/github/issues-pr/holdmybeer-gg/bad-ass-mcp?style=plastic)
+
+
 # bad-ass-mcp
 
 <!-- mcp-name: io.github.HoldMyBeer-gg/bad-ass-mcp -->
@@ -8,11 +14,15 @@ A cross-platform MCP server for desktop GUI automation, driven by accessibility 
 
 Works with Claude, Codex, Gemini, Ollama, or any OpenAI-compatible client that supports MCP.
 
-<center>
-[![A Diablo 3 Treasure Goblin becomes a Skyrim mod, driven by bad-ass-mcp](https://github.com/user-attachments/assets/0928d753-8514-4041-a100-a96ffea0cf9b)](https://www.youtube.com/watch?v=1Re3UkuC0fE)
-</center>
+<figure style="display: block; text-align: 'center';">
 
-<small>*A Diablo 3 Treasure Goblin becomes a playable Skyrim mod with no hand work in between: bad-ass-mcp drives [RustyDemon](https://rustydemon.holdmybeer.gg/), Blender with [BlenderWright](https://blenderwright.holdmybeer.gg/), and the mod export end to end. Click to watch.*</small>
+[![A Diablo 3 Treasure Goblin becomes a Skyrim mod, driven by bad-ass-mcp](https://github.com/user-attachments/assets/0928d753-8514-4041-a100-a96ffea0cf9b)](https://www.youtube.com/watch?v=1Re3UkuC0fE)
+
+<figcaption>
+*A Diablo 3 Treasure Goblin becomes a playable Skyrim mod with no hand work in between: bad-ass-mcp drives <a href="https://rustydemon.holdmybeer.gg/">RustyDemon</a>), Blender with <a href="https://blenderwright.holdmybeer.gg/">blenderwright</a>), and the mod export end to end. Click to watch.*
+</figcaption>
+
+</figure>
 
 ## Why
 
