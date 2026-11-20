@@ -16,3 +16,9 @@ def test_sponsor_badge_is_wrapped_in_a_link():
         r"\(https://github\.com/sponsors/jabberwock\)"
     )
     assert re.search(pattern, README.read_text(encoding="utf-8"))
+
+
+def test_every_shields_badge_is_clickable():
+    text = README.read_text(encoding="utf-8")
+    bare = re.findall(r"(?<!\[)!\[[^\]]*\]\(https://img\.shields\.io[^)]*\)", text)
+    assert not bare, f"badges with no link wrapper: {bare}"
