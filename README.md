@@ -1,4 +1,4 @@
-![GitHub Sponsors](https://img.shields.io/github/sponsors/jabberwock?style=plastic&labelColor=%23FF0000&link=https%3A%2F%2Fgithub.com%2Fsponsors%2Fjabberwock)
+[![GitHub Sponsors](https://img.shields.io/github/sponsors/jabberwock?style=plastic&labelColor=%23FF0000)](https://github.com/sponsors/jabberwock)
 ![PyPI Python Version](https://img.shields.io/pypi/pyversions/bad-ass-mcp?pypiBaseUrl=https%3A%2F%2Fpypi.org%2F&style=plastic&link=https%3A%2F%2Fpypi.org%2Fproject%2Fbad-ass-mcp%2F)
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/holdmybeer-gg/bad-ass-mcp/ci.yml?style=plastic)
 ![GitHub Pull Requests](https://img.shields.io/github/issues-pr/holdmybeer-gg/bad-ass-mcp?style=plastic)
